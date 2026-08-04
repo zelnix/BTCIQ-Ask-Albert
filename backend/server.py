@@ -51,6 +51,10 @@ dominance_col = db['dominance_hist']
 news_col = db['news']
 chat_col = db['ask_quant_chat']
 predictions_col = db['predictions']
+bitmark_col = db['bitmark_snapshots']
+# BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
+_forecast_trigger = {'reason': None}
+_bitmark_last_manual = {'ts': 0.0}
 
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 GEMINI_MODEL = 'gemini-2.5-flash'
@@ -1595,6 +1599,115 @@ def compute_event_calendar(cycle, policy, window=120):
             'counts': counts, 'generated': today.strftime('%Y-%m-%d')}
 
 
+# ---------------------------- BitMarkAI Engine ----------------------------
+BM_WEIGHTS = {
+    '1W': [('Price & Technicals', 30), ('Momentum & Trend', 25), ('Volatility', 15), ('News & Sentiment', 13), ('Market Regime', 10), ('Macro & Policy', 5), ('Halving Cycle', 2)],
+    '1M': [('Price & Technicals', 22), ('Momentum & Trend', 20), ('News & Sentiment', 13), ('Market Regime', 12), ('Macro & Policy', 12), ('Volatility', 10), ('Halving Cycle', 7), ('Dominance & Flows', 4)],
+    '3M': [('Halving Cycle', 20), ('Macro & Policy', 18), ('Momentum & Trend', 15), ('Price & Technicals', 13), ('Market Regime', 12), ('Volatility', 8), ('News & Sentiment', 8), ('Dominance & Flows', 6)],
+    '6M': [('Halving Cycle', 28), ('Macro & Policy', 22), ('Momentum & Trend', 10), ('Market Regime', 10), ('Price & Technicals', 10), ('Dominance & Flows', 8), ('Volatility', 7), ('News & Sentiment', 5)],
+    '1Y': [('Halving Cycle', 38), ('Macro & Policy', 22), ('Dominance & Flows', 10), ('Volatility', 8), ('Price & Technicals', 6), ('Momentum & Trend', 6), ('Market Regime', 6), ('News & Sentiment', 4)],
+    '2Y': [('Halving Cycle', 45), ('Macro & Policy', 25), ('Adoption & Liquidity', 20), ('Dominance & Flows', 10)],
+    '5Y': [('Adoption & Liquidity', 45), ('Halving Cycle', 25), ('Macro & Policy', 20), ('Dominance & Flows', 10)],
+}
+BM_LABEL = {'1W': 'Next Week', '1M': 'Next Month', '3M': 'Next 3 Months', '6M': 'Next 6 Months',
+            '1Y': 'Next Year', '2Y': 'Next 2 Years', '5Y': 'Next 5 Years'}
+
+
+def _bm_model_horizon(code, f, price, tp, tr, issued, next_upd):
+    higher = float(f.get('higher_adj', f['higher']))
+    base, bull, bear = f['base'], f['bull'], f['bear']
+    spread = max(1.0, bull - bear)
+    base_low, base_high = round(base - 0.15 * spread), round(base + 0.15 * spread)
+    return {'horizon': code, 'label': BM_LABEL[code], 'type': 'model', 'current_price': round(price, 2),
+            'prob_above': round(higher, 1), 'prob_below': round(100 - higher, 1),
+            'base_low': base_low, 'base_high': base_high,
+            'bull_low': base_high, 'bull_high': round(bull),
+            'bear_low': round(bear), 'bear_high': base_low,
+            'expected_volatility': _vol_label(f), 'model_confidence': f.get('confidence', 'Low'),
+            'accuracy': f.get('accuracy'), 'top_positive': tp, 'top_risk': tr,
+            'weighting': [{'category': c, 'weight': w} for c, w in BM_WEIGHTS[code]],
+            'issued': issued, 'next_update': next_upd}
+
+
+def _bm_scenario_horizon(code, price, years, issued, next_upd):
+    scen = [
+        ('Adoption Expansion', {2: (1.6, 2.6), 5: (3.0, 9.0)}, 30, 'Accelerating institutional & sovereign adoption plus easing global liquidity.'),
+        ('Base Adoption', {2: (1.25, 1.7), 5: (1.8, 3.5)}, 40, 'Steady adoption growth roughly tracking prior post-halving cycles.'),
+        ('Restrictive Policy', {2: (0.75, 1.05), 5: (0.9, 1.6)}, 20, 'Tight liquidity, higher-for-longer rates and heavier regulation.'),
+        ('Severe Disruption', {2: (0.35, 0.65), 5: (0.5, 1.1)}, 10, 'A major shock — regulatory ban, systemic failure or a liquidity crisis.'),
+    ]
+    scenarios = []
+    for name, mult, prob, note in scen:
+        lo, hi = mult[years]
+        scenarios.append({'name': name, 'prob': prob, 'low': round(price * lo), 'high': round(price * hi), 'note': note})
+    prob_above = sum(s['prob'] for s in scenarios if s['low'] >= price) + \
+        sum(s['prob'] * 0.5 for s in scenarios if s['low'] < price <= s['high'])
+    prob_above = round(min(95, max(5, prob_above)))
+    return {'horizon': code, 'label': BM_LABEL[code], 'type': 'scenario', 'current_price': round(price, 2),
+            'prob_above': prob_above, 'prob_below': 100 - prob_above,
+            'expected_volatility': 'Very High', 'model_confidence': 'Low' if years == 2 else 'Very Low',
+            'scenarios': scenarios,
+            'top_positive': 'Post-halving supply squeeze meeting sustained adoption demand.',
+            'top_risk': 'Long-range regulatory and macro-liquidity uncertainty widens the range.',
+            'weighting': [{'category': c, 'weight': w} for c, w in BM_WEIGHTS[code]],
+            'issued': issued, 'next_update': next_upd}
+
+
+def compute_bitmark(quant, cycle, price, trigger='scheduled'):
+    now = datetime.datetime.utcnow()
+    issued = now.strftime('%Y-%m-%d')
+    next_upd = (now + datetime.timedelta(days=7)).strftime('%Y-%m-%d')
+    idx = {f['horizon']: f for f in (quant['forecasts'] + quant.get('long_outlook', []))}
+    bulls, risks = quant['factors']['bullish'], quant['factors']['risk']
+    tp = bulls[0] if bulls else 'Constructive technical structure.'
+    tr = risks[0] if risks else 'Elevated near-term volatility.'
+    horizons = []
+    for code, src in [('1W', '7D'), ('1M', '30D'), ('3M', '3M'), ('6M', '6M'), ('1Y', '1Y')]:
+        f = idx.get(src)
+        if f:
+            horizons.append(_bm_model_horizon(code, f, price, tp, tr, issued, next_upd))
+    horizons.append(_bm_scenario_horizon('2Y', price, 2, issued, next_upd))
+    horizons.append(_bm_scenario_horizon('5Y', price, 5, issued, next_upd))
+
+    prev = bitmark_col.find_one(sort=[('created_at', -1)])
+    changes, change_text = None, None
+    if prev:
+        pmap = {h['horizon']: h for h in prev.get('horizons', [])}
+        chlist = []
+        for h in horizons:
+            ph = pmap.get(h['horizon'])
+            if not ph:
+                continue
+            d = round(h['prob_above'] - ph.get('prob_above', h['prob_above']), 1)
+            if abs(d) >= 0.5:
+                chlist.append({'horizon': h['horizon'], 'prob_delta': d,
+                               'from': ph.get('prob_above'), 'to': h['prob_above']})
+        changes = chlist
+        if chlist:
+            big = max(chlist, key=lambda z: abs(z['prob_delta']))
+            dirw = 'increased' if big['prob_delta'] > 0 else 'decreased'
+            change_text = (f"The {big['horizon']} bullish probability {dirw} from {big['from']}% to "
+                           f"{big['to']}%. {tp} Key offsetting risk: {tr}")
+        else:
+            change_text = 'No material change since the previous forecast — probabilities and ranges are broadly stable.'
+    else:
+        change_text = 'First BitMarkAI forecast recorded to the ledger.'
+
+    snap = {'_id': str(uuid.uuid4()), 'created_at': now.isoformat(), 'trigger': trigger,
+            'price': round(price, 2),
+            'horizons': [{'horizon': h['horizon'], 'prob_above': h['prob_above'],
+                          'confidence': h.get('model_confidence')} for h in horizons]}
+    try:
+        bitmark_col.insert_one(snap)
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    return {'model_version': 'bitmark-v1', 'trigger': trigger, 'issued': issued,
+            'next_scheduled_update': next_upd, 'current_price': round(price, 2),
+            'regime': quant['regime']['regime'], 'horizons': horizons,
+            'changes': changes, 'change_explanation': change_text, 'generated_at': now.isoformat()}
+
+
 def compute():
     df, source = fetch_ohlcv()
     df = build_features(df)
@@ -1820,6 +1933,18 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
 
+    # --- BitMarkAI prediction core (1W–5Y, per-horizon weighting, triggers) ---
+    bitmark = None
+    try:
+        trig = _forecast_trigger.get('reason')
+        if not trig:
+            hi_news = bool(news_sig and news_sig.get('n_high_impact', 0) >= 2)
+            trig = 'event' if (abs(day_change) >= 5.0 or hi_news) else 'scheduled'
+        bitmark = compute_bitmark(quant, cycle, last_close, trigger=trig)
+        _forecast_trigger['reason'] = None
+    except Exception:  # noqa
+        traceback.print_exc()
+
     doc = {
         'id': str(uuid.uuid4()),
         'created_at': datetime.datetime.utcnow().isoformat(),
@@ -1857,6 +1982,7 @@ def compute():
         'data_health': data_health,
         'event_calendar': event_calendar,
         'prediction_ledger': prediction_ledger,
+        'bitmark': bitmark,
         'cycle': cycle,
         'dominance': dominance,
         'chart': chart,
@@ -2000,6 +2126,25 @@ def scorecard():
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error'}
+
+
+@app.post('/api/v1/bitmark/run')
+def bitmark_run():
+    import time
+    now = time.time()
+    cooldown = 300  # rate limit: one manual forecast every 5 minutes
+    elapsed = now - _bitmark_last_manual['ts']
+    if elapsed < cooldown:
+        wait = int(cooldown - elapsed)
+        return {'status': 'rate_limited', 'retry_in': wait,
+                'message': f'A manual forecast can only be run once every {cooldown // 60} minutes — please wait {wait}s. This stops re-running until you get an answer you like.'}
+    if _state['status'] == 'running':
+        return {'status': 'busy', 'message': 'A forecast is already running — please wait for it to finish.'}
+    _bitmark_last_manual['ts'] = now
+    _forecast_trigger['reason'] = 'manual'
+    threading.Thread(target=run_compute_bg, daemon=True).start()
+    return {'status': 'started',
+            'message': 'Running a fresh BitMarkAI forecast against the latest data (~30s). The updated ranges and a "what changed" summary will appear when it completes.'}
 
 
 @app.post('/api/v1/chat')

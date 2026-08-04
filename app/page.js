@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   ResponsiveContainer, ComposedChart, Line, Area, Bar, BarChart,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell,
+  ScatterChart, Scatter, ReferenceLine, ZAxis,
 } from 'recharts';
 import {
   TrendingUp, TrendingDown, RefreshCw, Activity, Gauge, Waves, BarChart3,
@@ -39,6 +40,8 @@ const signalText = (w) =>
 const SECTIONS = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard,
     blurb: 'A 10-second read of the market: one overall score, the current market "mood" (regime), the live price and the near-term odds.' },
+  { id: 'bitmark', label: 'BitMarkAI', icon: Sparkles,
+    blurb: 'BitMarkAI is BTCIQ’s adaptive Bitcoin Price Prediction Engine — probability-based forecasts from one week to five years. Each horizon is weighted differently, updated on a schedule, on demand, or when a major event hits, and every change is explained.' },
   { id: 'forecasts', label: 'Forecasts', icon: Target,
     blurb: 'Probability-based predictions for the next 24 hours, 7 days and 30 days — never certainties, always odds with a bull/base/bear price range and the maths behind each one.' },
   { id: 'chart', label: 'Chart Intelligence', icon: CandlestickChart,
@@ -993,6 +996,152 @@ function NewsSection({ news, status, onRefresh, refreshing }) {
   );
 }
 
+/* ----------------------------- BitMarkAI ----------------------------- */
+const bmConfColor = (c) => ({ High: 'text-emerald-400', Moderate: 'text-lime-400',
+  Low: 'text-amber-400', 'Very Low': 'text-orange-400' }[c] || 'text-slate-400');
+const bmVol = (v) => ({ 'Very High': ['bg-red-500', 100], High: ['bg-orange-500', 78],
+  Elevated: ['bg-amber-500', 52], Low: ['bg-emerald-500', 26] }[v] || ['bg-slate-600', 40]);
+const scenColor = (n) => ({ 'Adoption Expansion': 'text-emerald-400', 'Base Adoption': 'text-sky-400',
+  'Restrictive Policy': 'text-amber-400', 'Severe Disruption': 'text-red-400' }[n] || 'text-slate-300');
+
+function BmHorizonCard({ h }) {
+  const up = h.prob_above >= 50;
+  const [vc, vp] = bmVol(h.expected_volatility);
+  return (
+    <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+      <div className="flex items-center justify-between">
+        <div><h3 className="text-base font-bold text-white">{h.label}</h3><p className="text-[11px] text-slate-500">{h.horizon} horizon</p></div>
+        <Badge variant="outline" className={`border-slate-700 ${up ? 'text-emerald-400' : 'text-red-400'}`}>{up ? 'Leans Up' : 'Leans Down'}</Badge>
+      </div>
+      <div className="mt-3 flex justify-between text-sm font-semibold"><span className="text-emerald-400">Above {h.prob_above}%</span><span className="text-red-400">{h.prob_below}% Below</span></div>
+      <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-red-500/40"><div className="h-full rounded-full bg-emerald-400" style={{ width: `${h.prob_above}%` }} /></div>
+      <div className="mt-3 space-y-1.5 text-sm">
+        <div className="flex justify-between"><span className="text-slate-500">Base case</span><span className="font-mono font-semibold text-slate-200">{fmtUsd(h.base_low)}–{fmtUsd(h.base_high)}</span></div>
+        <div className="flex justify-between"><span className="text-emerald-400/70">Bull case</span><span className="font-mono text-emerald-400">{fmtUsd(h.bull_low)}–{fmtUsd(h.bull_high)}</span></div>
+        <div className="flex justify-between"><span className="text-red-400/70">Bear case</span><span className="font-mono text-red-400">{fmtUsd(h.bear_low)}–{fmtUsd(h.bear_high)}</span></div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <div><p className="text-slate-500">Expected volatility</p><div className="mt-1 flex items-center gap-1.5"><div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800"><div className={`h-full rounded-full ${vc}`} style={{ width: `${vp}%` }} /></div></div><p className="mt-0.5 text-slate-400">{h.expected_volatility}</p></div>
+        <div><p className="text-slate-500">Model confidence</p><p className={`mt-1 font-bold ${bmConfColor(h.model_confidence)}`}>{h.model_confidence}</p>{h.accuracy != null && <p className="text-[10px] text-slate-500">backtest {h.accuracy}%</p>}</div>
+      </div>
+      <div className="mt-3 border-t border-slate-800 pt-2 text-xs">
+        <p className="text-emerald-400/90">▲ {h.top_positive}</p>
+        <p className="mt-1 text-red-400/90">▼ {h.top_risk}</p>
+      </div>
+      <div className="mt-3">
+        <p className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">What drives this horizon</p>
+        <div className="space-y-1">
+          {h.weighting.slice(0, 4).map((w) => (
+            <div key={w.category} className="flex items-center gap-2 text-[11px]">
+              <span className="w-32 shrink-0 truncate text-slate-400">{w.category}</span>
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full bg-gradient-to-r from-sky-500 to-violet-500" style={{ width: `${w.weight * 2}%` }} /></div>
+              <span className="w-7 text-right font-mono text-slate-400">{w.weight}%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function BmScenarioCard({ h }) {
+  return (
+    <Card className="border-0 bg-gradient-to-br from-violet-500/[0.06] to-slate-900 p-5 ring-1 ring-violet-500/20">
+      <div className="flex items-center justify-between">
+        <div><h3 className="text-base font-bold text-white">{h.label}</h3><p className="text-[11px] text-slate-500">{h.horizon} · broad scenarios, not a single target</p></div>
+        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${bmConfColor(h.model_confidence)} border-slate-700`}>Confidence {h.model_confidence}</span>
+      </div>
+      <div className="mt-3 space-y-2.5">
+        {h.scenarios.map((s) => (
+          <div key={s.name}>
+            <div className="flex items-center justify-between text-xs">
+              <span className={`font-semibold ${scenColor(s.name)}`}>{s.name}</span>
+              <span className="font-mono text-slate-300">{fmtUsd(s.low)}–{fmtUsd(s.high)} <span className="text-slate-500">· {s.prob}%</span></span>
+            </div>
+            <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-800"><div className={`h-full rounded-full ${scenColor(s.name).replace('text-', 'bg-')}`} style={{ width: `${s.prob * 2.2}%` }} /></div>
+            <p className="mt-0.5 text-[10px] text-slate-500">{s.note}</p>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-[11px] text-slate-500">The further out the forecast, the wider the range and the lower the certainty.</p>
+    </Card>
+  );
+}
+
+function BitMarkSection({ d }) {
+  const bm = d.bitmark;
+  const [running, setRunning] = React.useState(false);
+  const [runMsg, setRunMsg] = React.useState(null);
+  if (!bm) return <ComingSoonSection section={SECTIONS.find((s) => s.id === 'bitmark')} />;
+  const trigLabel = { scheduled: 'Scheduled', manual: 'Manual run', event: 'Event-triggered' }[bm.trigger] || bm.trigger;
+  const trigColor = bm.trigger === 'event' ? 'text-orange-300 border-orange-500/30' : bm.trigger === 'manual' ? 'text-sky-300 border-sky-500/30' : 'text-slate-300 border-slate-700';
+  const models = bm.horizons.filter((h) => h.type === 'model');
+  const scenarios = bm.horizons.filter((h) => h.type === 'scenario');
+  const runForecast = async () => {
+    if (running) return;
+    setRunning(true); setRunMsg(null);
+    try {
+      const r = await fetch('/api/v1/bitmark/run', { method: 'POST' });
+      const j = await r.json();
+      setRunMsg({ status: j.status, text: j.message });
+    } catch (e) { setRunMsg({ status: 'error', text: 'Could not start a forecast — please try again.' }); }
+    finally { setRunning(false); }
+  };
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={Sparkles} title="BitMarkAI" blurb={SECTIONS.find((s) => s.id === 'bitmark').blurb} />
+
+      <Card className="border-0 bg-gradient-to-br from-amber-500/[0.08] via-violet-500/[0.08] to-slate-900 p-6 ring-1 ring-amber-500/25">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 p-2.5"><Sparkles className="h-6 w-6 text-white" /></div>
+          <div>
+            <h2 className="text-xl font-black text-white">BitMarkAI <span className="text-sm font-medium text-slate-400">Bitcoin Price Prediction Engine</span></h2>
+            <p className="text-xs text-slate-400">Adaptive, probability-based forecasts · 1 week to 5 years · model {bm.model_version}</p>
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-3">
+            <div className="text-right text-xs">
+              <span className={`rounded-full border px-2 py-0.5 font-semibold ${trigColor}`}>{trigLabel}</span>
+              <p className="mt-1 text-slate-500">Issued {bm.issued} · next {bm.next_scheduled_update}</p>
+            </div>
+            <Button onClick={runForecast} disabled={running} className="gap-2 bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-lg shadow-amber-500/20 hover:from-amber-400 hover:to-orange-400">
+              <RefreshCw className={`h-4 w-4 ${running ? 'animate-spin' : ''}`} />Run New Forecast
+            </Button>
+          </div>
+        </div>
+        {runMsg && (
+          <div className={`mt-3 rounded-lg border p-3 text-sm ${runMsg.status === 'rate_limited' ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : runMsg.status === 'started' ? 'border-sky-500/30 bg-sky-500/10 text-sky-200' : 'border-slate-700 bg-slate-800/40 text-slate-300'}`}>{runMsg.text}</div>
+        )}
+      </Card>
+
+      <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+        <div className="mb-1 flex items-center gap-2"><Info className="h-4 w-4 text-sky-400" /><h3 className="text-sm font-semibold text-white">What changed since the last forecast</h3></div>
+        <p className="text-sm leading-relaxed text-slate-300">{bm.change_explanation}</p>
+        {bm.changes?.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {bm.changes.map((c, i) => (
+              <span key={i} className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${c.prob_delta > 0 ? 'border-emerald-500/30 text-emerald-300' : 'border-red-500/30 text-red-300'}`}>{c.horizon}: {c.from}%→{c.to}% ({c.prob_delta > 0 ? '+' : ''}{c.prob_delta})</span>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <div>
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Model forecasts · 1 week to 1 year</p>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {models.map((h) => <BmHorizonCard key={h.horizon} h={h} />)}
+        </div>
+      </div>
+      <div>
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Long-range scenarios · 2 & 5 years</p>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          {scenarios.map((h) => <BmScenarioCard key={h.horizon} h={h} />)}
+        </div>
+      </div>
+      <p className="text-center text-[11px] text-slate-600">BitMarkAI · powered by BitCentAI · probability-based research, not financial advice.</p>
+    </div>
+  );
+}
+
 /* ----------------- Prediction Ledger / Scorecard --------------------- */
 const impColor = (i) => ({ 'Very High': 'text-red-400 border-red-500/30 bg-red-500/10',
   High: 'text-orange-400 border-orange-500/30 bg-orange-500/10',
@@ -1071,19 +1220,29 @@ function ScorecardSection({ d }) {
       {pl.calibration?.length > 0 && (
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
           <h3 className="mb-1 text-sm font-semibold text-white">Probability Calibration</h3>
-          <p className="mb-3 text-xs text-slate-500">When the model says a bucket of odds, how often did price actually go up? Closer bars = better-calibrated.</p>
-          <div className="space-y-3">
-            {pl.calibration.map((c) => (
-              <div key={c.bucket}>
-                <div className="flex justify-between text-xs text-slate-400"><span>Predicted {c.bucket} <span className="text-slate-600">({c.n})</span></span><span>realised up {c.realised_up}%</span></div>
-                <div className="mt-1 flex gap-1">
-                  <div className="h-2 flex-1 rounded-full bg-slate-800"><div className="h-full rounded-full bg-sky-500" style={{ width: `${c.avg_pred}%` }} /></div>
-                  <div className="h-2 flex-1 rounded-full bg-slate-800"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${c.realised_up}%` }} /></div>
-                </div>
-              </div>
-            ))}
+          <p className="mb-3 text-xs text-slate-500">Each dot is a bucket of forecasts: X = what the model predicted, Y = how often price actually rose. The closer to the dashed line, the better calibrated. Bubble size = number of forecasts.</p>
+          <ResponsiveContainer width="100%" height={300}>
+            <ScatterChart margin={{ top: 10, right: 20, bottom: 24, left: 0 }}>
+              <CartesianGrid stroke="#1e293b" />
+              <XAxis type="number" dataKey="avg_pred" domain={[0, 100]} name="Predicted" unit="%" tick={{ fill: '#94a3b8', fontSize: 11 }} label={{ value: 'Predicted probability of higher (%)', position: 'insideBottom', offset: -12, fill: '#64748b', fontSize: 11 }} />
+              <YAxis type="number" dataKey="realised_up" domain={[0, 100]} name="Actual" unit="%" tick={{ fill: '#94a3b8', fontSize: 11 }} label={{ value: 'Actual up-rate (%)', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 11 }} />
+              <ZAxis type="number" dataKey="n" range={[80, 500]} name="samples" />
+              <ReferenceLine segment={[{ x: 0, y: 0 }, { x: 100, y: 100 }]} stroke="#64748b" strokeDasharray="5 5" ifOverflow="extendDomain" />
+              <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [`${v}${n === 'samples' ? '' : '%'}`, n]} />
+              <Scatter data={pl.calibration}>
+                {pl.calibration.map((c, i) => {
+                  const err = Math.abs(c.avg_pred - c.realised_up);
+                  return <Cell key={i} fill={err < 10 ? '#34d399' : err < 20 ? '#fbbf24' : '#f87171'} />;
+                })}
+              </Scatter>
+            </ScatterChart>
+          </ResponsiveContainer>
+          <div className="mt-2 flex flex-wrap gap-4 text-[11px] text-slate-500">
+            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-400" />well calibrated (&lt;10pt)</span>
+            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-400" />slight drift</span>
+            <span className="flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-red-400" />over/under-confident</span>
+            <span className="flex items-center gap-1"><span className="h-0.5 w-4 bg-slate-500" style={{ borderTop: '2px dashed #64748b' }} />perfect calibration</span>
           </div>
-          <div className="mt-3 flex gap-4 text-[11px] text-slate-500"><span className="flex items-center gap-1"><span className="h-2 w-3 rounded bg-sky-500" />avg predicted</span><span className="flex items-center gap-1"><span className="h-2 w-3 rounded bg-emerald-500" />actual up-rate</span></div>
         </Card>
       )}
 
@@ -1421,6 +1580,7 @@ export default function DashboardPage() {
   const activeSection = SECTIONS.find((s) => s.id === active);
   const renderSection = () => {
     if (active === 'overview') return <OverviewSection d={d} ticker={ticker} />;
+    if (active === 'bitmark') return <BitMarkSection d={d} />;
     if (active === 'forecasts') return <ForecastsSection d={d} />;
     if (active === 'chart') return <ChartSection d={d} />;
     if (active === 'news') return <NewsSection news={news} status={newsStatus} onRefresh={handleNewsRefresh} refreshing={newsRefreshing} />;

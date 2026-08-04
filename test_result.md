@@ -310,6 +310,20 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive validation via external URL. ENGINE 3 - Event Intelligence Calendar fully validated: (1) event_calendar object present with all 5 required fields (window_days, generated, counts, events, next_high_impact) ✅ (2) window_days=120 ✅ (3) generated='2026-08-04' (valid YYYY-MM-DD) ✅ (4) counts: {'On-Chain': 9, 'Macro': 10, 'Derivatives': 4} (dict) ✅ (5) events: 23 items (non-empty list) ✅ (6) All events validated (checked first 10): each has 7 required fields (date, days_until, category, title, description, importance, expected_volatility) ✅ (7) date format YYYY-MM-DD validated ✅ (8) days_until: int 0-120 ✅ (9) category in [Macro,Derivatives,On-Chain,Regulatory] ✅ (10) title and description: non-empty strings ✅ (11) importance in [Low,Medium,High,Very High] ✅ (12) expected_volatility in [Low,Elevated,High,Very High] ✅ (13) Events sorted ascending by date ✅ (14) next_high_impact: 'US Nonfarm Payrolls' with importance='High' (valid enum [High,Very High]) ✅ All validations passed. Data is REAL."
+  - task: "BitMarkAI Engine (dashboard.bitmark + POST /api/v1/bitmark/run) - 7-horizon forecast with model (1W-1Y) and scenario (2Y-5Y) projections"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW BitMarkAI engine. GET /api/v1/dashboard returns top-level 'bitmark' object with model_version='bitmark-v1', trigger (scheduled/manual/event), issued (YYYY-MM-DD), next_scheduled_update (issued + 7 days), current_price, regime, change_explanation, generated_at, and horizons (list of 7). First 5 horizons (1W,1M,3M,6M,1Y) are type='model' with prob_above/prob_below, base_low/base_high, bull_low/bull_high, bear_low/bear_high, expected_volatility, model_confidence, weighting (sum ~100), top_positive, top_risk, issued, next_update. Last 2 horizons (2Y,5Y) are type='scenario' with prob_above/prob_below, expected_volatility='Very High', model_confidence in [Low,Very Low], scenarios (4 named: Adoption Expansion, Base Adoption, Restrictive Policy, Severe Disruption, each with prob/low/high/note, probs sum to 100), weighting. POST /api/v1/bitmark/run triggers manual forecast with 5-minute rate limit (returns status: started/busy/rate_limited with retry_in)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive BitMarkAI certification via external URL. All 3 tests passed: (1) GET /api/v1/dashboard bitmark object: model_version='bitmark-v1' ✅, trigger='manual' ✅, issued='2026-08-04' ✅, next_scheduled_update='2026-08-11' (= issued + 7 days) ✅, current_price=$64,319 ✅, regime='Weak Bearish Trend' ✅, change_explanation (244 chars) ✅, generated_at ISO format ✅, horizons: EXACTLY 7 items ✅, codes exactly [1W,1M,3M,6M,1Y,2Y,5Y] in order ✅. MODEL horizons (1W-1Y): all have type='model' ✅, prob_above+prob_below=100 ✅, range logic bear_low<=base_low<=base_high<=bull_high ✅, expected_volatility in [Low,Elevated,High,Very High] ✅, model_confidence in [Low,Moderate,High,Very Low] ✅, weighting sum=100% ✅, top_positive/top_risk present ✅. SCENARIO horizons (2Y,5Y): type='scenario' ✅, expected_volatility='Very High' ✅, model_confidence in [Low,Very Low] ✅, scenarios: 4 items with exact names [Adoption Expansion, Base Adoption, Restrictive Policy, Severe Disruption] ✅, each with prob/low/high/note ✅, high>low ✅, probs sum=100% ✅, weighting present ✅. (2) POST /api/v1/bitmark/run: first call returned status='started' ✅, immediate second call returned status='rate_limited' with retry_in=299s (<=300) ✅, message present ✅. (3) REGRESSION: GET /api/v1/dashboard status='ready' with all 14 prior fields (decision, news_forecast_link, data_health, event_calendar, prediction_ledger, forecasts(3), long_outlook(3), quant_score, regime, dominance, cycle, policy, chart, alerts) ✅, GET /api/v1/scorecard status='ready' ✅, GET /api/v1/health compute_status='running', runs=14 ✅, GET /api/v1/ticker price=$64,255.90, price_aud=$91,159.84 ✅. All validations passed. Data is REAL (ccxt Kraken). WebSockets NOT tested (as instructed)."
 
 frontend:
   - task: "Quant dashboard UI (signal card, dual-axis Recharts chart, feature matrix, importance, CV folds)"
@@ -327,14 +341,12 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 5
+  test_sequence: 6
   run_ui: false
 
 test_plan:
   current_focus:
-    - "Data Trust Layer (dashboard.data_health + decision.data_trust)"
-    - "Prediction Ledger + Scorecard (dashboard.prediction_ledger + GET /api/v1/scorecard)"
-    - "Event Intelligence Calendar (dashboard.event_calendar)"
+    - "BitMarkAI Engine (dashboard.bitmark + POST /api/v1/bitmark/run)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
