@@ -43,14 +43,16 @@ const SECTIONS = [
     blurb: 'Automated technical read of the daily chart: support/resistance zones, trend structure, breakouts, momentum divergences and candlestick patterns — plus historical odds for the current setup.' },
   { id: 'cycle', label: 'Cycle & Macro', icon: Globe,
     blurb: 'Where Bitcoin sits in its halving cycle and how capital is rotating across the wider crypto market (BTC dominance).' },
+  { id: 'policy', label: 'Policy & Liquidity', icon: Landmark,
+    blurb: 'Are global financial conditions becoming more supportive or restrictive for Bitcoin? Central-bank policy, a Global Liquidity Impulse, cross-market correlations, and a regulation tracker that separates proposals from enacted law.' },
   { id: 'analysis', label: 'Quant Analysis', icon: BarChart3,
     blurb: 'The evidence behind the score: each indicator category, the raw feature values the model reads, and which ones matter most.' },
   { id: 'performance', label: 'Performance', icon: Trophy,
     blurb: 'The receipts. Every past prediction graded win/loss, the running accuracy over time, and an honest scoreboard — no cherry-picking.' },
   { id: 'strategy', label: 'Strategy Lab', icon: FlaskConical, soon: true,
     blurb: 'Soon: build no-code rules (e.g. "buy when the score > 70") and backtest them with fees, slippage and drawdown.' },
-  { id: 'alerts', label: 'Alerts', icon: Bell, soon: true,
-    blurb: 'Soon: get notified when the regime flips, probabilities cross a threshold, or price hits a key level.' },
+  { id: 'alerts', label: 'Alerts', icon: Bell,
+    blurb: 'A live feed of what just changed and what is coming: regime shifts, liquidity state, chart triggers, cross-market moves and upcoming high-impact policy events.' },
   { id: 'ask', label: 'Ask Quant', icon: MessageCircle, soon: true,
     blurb: 'Soon: chat with the engine — "Why did the score fall?" — with plain-English answers grounded in the real numbers.' },
 ];
@@ -640,6 +642,142 @@ function CycleSection({ d }) {
   );
 }
 
+function reviewPolicy(d) {
+  const p = d.policy; if (!p) return 'Policy & liquidity data is being generated.';
+  const cm = d.crossmarket || [];
+  const strongest = [...cm].sort((a, b) => Math.abs(b.corr_30d || 0) - Math.abs(a.corr_30d || 0))[0];
+  const nextEv = (p.calendar || [])[0];
+  return `The Policy & Liquidity Score is ${p.score}/100 — ${p.label} — with a Global Liquidity Impulse of ${p.liquidity_impulse}/100 (${p.liquidity_state}). The dollar (DXY ${p.dxy}), 10Y yield (${p.y10}%) and VIX (${p.vix}) set the tone. ${strongest ? `Right now Bitcoin's tightest link is to ${strongest.asset} (30d corr ${strongest.corr_30d}, ${strongest.label}), so that market carries extra weight in the short-horizon models.` : ''} Tailwind: ${p.tailwind} Risk: ${p.risk}${nextEv ? ` Next major event: ${nextEv.event} (${nextEv.date}).` : ''}`;
+}
+
+const corrColor = (v) => v == null ? 'text-slate-500' : Math.abs(v) > 0.6 ? (v > 0 ? 'text-emerald-400' : 'text-red-400') : Math.abs(v) > 0.3 ? (v > 0 ? 'text-emerald-300' : 'text-red-300') : 'text-slate-400';
+const stageColor = (n) => n >= 10 ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : n >= 7 ? 'text-sky-400 border-sky-500/30 bg-sky-500/10' : 'text-amber-400 border-amber-500/30 bg-amber-500/10';
+
+function PolicySection({ d }) {
+  const p = d.policy; const cm = d.crossmarket || [];
+  if (!p) return <ComingSoonSection section={SECTIONS.find((s) => s.id === 'policy')} />;
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={Landmark} title="Policy & Liquidity" blurb={SECTIONS.find((s) => s.id === 'policy').blurb} />
+      <AiReview text={reviewPolicy(d)} />
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-slate-900 p-6 ring-1 ring-slate-800">
+          <p className="text-xs font-medium uppercase tracking-wider text-slate-400">Policy & Liquidity Score</p>
+          <div className="mt-2 flex items-end gap-2"><span className="text-5xl font-black" style={{ color: scoreColor(p.score) }}>{p.score}</span><span className="mb-1 text-sm text-slate-400">/ 100</span></div>
+          <p className="mt-1 font-semibold" style={{ color: scoreColor(p.score) }}>{p.label}</p>
+        </Card>
+        <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800 lg:col-span-2">
+          <div className="flex items-center justify-between"><p className="text-xs font-medium uppercase tracking-wider text-slate-400">Global Liquidity Impulse</p><Badge variant="outline" className="border-slate-700 text-sky-400">{p.liquidity_state}</Badge></div>
+          <div className="mt-2 h-3 w-full overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full bg-gradient-to-r from-red-500 via-amber-400 to-emerald-400" style={{ width: `${p.liquidity_impulse}%` }} /></div>
+          <div className="mt-4 grid grid-cols-3 gap-3 text-center text-sm">
+            <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">US Dollar (DXY)</p><p className="mt-0.5 font-bold text-white">{p.dxy}</p><p className="text-[11px] text-slate-500">z {p.components.dxy_z}</p></div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">10Y Yield</p><p className="mt-0.5 font-bold text-white">{p.y10}%</p><p className="text-[11px] text-slate-500">z {p.components.y10_z}</p></div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">VIX</p><p className="mt-0.5 font-bold text-white">{p.vix}</p><p className="text-[11px] text-slate-500">z {p.components.vix_z}</p></div>
+          </div>
+        </Card>
+      </div>
+
+      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+        <h3 className="mb-3 font-semibold text-slate-100">Cross-Market Correlations <span className="text-sm font-normal text-slate-500">(rolling, vs BTC)</span></h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="text-left text-xs uppercase tracking-wider text-slate-500"><tr><th className="py-2">Asset</th><th className="py-2 text-right">Price</th><th className="py-2 text-right">7d</th><th className="py-2 text-right">30d</th><th className="py-2 text-right">90d</th><th className="py-2 text-right">β 30d</th><th className="py-2 text-right">Relationship</th></tr></thead>
+            <tbody>
+              {cm.map((a) => (
+                <tr key={a.asset} className="border-t border-slate-800/60">
+                  <td className="py-2 font-medium text-slate-200">{a.asset}</td>
+                  <td className="py-2 text-right font-mono text-slate-300">{a.price?.toLocaleString()}</td>
+                  <td className={`py-2 text-right font-mono ${corrColor(a.corr_7d)}`}>{a.corr_7d ?? '—'}</td>
+                  <td className={`py-2 text-right font-mono font-bold ${corrColor(a.corr_30d)}`}>{a.corr_30d ?? '—'}</td>
+                  <td className={`py-2 text-right font-mono ${corrColor(a.corr_90d)}`}>{a.corr_90d ?? '—'}</td>
+                  <td className="py-2 text-right font-mono text-slate-400">{a.beta_30d ?? '—'}</td>
+                  <td className={`py-2 text-right text-xs font-semibold ${corrColor(a.corr_30d)}`}>{a.label}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+          <h3 className="mb-3 font-semibold text-slate-100">Central-Bank Policy Rates</h3>
+          <div className="space-y-1.5">
+            {p.central_banks.map((b) => (
+              <div key={b.bank} className="flex items-center justify-between border-b border-slate-800/50 py-1.5 text-sm">
+                <span className="text-slate-300">{b.bank}</span>
+                <span className="flex items-center gap-2"><span className="font-mono text-white">{b.rate}</span><span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${b.last === 'Cut' ? 'bg-emerald-500/10 text-emerald-400' : b.last === 'Hike' ? 'bg-red-500/10 text-red-400' : 'bg-slate-800 text-slate-400'}`}>{b.last}</span></span>
+              </div>
+            ))}
+          </div>
+        </Card>
+        <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+          <h3 className="mb-3 font-semibold text-slate-100">Policy Event Calendar</h3>
+          <div className="space-y-2">
+            {p.calendar.map((e, i) => (
+              <div key={i} className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                <div><p className="text-sm font-medium text-slate-200">{e.event}</p><p className="text-xs text-slate-500">{e.date} · BTC sensitivity {e.btc_sensitivity}</p></div>
+                <Badge variant="outline" className={`border-slate-700 ${e.importance === 'Very High' ? 'text-red-400' : 'text-amber-400'}`}>{e.importance}</Badge>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+
+      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+        <h3 className="mb-1 font-semibold text-slate-100">Regulation Tracker</h3>
+        <p className="mb-3 text-xs text-slate-500">Proposal vs enacted vs implemented — 13-stage legal-status taxonomy (curated).</p>
+        <div className="space-y-2">
+          {p.regulation.map((r, i) => (
+            <div key={i} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-slate-200">{r.title}</span>
+                <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${stageColor(r.stage_num)}`}>{r.stage}</span>
+                <span className="rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400">{r.jurisdiction}</span>
+                <span className={`ml-auto text-xs font-semibold ${r.direction > 0 ? 'text-emerald-400' : r.direction < 0 ? 'text-red-400' : 'text-slate-400'}`}>{r.impact}</span>
+              </div>
+              <p className="mt-1.5 text-xs text-slate-500">{r.note}</p>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="text-[11px] font-semibold uppercase text-emerald-400">Primary Tailwind</p><p className="mt-1 text-sm text-slate-300">{p.tailwind}</p></div>
+          <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><p className="text-[11px] font-semibold uppercase text-red-400">Primary Risk</p><p className="mt-1 text-sm text-slate-300">{p.risk}</p></div>
+        </div>
+        <p className="mt-3 text-sm text-slate-400"><span className="font-semibold text-slate-200">Interpretation:</span> {p.interpretation}</p>
+      </Card>
+    </div>
+  );
+}
+
+function AlertsSection({ d }) {
+  const alerts = d.alerts || [];
+  const styleFor = (lvl) => lvl === 'danger' ? 'border-red-500/30 bg-red-500/5' : lvl === 'warning' ? 'border-amber-500/30 bg-amber-500/5' : lvl === 'success' ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800 bg-slate-950/40';
+  const dot = (lvl) => lvl === 'danger' ? 'bg-red-400' : lvl === 'warning' ? 'bg-amber-400' : lvl === 'success' ? 'bg-emerald-400' : 'bg-sky-400';
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={Bell} title="Alerts" blurb={SECTIONS.find((s) => s.id === 'alerts').blurb} />
+      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+        <div className="mb-3 flex items-center gap-2"><Bell className="h-5 w-5 text-slate-400" /><h3 className="font-semibold text-slate-100">Live Signal Feed</h3><span className="text-sm text-slate-500">{alerts.length} active</span></div>
+        <div className="space-y-2">
+          {alerts.map((a, i) => (
+            <div key={i} className={`flex items-start gap-3 rounded-lg border p-3 ${styleFor(a.level)}`}>
+              <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dot(a.level)}`} />
+              <div className="flex-1">
+                <div className="flex items-center gap-2"><span className="text-sm font-semibold text-slate-200">{a.type}</span><span className="text-[11px] text-slate-500">{a.ts}</span></div>
+                <p className="text-sm text-slate-400">{a.message}</p>
+              </div>
+            </div>
+          ))}
+          {alerts.length === 0 && <p className="text-sm text-slate-500">No active alerts right now.</p>}
+        </div>
+        <p className="mt-4 text-[11px] text-slate-600">In-app feed (no email yet). Add a SendGrid key later to push these as email/push alerts.</p>
+      </Card>
+    </div>
+  );
+}
+
 /* ----------------------------- page ---------------------------------- */
 export default function DashboardPage() {
   const [data, setData] = useState(null);
@@ -709,8 +847,10 @@ export default function DashboardPage() {
     if (active === 'forecasts') return <ForecastsSection d={d} />;
     if (active === 'chart') return <ChartSection d={d} />;
     if (active === 'cycle') return <CycleSection d={d} />;
+    if (active === 'policy') return <PolicySection d={d} />;
     if (active === 'analysis') return <AnalysisSection d={d} />;
     if (active === 'performance') return <PerformanceSection d={d} />;
+    if (active === 'alerts') return <AlertsSection d={d} />;
     return <ComingSoonSection section={activeSection} />;
   };
 

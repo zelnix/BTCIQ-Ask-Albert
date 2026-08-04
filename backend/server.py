@@ -481,6 +481,152 @@ def build_market_intel(quant, forecasts, cycle, dominance, chart):
 
 
 # =====================================================================
+# CROSS-MARKET + POLICY & LIQUIDITY + ALERTS (keyless: Yahoo + curated)
+# =====================================================================
+def fetch_yahoo_series(symbol, rng='6mo'):
+    url = f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range={rng}'
+    d = _http_json(url)['chart']['result'][0]
+    ts = d['timestamp']; cl = d['indicators']['quote'][0]['close']
+    s = {}
+    for t, c in zip(ts, cl):
+        if c is None:
+            continue
+        s[datetime.datetime.utcfromtimestamp(t).strftime('%Y-%m-%d')] = float(c)
+    return pd.Series(s).sort_index()
+
+
+CROSS_ASSETS = [('Nasdaq 100', '%5ENDX'), ('S&P 500', '%5EGSPC'), ('US Dollar (DXY)', 'DX-Y.NYB'),
+                ('10Y Yield', '%5ETNX'), ('VIX', '%5EVIX'), ('Gold', 'GC=F')]
+
+
+def compute_crossmarket():
+    btc = fetch_yahoo_series('BTC-USD')
+    btc_ret = np.log(btc / btc.shift(1))
+    raw = {}; out = []
+    for name, sym in CROSS_ASSETS:
+        try:
+            s = fetch_yahoo_series(sym); raw[name] = s
+            r = np.log(s / s.shift(1))
+            j = pd.concat([btc_ret, r], axis=1, keys=['b', 'a']).dropna()
+
+            def corr(n):
+                x = j.tail(n)
+                return round(float(x['b'].corr(x['a'])), 2) if len(x) > 3 else None
+            c30 = corr(30)
+            beta = None
+            x = j.tail(30)
+            if len(x) > 3 and x['a'].var() > 0:
+                beta = round(float(x['b'].cov(x['a']) / x['a'].var()), 2)
+            ar = abs(c30 or 0)
+            lab = ('Strong' if ar > 0.6 else 'Moderate' if ar > 0.3 else 'Weak') + (' Positive' if (c30 or 0) >= 0 else ' Negative')
+            out.append({'asset': name, 'price': round(float(s.iloc[-1]), 2),
+                        'corr_7d': corr(7), 'corr_30d': c30, 'corr_90d': corr(90),
+                        'beta_30d': beta, 'label': lab})
+        except Exception:  # noqa
+            traceback.print_exc()
+    return out, raw
+
+
+CENTRAL_BANKS = [
+    ('US Federal Reserve', '3.50–3.75%', 'Hold', '2026-07-29'),
+    ('European Central Bank', '2.15%', 'Cut', '2026-06'),
+    ('Bank of England', '3.75%', 'Cut', '2026-06'),
+    ('Bank of Japan', '0.75%', 'Hold', '2026-07'),
+    ('Reserve Bank of Australia', '3.35%', 'Cut', '2026-07'),
+    ('Bank of Canada', '2.25%', 'Hold', '2026-06'),
+    ("People's Bank of China", '2.90% (1Y LPR)', 'Hold', '2026-07'),
+]
+REG_EVENTS = [
+    {'title': 'US spot Bitcoin ETFs', 'stage': 'Effective & implemented', 'stage_num': 10, 'direction': 1,
+     'jurisdiction': 'US', 'impact': 'Strong access-positive', 'note': 'Institutional access channel live and growing.'},
+    {'title': 'EU MiCA framework', 'stage': 'Effective & implemented', 'stage_num': 10, 'direction': 1,
+     'jurisdiction': 'EU', 'impact': 'Certainty-positive', 'note': 'Fully applicable since 2024-12-30. Commission review during 2026 may amend.'},
+    {'title': 'SEC SAB 122 (rescinds SAB 121)', 'stage': 'Effective & implemented', 'stage_num': 10, 'direction': 1,
+     'jurisdiction': 'US', 'impact': 'Access-positive', 'note': 'Removed the SEC accounting rule deterring bank custody (2025-01-30). Not a blanket authorisation — prudential/AML rules still apply.'},
+    {'title': 'US CLARITY Act (market structure)', 'stage': 'Passed one chamber; Senate cmte reported', 'stage_num': 6, 'direction': 1,
+     'jurisdiction': 'US', 'impact': 'Positive but UNCONFIRMED', 'note': 'Passed House Jul 2025; Senate Banking advanced May 2026; reported Jun 1 2026. PROPOSED legislation — not yet law.'},
+]
+POLICY_CALENDAR = [
+    {'event': 'US CPI', 'date': '2026-08-12', 'importance': 'Very High', 'btc_sensitivity': 'High'},
+    {'event': 'US PCE', 'date': '2026-08-28', 'importance': 'High', 'btc_sensitivity': 'Moderate'},
+    {'event': 'US Nonfarm Payrolls', 'date': '2026-09-04', 'importance': 'High', 'btc_sensitivity': 'Moderate'},
+    {'event': 'FOMC Rate Decision', 'date': '2026-09-16', 'importance': 'Very High', 'btc_sensitivity': 'High'},
+]
+
+
+def _zscore(series):
+    s = series.dropna()
+    if len(s) < 20:
+        return 0.0
+    return float((s.iloc[-1] - s.tail(90).mean()) / (s.tail(90).std() or 1))
+
+
+def compute_policy(raw):
+    dxy = raw.get('US Dollar (DXY)'); y10 = raw.get('10Y Yield'); vix = raw.get('VIX')
+    dxy_z = _zscore(dxy) if dxy is not None else 0.0
+    y10_z = _zscore(y10) if y10 is not None else 0.0
+    vix_z = _zscore(vix) if vix is not None else 0.0
+    impulse_z = float(np.mean([-dxy_z, -y10_z, -vix_z]))
+    liq = round(max(0, min(100, 50 + impulse_z * 18)))
+    liq_state = ('Strong Liquidity Expansion' if liq >= 80 else 'Moderate Expansion' if liq >= 65
+                 else 'Neutral / Transitioning' if liq >= 45 else 'Moderate Contraction' if liq >= 30
+                 else 'Strong Liquidity Contraction')
+    monetary_path = 60          # Fed on hold, market pricing gradual cuts (curated)
+    real_dollar = round(max(0, min(100, 50 - (dxy_z + y10_z) * 15)))
+    banking_access = 68         # SAB122 + spot ETFs live (curated)
+    reg_direction = 64          # net enacted-positive (MiCA, ETFs) vs proposed CLARITY (curated)
+    legislative_certainty = 45  # CLARITY still proposed
+    event_risk = 55
+    score = round(liq * 0.25 + monetary_path * 0.20 + real_dollar * 0.15 + banking_access * 0.15
+                  + reg_direction * 0.15 + legislative_certainty * 0.05 + event_risk * 0.05)
+    label = ('Strongly Supportive' if score >= 80 else 'Moderately Supportive' if score >= 65
+             else 'Mixed / Neutral' if score >= 45 else 'Moderately Restrictive' if score >= 30
+             else 'Strongly Restrictive')
+    return {
+        'score': score, 'label': label,
+        'liquidity_impulse': liq, 'liquidity_state': liq_state,
+        'components': {'dxy_z': round(dxy_z, 2), 'y10_z': round(y10_z, 2), 'vix_z': round(vix_z, 2)},
+        'dxy': round(float(dxy.iloc[-1]), 2) if dxy is not None else None,
+        'y10': round(float(y10.iloc[-1]), 2) if y10 is not None else None,
+        'vix': round(float(vix.iloc[-1]), 2) if vix is not None else None,
+        'central_banks': [{'bank': b, 'rate': r, 'last': d2, 'date': dt} for b, r, d2, dt in CENTRAL_BANKS],
+        'regulation': REG_EVENTS, 'calendar': POLICY_CALENDAR,
+        'tailwind': 'Global liquidity is stabilising and institutional access (spot ETFs, post-SAB122 custody) is expanding.',
+        'risk': 'Real yields and the dollar remain firm, and major US market-structure law (CLARITY Act) is still only proposed.',
+        'interpretation': 'Policy conditions are constructive but not yet fully confirmed by capital flows.',
+    }
+
+
+def compute_alerts(quant, cycle, policy, chart, cm):
+    a = []
+    now = datetime.datetime.utcnow()
+    ts = now.strftime('%Y-%m-%d %H:%M UTC')
+
+    def add(level, typ, msg):
+        a.append({'level': level, 'type': typ, 'message': msg, 'ts': ts})
+
+    add('info', 'Regime', f"Market regime: {quant['regime']['regime']}. {quant['regime']['behavior']}")
+    if policy:
+        add('info', 'Liquidity', f"Global Liquidity Impulse {policy['liquidity_impulse']}/100 — {policy['liquidity_state']}. Policy & Liquidity Score {policy['score']} ({policy['label']}).")
+        for e in policy['calendar']:
+            try:
+                days = (datetime.datetime.strptime(e['date'], '%Y-%m-%d').date() - now.date()).days
+                if 0 <= days <= 10:
+                    add('warning', 'Event Risk', f"{e['event']} in {days}d — {e['importance']} importance, BTC sensitivity {e['btc_sensitivity']}.")
+            except Exception:  # noqa
+                pass
+    if chart:
+        for s in chart['signals']:
+            if s['type'].startswith('Breakout') or s['type'].startswith('Breakdown') or 'Divergence' in s['type']:
+                add('danger' if s['bias'] == 'Bearish' else 'success', 'Chart', f"{s['type']}: {s['detail']}")
+    if cm:
+        nd = next((x for x in cm if x['asset'] == 'Nasdaq 100'), None)
+        if nd and nd['corr_30d'] is not None and abs(nd['corr_30d']) > 0.6:
+            add('info', 'Cross-Market', f"BTC–Nasdaq 30d correlation {nd['corr_30d']} ({nd['label']}) — equities currently carry more weight in the 24h/7d models.")
+    return a
+
+
+# =====================================================================
 # STEP 3-5: TARGET, CV, WALK-FORWARD BACKTEST, LIVE SIGNAL
 # =====================================================================
 def _clamp(v, lo=0.0, hi=100.0):
@@ -903,6 +1049,18 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
 
+    # --- Cross-market correlations, Policy & Liquidity, Alerts (keyless) ---
+    crossmarket = policy = alerts = None
+    try:
+        crossmarket, _raw = compute_crossmarket()
+        policy = compute_policy(_raw)
+    except Exception:  # noqa
+        traceback.print_exc()
+    try:
+        alerts = compute_alerts(quant, cycle, policy, chart, crossmarket)
+    except Exception:  # noqa
+        traceback.print_exc()
+
     doc = {
         'id': str(uuid.uuid4()),
         'created_at': datetime.datetime.utcnow().isoformat(),
@@ -938,6 +1096,9 @@ def compute():
         'dominance': dominance,
         'chart': chart,
         'market_intel': market_intel,
+        'crossmarket': crossmarket,
+        'policy': policy,
+        'alerts': alerts,
     }
 
     to_store = dict(doc)
