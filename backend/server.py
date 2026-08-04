@@ -52,6 +52,7 @@ news_col = db['news']
 chat_col = db['ask_quant_chat']
 predictions_col = db['predictions']
 bitmark_col = db['bitmark_snapshots']
+smart_alerts_col = db['smart_alerts']
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
 _forecast_trigger = {'reason': None}
 _bitmark_last_manual = {'ts': 0.0}
@@ -1237,13 +1238,15 @@ def compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, 
 
 
 CHAT_SYSTEM = (
-    "You are 'Quant', the AI analyst built into the BTCIQ Bitcoin dashboard (powered by BitCentAI, "
-    "a Bitcoin-Centred Intelligence Engine). Answer the user's question using ONLY the LIVE DASHBOARD "
-    "DATA provided below. If the data does not contain the answer, say you don't have that data rather "
-    "than guessing — never invent numbers, prices or events. Speak in clear, plain English and be "
-    "concise (usually under 130 words). Always frame predictions as probabilities/odds, not certainties, "
-    "and never give definitive buy/sell financial advice. You may explain what the numbers mean and why "
-    "the engine leans a certain way.\n\n"
+    "You are 'Albert', the friendly AI quant analyst built into the BTCIQ Bitcoin dashboard "
+    "(powered by BitCentAI, a Bitcoin-Centred Intelligence Engine). You have a warm, witty, "
+    "professor-like personality — think a sharp, approachable Einstein of Bitcoin markets — but you "
+    "stay rigorous and never over-promise. If someone asks who you are, say you are Albert, the BTCIQ "
+    "AI quant. Answer the user's question using ONLY the LIVE DASHBOARD DATA provided below. If the "
+    "data does not contain the answer, say you don't have that data rather than guessing — never invent "
+    "numbers, prices or events. Speak in clear, plain English and be concise (usually under 130 words). "
+    "Always frame predictions as probabilities/odds, not certainties, and never give definitive buy/sell "
+    "financial advice. You may explain what the numbers mean and why the engine leans a certain way.\n\n"
     "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
 )
 
@@ -1402,7 +1405,7 @@ def record_predictions(as_of, price_now, all_outlook, regime, source, model_vers
             'direction': 'UP' if higher >= 50 else 'DOWN',
             'prob_higher': round(higher, 1), 'prob_lower': round(100 - higher, 1),
             'base': f.get('base'), 'bull': f.get('bull'), 'bear': f.get('bear'),
-            'confidence': f.get('confidence'), 'regime': regime,
+            'confidence': f.get('confidence'), 'confidence_pct': f.get('confidence_pct'), 'regime': regime,
             'expected_volatility': _vol_label(f),
             'resolved': False, 'actual_close': None, 'actual_direction': None,
             'correct': None, 'brier': None, 'abs_pct_error': None, 'range_hit': None,
@@ -1515,6 +1518,28 @@ def compute_scorecard():
                           'realised_up': realised})
     pending = list(predictions_col.find(
         {'resolved': False, 'trigger': {'$ne': 'backtest'}}, {'_id': 0}).sort('target_date', 1))
+
+    # Ensure every open forecast has a directional-confidence label + percentage so the
+    # UI can render a badge + number even for docs logged before confidence_pct existed.
+    def _conf_from_prob(prob_higher):
+        margin = abs(float(prob_higher) - 50.0) / 50.0        # 0..1
+        pct = round(min(100.0, margin * 100.0))
+        label = 'High' if margin > 0.45 else ('Moderate' if margin > 0.2 else 'Low')
+        return label, pct
+
+    for p in pending:
+        cp = p.get('confidence_pct')
+        cl = p.get('confidence')
+        if cp is None:
+            # Legacy doc logged before confidence_pct existed — derive both from the
+            # directional probability so the badge and percentage always agree.
+            fb_label, fb_pct = _conf_from_prob(p.get('prob_higher', 50))
+            p['confidence_pct'] = fb_pct
+            p['confidence'] = fb_label
+        elif cl is None:
+            fb_label, _ = _conf_from_prob(p.get('prob_higher', 50))
+            p['confidence'] = fb_label
+
     recent = sorted([x for x in resolved if x.get('trigger') != 'backtest'],
                     key=lambda z: z.get('resolved_at', ''), reverse=True)[:15]
     return {
@@ -1706,6 +1731,184 @@ def compute_bitmark(quant, cycle, price, trigger='scheduled'):
             'next_scheduled_update': next_upd, 'current_price': round(price, 2),
             'regime': quant['regime']['regime'], 'horizons': horizons,
             'changes': changes, 'change_explanation': change_text, 'generated_at': now.isoformat()}
+
+
+# ---------------------------- Smart Alerts (state-change detection) ----------------------------
+# Non-price, event-driven alerts triggered when the market STATE changes between runs
+# (regime flips, decision-label changes, data-trust degradation, high-impact events entering
+# the near window, big daily moves). Persisted + de-duplicated so users see a running feed.
+_TRUST_RANK = {'High': 3, 'Good': 2, 'Degraded': 1, 'Low': 0}
+
+
+def _score_band(s):
+    if s is None:
+        return None
+    if s >= 65:
+        return 'Bullish'
+    if s >= 55:
+        return 'Mildly Bullish'
+    if s > 45:
+        return 'Neutral'
+    if s > 35:
+        return 'Mildly Bearish'
+    return 'Bearish'
+
+
+def compute_smart_alerts(doc, prev_doc):
+    """Compare the new run against the previous run and log meaningful state changes."""
+    as_of = doc.get('as_of')
+    now_iso = datetime.datetime.utcnow().isoformat()
+    fired = []
+
+    def fire(category, severity, title, message, sig):
+        key = f"{as_of}_{category}_{sig}"
+        try:
+            res = smart_alerts_col.update_one(
+                {'_id': key},
+                {'$setOnInsert': {
+                    '_id': key, 'id': key, 'ts': now_iso, 'as_of': as_of,
+                    'category': category, 'severity': severity,
+                    'title': title, 'message': message, 'seen': False,
+                }}, upsert=True)
+            if res.upserted_id is not None:
+                fired.append(key)
+        except Exception:  # noqa
+            traceback.print_exc()
+
+    prev = prev_doc or {}
+
+    # 1) Regime change
+    cur_regime = (doc.get('regime') or {}).get('regime')
+    prev_regime = (prev.get('regime') or {}).get('regime')
+    if cur_regime and prev_regime and cur_regime != prev_regime:
+        fire('Regime', 'high', f'Regime shift → {cur_regime}',
+             f'Market regime changed from "{prev_regime}" to "{cur_regime}". '
+             f'{(doc.get("regime") or {}).get("behavior", "")}', cur_regime)
+
+    # 2) Decision label change (overall market state)
+    cur_dl = (doc.get('decision') or {}).get('label')
+    prev_dl = (prev.get('decision') or {}).get('label')
+    if cur_dl and prev_dl and cur_dl != prev_dl:
+        sev = 'high' if ('Bear' in cur_dl or 'Bull' in cur_dl) else 'warning'
+        fire('Market State', sev, f'Market state → {cur_dl}',
+             f'Unified decision changed from "{prev_dl}" to "{cur_dl}" '
+             f'(score {(doc.get("decision") or {}).get("overall_score")}/100).', cur_dl)
+
+    # 3) Quant-score band crossing
+    cur_band = _score_band(doc.get('quant_score'))
+    prev_band = _score_band(prev.get('quant_score'))
+    if cur_band and prev_band and cur_band != prev_band:
+        fire('Quant Score', 'info', f'Quant Score band → {cur_band}',
+             f'Quant Score moved from {prev.get("quant_score")} ({prev_band}) to '
+             f'{doc.get("quant_score")} ({cur_band}).', cur_band)
+
+    # 4) Data-trust degradation / recovery
+    cur_tr = (doc.get('data_health') or {}).get('level')
+    prev_tr = (prev.get('data_health') or {}).get('level')
+    if cur_tr and prev_tr and cur_tr != prev_tr:
+        worse = _TRUST_RANK.get(cur_tr, 3) < _TRUST_RANK.get(prev_tr, 3)
+        fire('Data Trust', 'warning' if worse else 'success',
+             f'Data trust {"degraded" if worse else "recovered"} → {cur_tr}',
+             f'Feed health changed from "{prev_tr}" to "{cur_tr}". '
+             f'{"Odds are being faded toward 50%." if (doc.get("data_health") or {}).get("faded") else "Full model confidence restored."}',
+             cur_tr)
+
+    # 5) High-impact event entering the near-term (<=3 days) window
+    nhi = (doc.get('event_calendar') or {}).get('next_high_impact')
+    if nhi and nhi.get('days_until') is not None and 0 <= nhi['days_until'] <= 3:
+        fire('Event Risk', 'warning', f'{nhi.get("title")} in {nhi["days_until"]}d',
+             f'{nhi.get("importance")}-importance {nhi.get("category")} event approaching '
+             f'({nhi.get("expected_volatility")} expected volatility). {nhi.get("description", "")}',
+             f"{nhi.get('title')}_{nhi.get('date')}")
+
+    # 6) Large daily move
+    dc = doc.get('day_change_pct')
+    if dc is not None and abs(dc) >= 5.0:
+        fire('Volatility', 'high' if abs(dc) >= 8 else 'warning',
+             f'Large move: {"+" if dc > 0 else ""}{dc}% in 24h',
+             f'Bitcoin moved {"+" if dc > 0 else ""}{dc}% over the last daily candle to '
+             f'{fmt_usd_srv(doc.get("last_close"))} — elevated volatility.', f'move_{round(dc)}')
+
+    return {'fired': fired, 'n_fired': len(fired)}
+
+
+def fmt_usd_srv(v):
+    try:
+        return f"${float(v):,.0f}"
+    except Exception:  # noqa
+        return str(v)
+
+
+def get_smart_alerts(limit=50):
+    items = list(smart_alerts_col.find({}, {'_id': 0}).sort('ts', -1).limit(limit))
+    unseen = smart_alerts_col.count_documents({'seen': False})
+    return {'alerts': items, 'unseen': unseen, 'total': smart_alerts_col.count_documents({})}
+
+
+# ---------------------------- Time Machine (historical replay) ----------------------------
+def build_replay_payload(trades, price_series):
+    """Bundle the full walk-forward predictions + price path so the frontend Time Machine
+    can replay any historical day (model call vs actual outcome)."""
+    return {
+        'series': price_series,          # [{date, close}] full history
+        'trades': trades,                # [{date, signal, confidence, close, nextClose, actual, correct}]
+        'min_date': trades[0]['date'] if trades else None,
+        'max_date': trades[-1]['date'] if trades else None,
+        'n': len(trades),
+    }
+
+
+def replay_for_date(target_date, window=30):
+    """Return the model's as-of prediction for target_date + actual outcome + price window."""
+    run = runs_col.find_one(sort=[('created_at', -1)])
+    if not run or not run.get('replay'):
+        return {'status': 'unavailable', 'message': 'No replay data yet — run a compute first.'}
+    rp = run['replay']
+    trades = rp.get('trades', [])
+    series = rp.get('series', [])
+    if not trades:
+        return {'status': 'unavailable', 'message': 'No historical predictions available.'}
+    # nearest trade at/just-before target_date
+    pick = None
+    for t in trades:
+        if t['date'] <= target_date:
+            pick = t
+        else:
+            break
+    if pick is None:
+        pick = trades[0]
+    # price window around the pick date
+    idx = next((i for i, s in enumerate(series) if s['date'] == pick['date']), None)
+    if idx is None:
+        idx = next((i for i, s in enumerate(series) if s['date'] >= pick['date']), len(series) - 1)
+    lo = max(0, idx - window)
+    hi = min(len(series), idx + window + 1)
+    win = [{**s, 'is_pick': s['date'] == pick['date']} for s in series[lo:hi]]
+    # rolling accuracy over the surrounding 30 trades
+    tidx = next((i for i, t in enumerate(trades) if t['date'] == pick['date']), None)
+    roll = None
+    if tidx is not None:
+        seg = trades[max(0, tidx - 15):tidx + 15]
+        if seg:
+            roll = round(sum(1 for x in seg if x['correct']) / len(seg) * 100, 1)
+    move_pct = round((pick['nextClose'] - pick['close']) / pick['close'] * 100, 2) if pick['close'] else 0
+    return {
+        'status': 'ready',
+        'pick_date': pick['date'],
+        'signal': pick['signal'],
+        'confidence': pick['confidence'],
+        'close': pick['close'],
+        'next_close': pick['nextClose'],
+        'actual': pick['actual'],
+        'move_pct': move_pct,
+        'correct': pick['correct'],
+        'window': win,
+        'rolling_accuracy': roll,
+        'min_date': rp.get('min_date'),
+        'max_date': rp.get('max_date'),
+        'n': rp.get('n'),
+    }
+
 
 
 def compute():
@@ -1992,8 +2195,29 @@ def compute():
         'alerts': alerts,
     }
 
+    # --- Smart Alerts: detect state changes vs the previous run ---
+    smart_alerts = None
+    try:
+        prev_doc = runs_col.find_one(sort=[('created_at', -1)])
+        smart_alerts = compute_smart_alerts(doc, prev_doc)
+    except Exception:  # noqa
+        traceback.print_exc()
+    doc['smart_alerts'] = get_smart_alerts()
+
+    # --- Time Machine replay payload (stored only, not sent in dashboard) ---
+    try:
+        price_series = [{'date': ts.strftime('%Y-%m-%d'), 'close': round(float(c), 2)}
+                        for ts, c in zip(df['timestamp'], df['close'])]
+        replay = build_replay_payload(trades, price_series)
+    except Exception:  # noqa
+        traceback.print_exc()
+        replay = None
+
     to_store = dict(doc)
     to_store['_id'] = doc['id']
+    to_store['replay'] = replay
+    # keep the full smart-alert feed out of the heavy run doc snapshot
+    to_store.pop('smart_alerts', None)
     runs_col.insert_one(to_store)
     return doc
 
@@ -2123,6 +2347,45 @@ def chat_history(session_id: str):
 def scorecard():
     try:
         return {'status': 'ready', **compute_scorecard()}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
+
+
+@app.get('/api/v1/alerts')
+def alerts_feed(limit: int = 50):
+    try:
+        return {'status': 'ready', **get_smart_alerts(limit)}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error', 'alerts': [], 'unseen': 0}
+
+
+@app.post('/api/v1/alerts/ack')
+def alerts_ack(payload: dict = Body(default={})):
+    ids = (payload or {}).get('ids')
+    try:
+        if ids:
+            smart_alerts_col.update_many({'id': {'$in': ids}}, {'$set': {'seen': True}})
+        else:
+            smart_alerts_col.update_many({'seen': False}, {'$set': {'seen': True}})
+        return {'status': 'ok', 'unseen': smart_alerts_col.count_documents({'seen': False})}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
+
+
+@app.get('/api/v1/replay')
+def replay(date: str = None, window: int = 30):
+    try:
+        run = runs_col.find_one(sort=[('created_at', -1)])
+        rp = (run or {}).get('replay') or {}
+        if not date:
+            # default to the most recent replayable date
+            date = rp.get('max_date')
+        if not date:
+            return {'status': 'unavailable', 'message': 'No replay data yet.'}
+        return replay_for_date(date, window=window)
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error'}

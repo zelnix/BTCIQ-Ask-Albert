@@ -325,8 +325,39 @@ backend:
         -agent: "testing"
         -comment: "✅ PASSED comprehensive BitMarkAI certification via external URL. All 3 tests passed: (1) GET /api/v1/dashboard bitmark object: model_version='bitmark-v1' ✅, trigger='manual' ✅, issued='2026-08-04' ✅, next_scheduled_update='2026-08-11' (= issued + 7 days) ✅, current_price=$64,319 ✅, regime='Weak Bearish Trend' ✅, change_explanation (244 chars) ✅, generated_at ISO format ✅, horizons: EXACTLY 7 items ✅, codes exactly [1W,1M,3M,6M,1Y,2Y,5Y] in order ✅. MODEL horizons (1W-1Y): all have type='model' ✅, prob_above+prob_below=100 ✅, range logic bear_low<=base_low<=base_high<=bull_high ✅, expected_volatility in [Low,Elevated,High,Very High] ✅, model_confidence in [Low,Moderate,High,Very Low] ✅, weighting sum=100% ✅, top_positive/top_risk present ✅. SCENARIO horizons (2Y,5Y): type='scenario' ✅, expected_volatility='Very High' ✅, model_confidence in [Low,Very Low] ✅, scenarios: 4 items with exact names [Adoption Expansion, Base Adoption, Restrictive Policy, Severe Disruption] ✅, each with prob/low/high/note ✅, high>low ✅, probs sum=100% ✅, weighting present ✅. (2) POST /api/v1/bitmark/run: first call returned status='started' ✅, immediate second call returned status='rate_limited' with retry_in=299s (<=300) ✅, message present ✅. (3) REGRESSION: GET /api/v1/dashboard status='ready' with all 14 prior fields (decision, news_forecast_link, data_health, event_calendar, prediction_ledger, forecasts(3), long_outlook(3), quant_score, regime, dominance, cycle, policy, chart, alerts) ✅, GET /api/v1/scorecard status='ready' ✅, GET /api/v1/health compute_status='running', runs=14 ✅, GET /api/v1/ticker price=$64,255.90, price_aud=$91,159.84 ✅. All validations passed. Data is REAL (ccxt Kraken). WebSockets NOT tested (as instructed)."
 
-frontend:
-  - task: "Quant dashboard UI (signal card, dual-axis Recharts chart, feature matrix, importance, CV folds)"
+  - task: "Prediction Ledger confidence for Open Forecasts (dashboard.prediction_ledger.pending[].confidence + confidence_pct)"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW. record_predictions now stores confidence_pct alongside confidence for every logged forecast. compute_scorecard() backfills any legacy pending doc missing confidence_pct by deriving BOTH label + pct from prob_higher margin so badge and % always agree. Each item in prediction_ledger.pending (and GET /api/v1/scorecard pending) now has confidence (Low/Moderate/High) and confidence_pct (int 0-100). Verified via curl: 6 pending items all have consistent confidence + confidence_pct."
+  - task: "Smart Alerts engine (GET /api/v1/alerts, POST /api/v1/alerts/ack, dashboard.smart_alerts)"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW Phase-2 feature. compute_smart_alerts(doc, prev_doc) compares each run vs the previous run and logs state-change events (Regime shift, Market State/decision-label change, Quant Score band crossing, Data Trust degrade/recover, high-impact Event Risk within 3 days, large daily Volatility move) into smart_alerts collection, de-duplicated by as_of+category+signature via $setOnInsert. GET /api/v1/alerts returns {status:'ready', alerts:[...recent 50 sorted ts desc, each with id/ts/as_of/category/severity/title/message/seen], unseen:int, total:int}. POST /api/v1/alerts/ack {ids?:[...]} marks those (or all unseen if no ids) seen and returns {status:'ok', unseen}. Verified via curl: 1 alert fired (Event Risk NFP in 3d), unseen=1; ack works."
+  - task: "Time Machine historical replay (GET /api/v1/replay?date=&window=)"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW Phase-2 feature. compute() now persists a 'replay' payload in the stored run doc (NOT in the dashboard response): full price series [{date,close}] + full walk-forward trades [{date,signal,confidence,close,nextClose,actual,correct}] + min_date/max_date/n. GET /api/v1/replay?date=YYYY-MM-DD&window=30 returns {status:'ready', pick_date, signal(UP/DOWN), confidence, close, next_close, actual(UP/DOWN), move_pct, correct(bool), window:[{date,close,is_pick}], rolling_accuracy, min_date, max_date, n}. No date -> defaults to max_date. Picks nearest trade at/just-before target_date; no future leakage. Verified via curl for default + 2025-11-15 (signal UP, actual DOWN, correct false, 41-pt window)."
     implemented: true
     working: true
     file: "app/page.js"
@@ -346,7 +377,9 @@ metadata:
 
 test_plan:
   current_focus:
-    - "BitMarkAI Engine (dashboard.bitmark + POST /api/v1/bitmark/run)"
+    - "Prediction Ledger confidence for Open Forecasts (dashboard.prediction_ledger.pending[].confidence + confidence_pct)"
+    - "Smart Alerts engine (GET /api/v1/alerts, POST /api/v1/alerts/ack, dashboard.smart_alerts)"
+    - "Time Machine historical replay (GET /api/v1/replay?date=&window=)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -354,7 +387,34 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      Please test the THREE new backend features via the Next.js proxy (external base URL + /api/v1/...).
+      NEW backend work to test (Phase 2 + P0). Test via Next.js proxy (external base URL + /api/v1/...).
+      Data is REAL (ccxt Kraken). No new keys needed. Do NOT test WebSockets.
+
+      1) P0 — Open Forecast confidence: GET /api/v1/scorecard (and GET /api/v1/dashboard -> prediction_ledger).
+         Every item in `pending` MUST now have BOTH `confidence` (one of Low/Moderate/High) and
+         `confidence_pct` (int 0-100). They must be internally consistent (High<->high pct, etc.).
+         Confirm existing fields (horizon, direction, base, price_at_issue, target_date, prob_higher) still present.
+
+      2) Smart Alerts:
+         - GET /api/v1/alerts -> {status:'ready', alerts:[...], unseen:int, total:int}. Each alert has
+           id, ts (ISO), as_of, category (Regime/Market State/Quant Score/Data Trust/Event Risk/Volatility),
+           severity (high/warning/success/info), title, message, seen(bool).
+         - POST /api/v1/alerts/ack with {} should mark ALL unseen as seen and return {status:'ok', unseen:0}.
+         - POST /api/v1/alerts/ack with {"ids":["<an id>"]} should mark only that one seen.
+         - GET /api/v1/dashboard should include top-level `smart_alerts` object {alerts, unseen, total}.
+
+      3) Time Machine replay:
+         - GET /api/v1/replay (no date) -> status:'ready', defaults to max_date. Validate fields:
+           pick_date, signal (UP/DOWN), confidence (number), close, next_close, actual (UP/DOWN),
+           move_pct (number), correct (bool), window (non-empty list of {date, close, is_pick}), rolling_accuracy,
+           min_date, max_date, n.
+         - GET /api/v1/replay?date=2025-11-15&window=20 -> pick_date == 2025-11-15 (or nearest <=), window
+           length ~ up to 41 (2*20+1), exactly one window item has is_pick=true matching pick_date.
+         - Logic check: correct == (signal == actual); actual == 'UP' iff next_close > close.
+
+      REGRESSION: GET /api/v1/dashboard still status='ready' with all prior fields (decision, forecasts,
+      bitmark, data_health, event_calendar, prediction_ledger, quant_score, regime, etc.). POST /api/v1/chat
+      still returns model 'gemini-3-flash-preview' (persona now 'Albert').
       Data is REAL (ccxt Kraken); no keys needed except EMERGENT_LLM_KEY (already set) for chat.
 
       1) GET /api/v1/dashboard -> validate NEW top-level 'decision' object:

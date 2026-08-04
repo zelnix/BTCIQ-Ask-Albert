@@ -62,12 +62,14 @@ const SECTIONS = [
     blurb: 'Provenance for every number: original provider, freshness, latency and confidence. When a live feed goes stale the odds are faded and confidence is reduced automatically.' },
   { id: 'events', label: 'Event Calendar', icon: CalendarClock,
     blurb: 'A unified calendar of macro, derivatives and on-chain events — each with a live countdown, importance and expected volatility, so you can see what could move Bitcoin next.' },
+  { id: 'timemachine', label: 'Time Machine', icon: History,
+    blurb: 'Replay any day in Bitcoin’s history: see exactly what the model would have predicted on that date, the actual outcome the next day, and the surrounding price path — an honest look at how the engine behaves through every kind of market.' },
   { id: 'strategy', label: 'Strategy Lab', icon: FlaskConical, soon: true,
     blurb: 'Soon: build no-code rules (e.g. "buy when the score > 70") and backtest them with fees, slippage and drawdown.' },
   { id: 'alerts', label: 'Alerts', icon: Bell,
     blurb: 'A live feed of what just changed and what is coming: regime shifts, liquidity state, chart triggers, cross-market moves and upcoming high-impact policy events.' },
-  { id: 'ask', label: 'Ask Quant', icon: MessageCircle,
-    blurb: 'Chat with the engine in plain English — "Why did the score fall?", "What is the 7-day outlook?" — and get answers grounded strictly in the live dashboard numbers (powered by Gemini 3 Flash). It will never invent data.' },
+  { id: 'ask', label: 'Ask Albert', icon: MessageCircle,
+    blurb: 'Chat with Albert, BTCIQ’s AI quant, in plain English — "Why did the score fall?", "What is the 7-day outlook?" — and get answers grounded strictly in the live dashboard numbers (powered by Gemini 3 Flash). He will never invent data.' },
 ];
 
 /* --------------------------- small components ------------------------ */
@@ -882,17 +884,60 @@ function PolicySection({ d }) {
   );
 }
 
-function AlertsSection({ d }) {
-  const alerts = d.alerts || [];
+function AlertsSection({ d, alertsData, onAck }) {
+  const smart = (alertsData && alertsData.alerts) || [];
+  const unseen = (alertsData && alertsData.unseen) || 0;
+  const live = d.alerts || [];
+  const sevStyle = (s) => s === 'high' ? 'border-red-500/30 bg-red-500/5' : s === 'warning' ? 'border-amber-500/30 bg-amber-500/5' : s === 'success' ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-sky-500/25 bg-sky-500/5';
+  const sevDot = (s) => s === 'high' ? 'bg-red-400' : s === 'warning' ? 'bg-amber-400' : s === 'success' ? 'bg-emerald-400' : 'bg-sky-400';
+  const catStyle = (c) => ({ Regime: 'text-violet-300 bg-violet-500/10 border-violet-500/25',
+    'Market State': 'text-sky-300 bg-sky-500/10 border-sky-500/25',
+    'Quant Score': 'text-emerald-300 bg-emerald-500/10 border-emerald-500/25',
+    'Data Trust': 'text-amber-300 bg-amber-500/10 border-amber-500/25',
+    'Event Risk': 'text-orange-300 bg-orange-500/10 border-orange-500/25',
+    Volatility: 'text-red-300 bg-red-500/10 border-red-500/25' }[c] || 'text-slate-300 bg-slate-800/40 border-slate-700');
   const styleFor = (lvl) => lvl === 'danger' ? 'border-red-500/30 bg-red-500/5' : lvl === 'warning' ? 'border-amber-500/30 bg-amber-500/5' : lvl === 'success' ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800 bg-slate-950/40';
   const dot = (lvl) => lvl === 'danger' ? 'bg-red-400' : lvl === 'warning' ? 'bg-amber-400' : lvl === 'success' ? 'bg-emerald-400' : 'bg-sky-400';
+  const fmtTs = (iso) => { try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return iso; } };
   return (
     <div className="space-y-5">
-      <SectionHead icon={Bell} title="Alerts" blurb={SECTIONS.find((s) => s.id === 'alerts').blurb} />
+      <SectionHead icon={Bell} title="Smart Alerts" blurb={SECTIONS.find((s) => s.id === 'alerts').blurb} />
+
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <div className="mb-3 flex items-center gap-2"><Bell className="h-5 w-5 text-slate-400" /><h3 className="font-semibold text-slate-100">Live Signal Feed</h3><span className="text-sm text-slate-500">{alerts.length} active</span></div>
+        <div className="mb-4 flex items-center gap-2">
+          <ShieldAlert className="h-5 w-5 text-violet-400" />
+          <h3 className="font-semibold text-slate-100">What Just Changed</h3>
+          {unseen > 0 && <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-bold text-red-300 ring-1 ring-red-500/30">{unseen} new</span>}
+          <span className="ml-auto text-xs text-slate-500">{smart.length} logged</span>
+          {unseen > 0 && <Button size="sm" variant="outline" onClick={() => onAck && onAck()} className="h-7 gap-1.5 border-slate-700 text-xs text-slate-300 hover:bg-slate-800">Mark all read</Button>}
+        </div>
+        <p className="mb-4 text-xs text-slate-500">State-change intelligence — non-price events triggered when the market regime, unified decision, data trust, quant score or event risk shifts between runs.</p>
+        {smart.length === 0 ? (
+          <p className="text-sm text-slate-500">No state changes logged yet. Alerts appear here automatically when the market’s regime, decision, trust or event risk changes.</p>
+        ) : (
+          <div className="space-y-2">
+            {smart.map((a, i) => (
+              <div key={a.id || i} className={`flex items-start gap-3 rounded-lg border p-3 ${sevStyle(a.severity)} ${!a.seen ? 'ring-1 ring-inset ring-sky-500/20' : ''}`}>
+                <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${sevDot(a.severity)}`} />
+                <div className="flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${catStyle(a.category)}`}>{a.category}</span>
+                    <span className="text-sm font-semibold text-slate-100">{a.title}</span>
+                    {!a.seen && <span className="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-sky-300">new</span>}
+                    <span className="ml-auto text-[11px] text-slate-500">{fmtTs(a.ts)}</span>
+                  </div>
+                  <p className="mt-1 text-sm text-slate-400">{a.message}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+        <div className="mb-3 flex items-center gap-2"><Radio className="h-5 w-5 text-slate-400" /><h3 className="font-semibold text-slate-100">Current Market Read</h3><span className="text-sm text-slate-500">{live.length} active</span></div>
         <div className="space-y-2">
-          {alerts.map((a, i) => (
+          {live.map((a, i) => (
             <div key={i} className={`flex items-start gap-3 rounded-lg border p-3 ${styleFor(a.level)}`}>
               <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dot(a.level)}`} />
               <div className="flex-1">
@@ -901,10 +946,133 @@ function AlertsSection({ d }) {
               </div>
             </div>
           ))}
-          {alerts.length === 0 && <p className="text-sm text-slate-500">No active alerts right now.</p>}
+          {live.length === 0 && <p className="text-sm text-slate-500">No active signals right now.</p>}
         </div>
         <p className="mt-4 text-[11px] text-slate-600">In-app feed (no email yet). Add a SendGrid key later to push these as email/push alerts.</p>
       </Card>
+    </div>
+  );
+}
+
+/* --------------------------- Time Machine ---------------------------- */
+function TimeMachineSection() {
+  const [rep, setRep] = React.useState(null);
+  const [date, setDate] = React.useState('');
+  const [loading, setLoading] = React.useState(true);
+  const [range, setRange] = React.useState({ min: null, max: null });
+
+  const fetchReplay = React.useCallback(async (dt) => {
+    setLoading(true);
+    try {
+      const url = dt ? `/api/v1/replay?date=${dt}&window=30` : '/api/v1/replay?window=30';
+      const r = await fetch(url, { cache: 'no-store' });
+      const j = await r.json();
+      if (j.status === 'ready') {
+        setRep(j);
+        if (j.min_date && j.max_date) setRange({ min: j.min_date, max: j.max_date });
+        if (!dt && j.pick_date) setDate(j.pick_date);
+      }
+    } catch (e) { /* noop */ }
+    setLoading(false);
+  }, []);
+
+  React.useEffect(() => { fetchReplay(); }, [fetchReplay]);
+
+  const go = () => { if (date) fetchReplay(date); };
+  const shift = (days) => {
+    if (!date) return;
+    const d = new Date(date + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + days);
+    let nd = d.toISOString().slice(0, 10);
+    if (range.min && nd < range.min) nd = range.min;
+    if (range.max && nd > range.max) nd = range.max;
+    setDate(nd); fetchReplay(nd);
+  };
+
+  const win = (rep && rep.window) || [];
+  const chartData = win.map((w) => ({ date: w.date, close: w.close, pick: w.is_pick ? w.close : null }));
+  const correct = rep && rep.correct;
+
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={History} title="Bitcoin Time Machine" blurb={SECTIONS.find((s) => s.id === 'timemachine').blurb} />
+
+      <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+        <div className="flex flex-wrap items-end gap-3">
+          <div>
+            <label className="mb-1 block text-[11px] uppercase tracking-wider text-slate-400">Replay date</label>
+            <input type="date" value={date} min={range.min || undefined} max={range.max || undefined}
+              onChange={(e) => setDate(e.target.value)}
+              className="rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+          </div>
+          <Button onClick={go} disabled={loading} className="gap-1.5 bg-sky-500 hover:bg-sky-400"><History className="h-4 w-4" />Replay this day</Button>
+          <div className="flex gap-1.5">
+            <Button size="sm" variant="outline" onClick={() => shift(-1)} className="border-slate-700 text-slate-300 hover:bg-slate-800">◀ Prev day</Button>
+            <Button size="sm" variant="outline" onClick={() => shift(1)} className="border-slate-700 text-slate-300 hover:bg-slate-800">Next day ▶</Button>
+          </div>
+          {range.min && <span className="ml-auto text-[11px] text-slate-500">available {range.min} → {range.max} · {rep?.n} days</span>}
+        </div>
+      </Card>
+
+      {loading && !rep ? (
+        <Card className="border-0 bg-slate-900 p-10 text-center ring-1 ring-slate-800"><p className="text-sm text-slate-500">Loading replay…</p></Card>
+      ) : rep && rep.status === 'ready' ? (
+        <>
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <Card className={`border-0 p-5 ring-1 ${correct ? 'bg-emerald-500/5 ring-emerald-500/25' : 'bg-red-500/5 ring-red-500/25'}`}>
+              <p className="text-[11px] uppercase tracking-wider text-slate-400">Model call on {rep.pick_date}</p>
+              <div className="mt-2 flex items-center gap-2">
+                {rep.signal === 'UP' ? <ArrowUpRight className="h-7 w-7 text-emerald-400" /> : <ArrowDownRight className="h-7 w-7 text-red-400" />}
+                <span className={`text-3xl font-black ${rep.signal === 'UP' ? 'text-emerald-400' : 'text-red-400'}`}>{rep.signal}</span>
+                <span className="ml-1 rounded bg-slate-800 px-2 py-0.5 text-xs font-semibold text-slate-300">{rep.confidence}% conf</span>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">Predicted next-day direction from {fmtUsd(rep.close)}</p>
+            </Card>
+            <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+              <p className="text-[11px] uppercase tracking-wider text-slate-400">What actually happened</p>
+              <div className="mt-2 flex items-center gap-2">
+                <span className={`text-3xl font-black ${rep.actual === 'UP' ? 'text-emerald-400' : 'text-red-400'}`}>{rep.actual}</span>
+                <span className={`text-lg font-bold ${rep.move_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{rep.move_pct >= 0 ? '+' : ''}{rep.move_pct}%</span>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">{fmtUsd(rep.close)} → {fmtUsd(rep.next_close)} next day</p>
+            </Card>
+            <Card className={`border-0 p-5 ring-1 ${correct ? 'bg-emerald-500/5 ring-emerald-500/25' : 'bg-red-500/5 ring-red-500/25'}`}>
+              <p className="text-[11px] uppercase tracking-wider text-slate-400">Verdict</p>
+              <div className="mt-2 flex items-center gap-2">
+                {correct ? <Check className="h-7 w-7 text-emerald-400" /> : <X className="h-7 w-7 text-red-400" />}
+                <span className={`text-3xl font-black ${correct ? 'text-emerald-400' : 'text-red-400'}`}>{correct ? 'Correct' : 'Missed'}</span>
+              </div>
+              {rep.rolling_accuracy != null && <p className="mt-2 text-xs text-slate-500">~{rep.rolling_accuracy}% accuracy in the surrounding 30 days</p>}
+            </Card>
+          </div>
+
+          <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+            <h3 className="mb-3 text-sm font-semibold text-white">Price path around {rep.pick_date}</h3>
+            <div className="h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={chartData} margin={{ top: 10, right: 12, left: 4, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="tmFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#38bdf8" stopOpacity={0.28} />
+                      <stop offset="100%" stopColor="#38bdf8" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                  <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} minTickGap={40} />
+                  <YAxis tick={{ fill: '#64748b', fontSize: 10 }} domain={['auto', 'auto']} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} width={48} />
+                  <Tooltip content={<ChartTooltip />} />
+                  <Area type="monotone" dataKey="close" stroke="#38bdf8" strokeWidth={2} fill="url(#tmFill)" name="BTC" />
+                  <Scatter dataKey="pick" fill="#fbbf24" name="Replay day" />
+                  {rep.pick_date && <ReferenceLine x={rep.pick_date} stroke="#fbbf24" strokeDasharray="4 4" label={{ value: 'pick', fill: '#fbbf24', fontSize: 10, position: 'top' }} />}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-600">Highlighted point is the replay day. The model saw only data up to that day when it made the call — no future leakage.</p>
+          </Card>
+        </>
+      ) : (
+        <Card className="border-0 bg-slate-900 p-10 text-center ring-1 ring-slate-800"><p className="text-sm text-slate-500">{rep?.message || 'Replay data is still being generated — hit Retrain, then try again.'}</p></Card>
+      )}
     </div>
   );
 }
@@ -1161,6 +1329,11 @@ function countdown(dateStr) {
   const d = Math.floor(t / 86400000); const h = Math.floor((t % 86400000) / 3600000);
   return d > 0 ? `${d}d ${h}h` : `${h}h`;
 }
+const confBadge = (label) => ({
+  High: 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10',
+  Moderate: 'text-amber-300 border-amber-500/30 bg-amber-500/10',
+  Low: 'text-slate-300 border-slate-700 bg-slate-800/50',
+}[label] || 'text-slate-300 border-slate-700 bg-slate-800/50');
 
 function Stat({ label, value, sub, color }) {
   return (
@@ -1257,6 +1430,11 @@ function ScorecardSection({ d }) {
                   <span className={`font-semibold ${p.direction === 'UP' ? 'text-emerald-400' : 'text-red-400'}`}>{p.direction === 'UP' ? '▲' : '▼'} {fmtUsd(p.base)}</span>
                   {p.bear != null && p.bull != null && <span className="text-xs text-slate-500">range {fmtUsd(p.bear)}–{fmtUsd(p.bull)}</span>}
                   <span className="text-xs text-slate-500">from {fmtUsd(p.price_at_issue)}</span>
+                  {p.confidence && (
+                    <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${confBadge(p.confidence)}`}>
+                      {p.confidence} conf{p.confidence_pct != null ? ` · ${Math.round(p.confidence_pct)}%` : ''}
+                    </span>
+                  )}
                   <span className="ml-auto rounded bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-300">{countdown(p.target_date)}</span>
                 </div>
               ))}
@@ -1426,20 +1604,20 @@ function AskQuantSection({ d }) {
 
   return (
     <div className="space-y-5">
-      <SectionHead icon={MessageCircle} title="Ask Quant" blurb={SECTIONS.find((s) => s.id === 'ask').blurb} />
+      <SectionHead icon={MessageCircle} title="Ask Albert" blurb={SECTIONS.find((s) => s.id === 'ask').blurb} />
       <Card className="flex h-[560px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
-        <div className="flex items-center gap-2 border-b border-slate-800 px-5 py-3">
-          <div className="rounded-lg bg-gradient-to-br from-sky-500 to-violet-600 p-1.5"><Brain className="h-4 w-4 text-white" /></div>
-          <div><p className="text-sm font-semibold text-white">Quant · AI Analyst</p><p className="text-[10px] text-slate-500">Grounded in live dashboard data · Gemini 3 Flash</p></div>
+        <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3">
+          <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
+          <div><p className="text-sm font-semibold text-white">Albert · BTCIQ AI Quant</p><p className="text-[10px] text-slate-500">Grounded in live dashboard data · Gemini 3 Flash</p></div>
           <span className="ml-auto flex items-center gap-1 text-[10px] font-bold text-emerald-400"><span className="h-2 w-2 rounded-full bg-emerald-400" />LIVE</span>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
           {messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-              <div className="rounded-full bg-slate-800 p-4"><MessageCircle className="h-7 w-7 text-sky-400" /></div>
+              <img src="/albert.png" alt="Albert" className="h-20 w-20 rounded-full object-cover ring-2 ring-sky-500/40" />
               <div>
-                <p className="font-semibold text-slate-200">Ask me anything about the current market</p>
-                <p className="mt-1 max-w-sm text-xs text-slate-500">I only use the live numbers on this dashboard — score, regime, forecasts, news, policy and cycle. I won't invent data.</p>
+                <p className="font-semibold text-slate-200">Hi, I’m Albert — ask me anything about the market</p>
+                <p className="mt-1 max-w-sm text-xs text-slate-500">I only use the live numbers on this dashboard — score, regime, forecasts, news, policy and cycle. I won’t invent data.</p>
               </div>
               <div className="flex max-w-lg flex-wrap justify-center gap-2">
                 {suggestions.map((s, i) => (
@@ -1449,12 +1627,14 @@ function AskQuantSection({ d }) {
             </div>
           )}
           {messages.map((m, i) => (
-            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div key={i} className={`flex items-end gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" />}
               <div className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role === 'user' ? 'bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>{m.text}</div>
             </div>
           ))}
           {loading && (
-            <div className="flex justify-start">
+            <div className="flex items-end justify-start gap-2">
+              <img src="/albert.png" alt="Albert" className="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" />
               <div className="flex items-center gap-1.5 rounded-2xl bg-slate-950/60 px-4 py-3 ring-1 ring-slate-800">
                 <span className="h-2 w-2 animate-bounce rounded-full bg-sky-400" style={{ animationDelay: '0ms' }} />
                 <span className="h-2 w-2 animate-bounce rounded-full bg-sky-400" style={{ animationDelay: '150ms' }} />
@@ -1471,12 +1651,12 @@ function AskQuantSection({ d }) {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
               rows={1}
-              placeholder="Ask about the score, forecasts, news impact, risks…"
+              placeholder="Ask Albert about the score, forecasts, news impact, risks…"
               className="max-h-32 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-sky-500/50 focus:outline-none"
             />
             <Button onClick={() => send()} disabled={loading || !input.trim()} className="gap-1.5 bg-sky-500 hover:bg-sky-400"><Send className="h-4 w-4" />Send</Button>
           </div>
-          <p className="mt-2 text-center text-[10px] text-slate-600">Educational research assistant · not financial advice · grounded in live data but can still be imperfect.</p>
+          <p className="mt-2 text-center text-[10px] text-slate-600">Albert is an educational research assistant · not financial advice · grounded in live data but can still be imperfect.</p>
         </div>
       </Card>
     </div>
@@ -1489,6 +1669,7 @@ function AskQuantSection({ d }) {
 let __dashCache = null;
 let __tickerCache = null;
 let __newsCache = null;
+let __alertsCache = null;
 export default function DashboardPage() {
   const [data, setData] = useState(__dashCache);
   const [status, setStatus] = useState(__dashCache ? 'ready' : 'loading');
@@ -1499,6 +1680,28 @@ export default function DashboardPage() {
   const [news, setNews] = useState(__newsCache);
   const [newsStatus, setNewsStatus] = useState(__newsCache ? 'ready' : 'loading');
   const [newsRefreshing, setNewsRefreshing] = useState(false);
+  const [alertsData, setAlertsData] = useState(__alertsCache);
+
+  const loadAlerts = useCallback(async () => {
+    try {
+      const r = await fetch('/api/v1/alerts', { cache: 'no-store' });
+      const j = await r.json();
+      if (j.status === 'ready') { __alertsCache = j; setAlertsData(j); }
+    } catch (e) { /* noop */ }
+  }, []);
+
+  const ackAlerts = useCallback(async (ids) => {
+    try {
+      await fetch('/api/v1/alerts/ack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ids ? { ids } : {}) });
+      loadAlerts();
+    } catch (e) { /* noop */ }
+  }, [loadAlerts]);
+
+  useEffect(() => {
+    loadAlerts();
+    const id = setInterval(loadAlerts, 30000);
+    return () => clearInterval(id);
+  }, [loadAlerts]);
 
   const loadNews = useCallback(async () => {
     try {
@@ -1591,7 +1794,8 @@ export default function DashboardPage() {
     if (active === 'scorecard') return <ScorecardSection d={d} />;
     if (active === 'trust') return <DataTrustSection d={d} />;
     if (active === 'events') return <EventsSection d={d} />;
-    if (active === 'alerts') return <AlertsSection d={d} />;
+    if (active === 'timemachine') return <TimeMachineSection />;
+    if (active === 'alerts') return <AlertsSection d={d} alertsData={alertsData} onAck={ackAlerts} />;
     if (active === 'ask') return <AskQuantSection d={d} />;
     return <ComingSoonSection section={activeSection} />;
   };
@@ -1641,6 +1845,13 @@ export default function DashboardPage() {
               {ticker?.price_aud && <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/20">≈ {fmtAud(ticker.price_aud)}</span>}
               <span className={`text-sm font-semibold ${(ticker?.change24h ?? d.day_change_pct) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ticker?.change24h ?? d.day_change_pct}%</span>
             </div>
+            <button onClick={() => setActive('alerts')} title="Smart Alerts"
+              className="relative ml-auto rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200">
+              <Bell className="h-5 w-5" />
+              {alertsData?.unseen > 0 && (
+                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">{alertsData.unseen > 9 ? '9+' : alertsData.unseen}</span>
+              )}
+            </button>
             <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="gap-2 bg-gradient-to-r from-sky-500 to-violet-600 text-white shadow-lg shadow-violet-500/20 hover:from-sky-400 hover:to-violet-500">
               <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />{refreshing ? 'Retraining' : 'Retrain'}
             </Button>
