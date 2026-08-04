@@ -8,6 +8,7 @@ import {
 import {
   TrendingUp, TrendingDown, RefreshCw, Activity, Gauge,
   Waves, BarChart3, ArrowUpRight, ArrowDownRight, Cpu, Database,
+  Trophy, Radio, History, Check, X,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -44,6 +45,7 @@ export default function DashboardPage() {
   const [status, setStatus] = useState('loading');
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [ticker, setTicker] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -74,6 +76,22 @@ export default function DashboardPage() {
       });
     }, 4000);
     return () => clearInterval(id);
+  }, [load]);
+
+  // Live ticker polling (every 10s) + dashboard auto-refresh (every 60s)
+  useEffect(() => {
+    let alive = true;
+    const loadTicker = async () => {
+      try {
+        const r = await fetch('/api/v1/ticker', { cache: 'no-store' });
+        const j = await r.json();
+        if (alive && j && j.price) setTicker(j);
+      } catch (e) { /* noop */ }
+    };
+    loadTicker();
+    const t = setInterval(loadTicker, 10000);
+    const dref = setInterval(() => load(), 60000);
+    return () => { alive = false; clearInterval(t); clearInterval(dref); };
   }, [load]);
 
   const handleRefresh = async () => {
@@ -171,12 +189,26 @@ export default function DashboardPage() {
           </Card>
 
           <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-            <p className="text-xs font-medium uppercase tracking-wider text-slate-400">BTC Last Close</p>
-            <p className="mt-2 text-2xl font-bold text-white">{fmtUsd(d.last_close)}</p>
-            <p className={`mt-1 flex items-center gap-1 text-sm font-semibold ${d.day_change_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {d.day_change_pct >= 0 ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
-              {d.day_change_pct}% (24h)
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">BTC Live Price</p>
+              <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-400">
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+                </span>
+                LIVE
+              </span>
+            </div>
+            <p className="mt-2 text-2xl font-bold text-white">{fmtUsd(ticker?.price ?? d.last_close)}</p>
+            {(() => {
+              const ch = ticker?.change24h ?? d.day_change_pct;
+              return (
+                <p className={`mt-1 flex items-center gap-1 text-sm font-semibold ${ch >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {ch >= 0 ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
+                  {ch}% (24h){ticker?.source ? ` \u00b7 ${ticker.source}` : ''}
+                </p>
+              );
+            })()}
           </Card>
 
           <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
@@ -217,6 +249,89 @@ export default function DashboardPage() {
             </ResponsiveContainer>
           </div>
         </Card>
+
+        {/* Scoreboard + Trade Log */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-slate-900 p-6 ring-1 ring-slate-800 lg:col-span-1">
+            <div className="mb-2 flex items-center gap-2">
+              <Trophy className="h-5 w-5 text-amber-400" />
+              <h2 className="text-lg font-semibold text-slate-100">AI Scoreboard</h2>
+            </div>
+            <p className="text-xs text-slate-400">Real out-of-sample record · {d.scoreboard.total} predictions graded</p>
+            <div className="mt-3 flex items-end gap-2">
+              <span className="text-5xl font-black text-sky-400">{d.scoreboard.winRate}%</span>
+              <span className="mb-1 text-sm text-slate-400">win rate</span>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-lg bg-emerald-500/10 p-2">
+                <p className="text-[11px] text-slate-400">Wins</p>
+                <p className="text-lg font-bold text-emerald-400">{d.scoreboard.wins}</p>
+              </div>
+              <div className="rounded-lg bg-red-500/10 p-2">
+                <p className="text-[11px] text-slate-400">Losses</p>
+                <p className="text-lg font-bold text-red-400">{d.scoreboard.losses}</p>
+              </div>
+              <div className="rounded-lg bg-slate-800/60 p-2">
+                <p className="text-[11px] text-slate-400">Streak</p>
+                <p className={`text-lg font-bold ${d.scoreboard.currentStreak >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {d.scoreboard.currentStreak >= 0 ? `${d.scoreboard.currentStreak}W` : `${Math.abs(d.scoreboard.currentStreak)}L`}
+                </p>
+              </div>
+            </div>
+            <div className="mt-4 flex items-start gap-2 rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+              <Radio className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+              <div className="text-xs text-slate-400">
+                <span className="font-semibold text-slate-200">Live forward record:</span> {d.live_record.tracked} tracked · {d.live_record.resolved} resolved
+                {d.live_record.winRate != null ? ` \u00b7 ${d.live_record.winRate}% hit` : ' \u00b7 grading begins on the next daily candle'}
+              </div>
+            </div>
+            <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
+              Next prediction target: <span className="font-mono text-slate-400">{d.predict_for_date}</span>
+            </p>
+          </Card>
+
+          <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800 lg:col-span-2">
+            <div className="mb-3 flex items-center gap-2">
+              <History className="h-5 w-5 text-slate-400" />
+              <h2 className="text-lg font-semibold text-slate-100">Trade Log</h2>
+              <span className="text-sm text-slate-500">last {d.trades.length} graded predictions</span>
+            </div>
+            <div className="max-h-[320px] overflow-y-auto pr-1">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-slate-900 text-left text-xs uppercase tracking-wider text-slate-500">
+                  <tr>
+                    <th className="py-2">Date</th>
+                    <th className="py-2">Signal</th>
+                    <th className="py-2 text-right">Conf.</th>
+                    <th className="hidden py-2 text-right sm:table-cell">Close → Next</th>
+                    <th className="py-2 text-right">Result</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {d.trades.map((t, i) => (
+                    <tr key={i} className="border-t border-slate-800/60">
+                      <td className="py-2 font-mono text-xs text-slate-400">{t.date}</td>
+                      <td className="py-2">
+                        <span className={`inline-flex items-center gap-1 font-semibold ${t.signal === 'UP' ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {t.signal === 'UP' ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}{t.signal}
+                        </span>
+                      </td>
+                      <td className="py-2 text-right font-mono text-slate-300">{t.confidence}%</td>
+                      <td className="hidden py-2 text-right font-mono text-xs text-slate-400 sm:table-cell">
+                        {fmtUsd(t.close)} → {fmtUsd(t.nextClose)}
+                      </td>
+                      <td className="py-2 text-right">
+                        {t.correct
+                          ? <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-bold text-emerald-400"><Check className="h-3 w-3" />WIN</span>
+                          : <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2 py-0.5 text-xs font-bold text-red-400"><X className="h-3 w-3" />LOSS</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
 
         {/* Features + importance */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">

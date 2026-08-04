@@ -170,6 +170,48 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED proxy functionality. All endpoints (health, dashboard, refresh) accessible via external base URL with /api prefix. Proxy correctly forwards requests to internal FastAPI :8001 and returns responses with proper status codes and content-type headers."
+  - task: "GET /api/v1/ticker - live intraday BTC price (ccxt, cached ~8s)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "New endpoint. Returns real live price via kraken (e.g. 63908.0) with change24h, high, low, source. Cached 8s. Verified manually via proxy; needs agent validation."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive test. Returns price=$63,770.10, change24h=0.49%, high=$64,183.50, low=$63,270.30, source='kraken', ts='2026-08-04T15:33:32.649292'. All fields present and valid. Tested twice 2s apart - caching working correctly (8s cache). Price in realistic BTC range. Timestamp parseable as ISO format."
+  - task: "Trade Log + Scoreboard from walk-forward (dashboard.trades, dashboard.scoreboard)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "New dashboard fields. scoreboard: total 500, wins 230, losses 270, winRate 46.0, bestWinStreak, currentStreak. trades: 25 recent each with date/signal/confidence/close/nextClose/actual/correct."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation. Scoreboard: total=500, wins=230, losses=270, winRate=46.0%, bestWinStreak=6, currentStreak=-1. All fields present and valid. Sanity check passed: wins+losses=total. Trades: 25 items returned (correct limit). Validated 3 trades in detail - all have required fields (date, signal, confidence, close, nextClose, actual, correct). Date format YYYY-MM-DD validated. Logic checks passed: correct=(signal==actual), actual direction matches (nextClose vs close). All data types and ranges correct."
+  - task: "Forward signal history (live_signals): record pending + grade on next candle (dashboard.live_record, predict_for_date)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "New. live_record: tracked/resolved/correct/winRate. record_live_signal upserts one per as_of date; grade_pending resolves when target candle close known. predict_for_date returned."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED validation. live_record: tracked=1, resolved=0, correct=0, winRate=None (null is valid when no resolved signals yet). All fields present and valid types. predict_for_date='2026-08-05' (valid YYYY-MM-DD format). Tested refresh stability: tracked count remained stable (1->1) after refresh, confirming record_live_signal upsert logic working correctly (one record per as_of date, not incrementing unboundedly)."
 
 frontend:
   - task: "Quant dashboard UI (signal card, dual-axis Recharts chart, feature matrix, importance, CV folds)"
@@ -187,7 +229,7 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 1
+  test_sequence: 2
   run_ui: false
 
 test_plan:
@@ -241,3 +283,38 @@ agent_communication:
         - POST /api/v1/refresh -> expect {status:'started'}; then health/dashboard still return ready.
       Data is REAL (ccxt Kraken). Do NOT expect Binance (geo-blocked). No API keys required.
       Do not test WebSockets (not implemented).
+    -agent: "testing"
+    -message: |
+      ✅ ALL NEW BACKEND FEATURES TESTED AND PASSED (3/3)
+      
+      Completed comprehensive testing of new live updates, scoreboard, and trade log features:
+      
+      1. GET /api/v1/ticker - ✅ PASSED
+         - Live BTC price: $63,770.10 (Kraken)
+         - All fields present: price, change24h (0.49%), high, low, source, ts
+         - Caching working correctly (8s cache, tested 2s apart)
+         - Timestamp parseable as ISO format
+         - Price in realistic BTC range
+      
+      2. GET /api/v1/dashboard NEW FIELDS - ✅ PASSED
+         - scoreboard: total=500, wins=230, losses=270, winRate=46.0%, bestWinStreak=6, currentStreak=-1
+           * All fields present and valid types
+           * Sanity check passed: wins + losses = total
+         - trades: 25 items (correct limit)
+           * All required fields present: date, signal, confidence, close, nextClose, actual, correct
+           * Date format YYYY-MM-DD validated
+           * Logic checks passed: correct = (signal == actual)
+           * Actual direction matches (nextClose vs close)
+         - live_record: tracked=1, resolved=0, correct=0, winRate=null
+           * All fields present and valid
+         - predict_for_date: '2026-08-05' (valid format)
+         - All EXISTING fields still present and valid
+      
+      3. POST /api/v1/refresh + stability - ✅ PASSED
+         - Refresh triggered successfully
+         - Polled health until compute_status='done' (~18s)
+         - Dashboard still ready after refresh
+         - Scoreboard, trades, live_record all still valid
+         - CRITICAL: tracked count stable (1->1), confirming upsert logic working correctly
+      
+      NO CRITICAL ISSUES FOUND. All new backend features working as expected with real data.

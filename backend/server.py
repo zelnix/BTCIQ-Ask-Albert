@@ -37,6 +37,54 @@ DB_NAME = os.environ.get('DB_NAME', 'your_database_name')
 client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
 runs_col = db['btc_runs']
+signals_col = db['live_signals']
+
+# in-memory ticker cache (avoid hammering the exchange on every poll)
+_ticker_cache = {'data': None, 'ts': 0.0}
+
+
+def grade_pending(df):
+    """Resolve pending forward signals whose target candle close is now known."""
+    close_by_date = {
+        row['timestamp'].strftime('%Y-%m-%d'): float(row['close'])
+        for _, row in df.iterrows()
+    }
+    for s in signals_col.find({'resolved': False}):
+        tgt = s.get('predict_for_date')
+        base = s.get('close_at_signal')
+        if tgt in close_by_date and base:
+            nc = close_by_date[tgt]
+            actual = 'UP' if nc > base else 'DOWN'
+            signals_col.update_one(
+                {'_id': s['_id']},
+                {'$set': {'resolved': True, 'next_close': round(nc, 2),
+                          'actual': actual, 'correct': bool(actual == s['signal'])}},
+            )
+
+
+def record_live_signal(as_of, predict_for, signal, confidence, close):
+    """Store today's forward signal as pending (one per as_of date)."""
+    signals_col.update_one(
+        {'as_of': as_of},
+        {'$setOnInsert': {
+            '_id': str(uuid.uuid4()), 'as_of': as_of,
+            'predict_for_date': predict_for, 'signal': signal,
+            'confidence': confidence, 'close_at_signal': close,
+            'resolved': False, 'created_at': datetime.datetime.utcnow().isoformat(),
+        }},
+        upsert=True,
+    )
+
+
+def compute_live_record():
+    resolved = list(signals_col.find({'resolved': True}, {'_id': 0}))
+    tracked = signals_col.count_documents({})
+    r = len(resolved)
+    correct = sum(1 for s in resolved if s.get('correct'))
+    return {
+        'tracked': int(tracked), 'resolved': int(r), 'correct': int(correct),
+        'winRate': round(correct / r * 100, 1) if r else None,
+    }
 
 app = FastAPI(title='BTC Predictive AI Engine')
 app.add_middleware(
@@ -171,22 +219,63 @@ def compute():
         acc = accuracy_score(y.iloc[te], m.predict(X.iloc[te]))
         cv_folds.append({'fold': i + 1, 'accuracy': round(float(acc) * 100, 2), 'testSize': int(len(te))})
 
-    # --- Walk-forward backtest -> accuracy over time ---
+    # --- Walk-forward backtest -> accuracy over time + trade log ---
     start = 200 if len(X) > 260 else max(30, int(len(X) * 0.4))
     retrain_every = 10
     model = None
     rows = []
+    trades = []
+    closes_full = df['close'].reset_index(drop=True)  # includes live row at end
     for i in range(start, len(X)):
         if model is None or (i - start) % retrain_every == 0:
             model = RandomForestClassifier(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
             model.fit(X.iloc[:i], y.iloc[:i])
+        classes = list(model.classes_)
+        proba = model.predict_proba(X.iloc[[i]])[0]
         pred = int(model.predict(X.iloc[[i]])[0])
+        conf = float(proba[classes.index(pred)]) * 100 if pred in classes else 50.0
         actual = int(y.iloc[i])
-        rows.append({
-            'date': train_df['timestamp'].iloc[i],
-            'correct': 1 if pred == actual else 0,
-            'close': float(train_df['close'].iloc[i]),
+        cur_close = float(closes_full.iloc[i])
+        nxt_close = float(closes_full.iloc[i + 1])
+        d = train_df['timestamp'].iloc[i]
+        rows.append({'date': d, 'correct': 1 if pred == actual else 0, 'close': cur_close})
+        trades.append({
+            'date': d.strftime('%Y-%m-%d'),
+            'signal': 'UP' if pred == 1 else 'DOWN',
+            'confidence': round(conf, 1),
+            'close': round(cur_close, 2),
+            'nextClose': round(nxt_close, 2),
+            'actual': 'UP' if actual == 1 else 'DOWN',
+            'correct': bool(pred == actual),
         })
+
+    # --- Scoreboard from real out-of-sample trades ---
+    total = len(trades)
+    wins = sum(1 for t in trades if t['correct'])
+    losses = total - wins
+    win_rate = round(wins / total * 100, 1) if total else 0.0
+    best = cur = 0
+    for t in trades:
+        if t['correct']:
+            cur += 1
+            best = max(best, cur)
+        else:
+            cur = 0
+    sign = None
+    streak_len = 0
+    for t in reversed(trades):
+        if sign is None:
+            sign = t['correct']
+            streak_len = 1
+        elif t['correct'] == sign:
+            streak_len += 1
+        else:
+            break
+    scoreboard = {
+        'total': total, 'wins': wins, 'losses': losses, 'winRate': win_rate,
+        'bestWinStreak': best, 'currentStreak': (streak_len if sign else -streak_len),
+    }
+    recent_trades = list(reversed(trades))[:25]
 
     pser = pd.DataFrame(rows)
     pser['rolling_acc'] = pser['correct'].rolling(30, min_periods=10).mean() * 100
@@ -246,6 +335,17 @@ def compute():
     last_close = float(live_row['close'].iloc[0])
     day_change = round((last_close - prev_close) / prev_close * 100, 2)
 
+    # --- Forward live signal history: grade prior pendings, record today's ---
+    as_of = live_row['timestamp'].iloc[0].strftime('%Y-%m-%d')
+    predict_for = (live_row['timestamp'].iloc[0] + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+    try:
+        grade_pending(df)
+        record_live_signal(as_of, predict_for, 'UP' if pred == 1 else 'DOWN',
+                           confidence, round(last_close, 2))
+    except Exception:  # noqa
+        traceback.print_exc()
+    live_record = compute_live_record()
+
     doc = {
         'id': str(uuid.uuid4()),
         'created_at': datetime.datetime.utcnow().isoformat(),
@@ -267,6 +367,10 @@ def compute():
         'n_samples': int(len(X)),
         'history_days': int((train_df['timestamp'].iloc[-1] - train_df['timestamp'].iloc[0]).days),
         'first_date': train_df['timestamp'].iloc[0].strftime('%Y-%m-%d'),
+        'predict_for_date': predict_for,
+        'scoreboard': scoreboard,
+        'trades': recent_trades,
+        'live_record': live_record,
     }
 
     to_store = dict(doc)
@@ -307,6 +411,36 @@ def _startup():
 def health():
     return {'status': 'ok', 'compute_status': _state['status'], 'error': _state['error'],
             'runs': runs_col.count_documents({})}
+
+
+@app.get('/api/v1/ticker')
+def ticker():
+    import time
+    now = time.time()
+    if _ticker_cache['data'] and (now - _ticker_cache['ts']) < 8:
+        return _ticker_cache['data']
+    for name in ['kraken', 'coinbase']:
+        try:
+            ex = getattr(ccxt, name)({'enableRateLimit': True})
+            t = ex.fetch_ticker('BTC/USD')
+            last = float(t['last'])
+            pct = t.get('percentage')
+            if pct is None and t.get('open'):
+                pct = (last - float(t['open'])) / float(t['open']) * 100
+            data = {
+                'price': round(last, 2),
+                'change24h': round(float(pct), 2) if pct is not None else 0.0,
+                'high': round(float(t.get('high') or last), 2),
+                'low': round(float(t.get('low') or last), 2),
+                'source': name,
+                'ts': datetime.datetime.utcnow().isoformat(),
+            }
+            _ticker_cache['data'] = data
+            _ticker_cache['ts'] = now
+            return data
+        except Exception:  # noqa
+            continue
+    return {'price': None, 'error': 'ticker unavailable'}
 
 
 @app.get('/api/v1/dashboard')
