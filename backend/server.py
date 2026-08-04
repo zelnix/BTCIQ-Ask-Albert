@@ -32,7 +32,7 @@ except Exception:  # noqa
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
-from fastapi import FastAPI
+from fastapi import FastAPI, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -49,9 +49,12 @@ runs_col = db['btc_runs']
 signals_col = db['live_signals']
 dominance_col = db['dominance_hist']
 news_col = db['news']
+chat_col = db['ask_quant_chat']
 
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 GEMINI_MODEL = 'gemini-2.5-flash'
+# Ask Quant conversational model (Gemini 3 Flash via Emergent gateway, verified available)
+CHAT_MODEL = os.environ.get('CHAT_MODEL', 'gemini-3-flash-preview')
 try:
     from emergentintegrations.llm.chat import LlmChat, UserMessage
     import feedparser
@@ -806,8 +809,9 @@ def _sig_word(s):
     return 'Neutral'
 
 
-def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts):
-    """Train a horizon-specific RandomForest and project bull/base/bear ranges."""
+def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light=False):
+    """Train a horizon-specific RandomForest and project bull/base/bear ranges.
+    light=True skips SHAP contributions (used for long-horizon outlooks to save compute)."""
     n = len(Xfull)
     y_h = (close.shift(-h) > close).astype(int)
     Xv = Xfull.iloc[:n - h]
@@ -832,7 +836,7 @@ def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts):
 
     # SHAP factor contributions for the live prediction (probability space, class = up)
     contributions = []
-    if _HAS_SHAP:
+    if _HAS_SHAP and not light:
         try:
             expl = shap.TreeExplainer(fm)
             sv = expl.shap_values(live_X)
@@ -851,6 +855,14 @@ def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts):
             contributions = []
     higher = round(p_up * 100, 1)
     lower = round(100 - higher, 1)
+    if light:
+        # Long-horizon directional models are close to a coin-flip; shrink the displayed
+        # probability toward 50% by the realised backtest edge so it is not over-confident.
+        edge = max(0.0, (acc - 0.5)) * 2          # 0..1
+        weight = min(1.0, 0.25 + edge)            # never fully trusted; floor 0.25
+        p_disp = 0.5 + (p_up - 0.5) * weight
+        higher = round(p_disp * 100, 1)
+        lower = round(100 - higher, 1)
     # scenario ranges from drift + volatility scaled by sqrt(horizon)
     drift = mu * h
     vol = sigma * math.sqrt(h)
@@ -865,7 +877,7 @@ def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts):
     conf_label = 'High' if conf_val > 0.45 else ('Moderate' if conf_val > 0.2 else 'Low')
     bullish_lean = higher >= lower
     invalidation = bear if bullish_lean else bull
-    label = {1: '24H', 7: '7D', 30: '30D'}.get(h, f'{h}D')
+    label = {1: '24H', 7: '7D', 30: '30D', 90: '3M', 180: '6M', 365: '1Y'}.get(h, f'{h}D')
     return {
         'horizon': label, 'days': h,
         'higher': higher, 'lower': lower,
@@ -990,6 +1002,13 @@ def compute_quant_analysis(df, feats, price, as_of_ts):
             forecasts.append(_horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts))
         except Exception:  # noqa
             traceback.print_exc()
+    # --- Long-horizon outlooks (1M/3M/6M/1Y) — lighter (no SHAP) for the Decision Engine ---
+    long_outlook = []
+    for h in [90, 180, 365]:
+        try:
+            long_outlook.append(_horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light=True))
+        except Exception:  # noqa
+            traceback.print_exc()
 
     # --- Explainable factors: top bullish + top risk ---
     bulls, risks = [], []
@@ -1029,9 +1048,242 @@ def compute_quant_analysis(df, feats, price, as_of_ts):
         'quant_breakdown': breakdown,
         'regime': regime_obj,
         'forecasts': forecasts,
+        'long_outlook': long_outlook,
         'factors': {'bullish': bulls, 'risk': risks},
     }
 
+
+# =====================================================================
+# NEWS → FORECAST LINK + UNIFIED DECISION ENGINE + ASK-QUANT CONTEXT
+# =====================================================================
+def compute_news_signal(news_doc):
+    """Turn the latest BTC news cards into an impact-weighted directional signal in [-1, 1]."""
+    if not news_doc:
+        return None
+    cards = news_doc.get('cards', []) or []
+    if not cards:
+        return None
+    num = den = 0.0
+    drivers = []
+    for c in cards:
+        d = (c.get('ai') or {}).get('direction')
+        imp = float(c.get('impact', 0) or 0)
+        val = 1 if d == 'bullish' else (-1 if d == 'bearish' else 0)
+        w = imp / 100.0
+        num += val * w
+        den += w
+        if imp >= 55 and val != 0:
+            drivers.append((imp, val, c.get('title', '')))
+    signal = round((num / den), 3) if den else 0.0
+    drivers.sort(key=lambda z: -z[0])
+    top = drivers[0] if drivers else None
+    bias = 'Bullish' if signal > 0.12 else ('Bearish' if signal < -0.12 else 'Neutral')
+    return {
+        'signal': signal, 'bias': bias,
+        'n_high_impact': sum(1 for c in cards if float(c.get('impact', 0) or 0) >= 70),
+        'n_stories': len(cards),
+        'top_driver': (top[2] if top else None),
+        'top_driver_dir': ('bullish' if top and top[1] > 0 else ('bearish' if top else None)),
+        'model_bias': news_doc.get('briefing', {}).get('bias'),
+    }
+
+
+def apply_news_link(forecasts, news_sig):
+    """Nudge the 24H/7D probabilities with the news signal and attach before/after data."""
+    if not news_sig:
+        return None
+    K = {'24H': 7.0, '7D': 4.5}  # news matters more on shorter horizons
+    applied = []
+    for f in forecasts:
+        k = K.get(f['horizon'])
+        if not k:
+            continue
+        base = float(f['higher'])
+        raw_adj = news_sig['signal'] * k
+        adj = round(max(-8.0, min(8.0, raw_adj)), 1)
+        newh = round(max(2.0, min(98.0, base + adj)), 1)
+        f['news_link'] = {
+            'applied': True, 'higher_base': round(base, 1), 'higher_adj': newh,
+            'lower_base': round(100 - base, 1), 'lower_adj': round(100 - newh, 1),
+            'delta': round(newh - base, 1), 'bias': news_sig['bias'],
+            'signal': news_sig['signal'], 'top_driver': news_sig['top_driver'],
+        }
+        f['higher_adj'] = newh
+        f['lower_adj'] = round(100 - newh, 1)
+        applied.append({'horizon': f['horizon'], 'base': round(base, 1),
+                        'adj': newh, 'delta': round(newh - base, 1)})
+    return {
+        'signal': news_sig['signal'], 'bias': news_sig['bias'],
+        'n_high_impact': news_sig['n_high_impact'], 'n_stories': news_sig['n_stories'],
+        'top_driver': news_sig['top_driver'], 'top_driver_dir': news_sig['top_driver_dir'],
+        'model_bias': news_sig['model_bias'], 'applied': applied,
+    }
+
+
+OUTLOOK_LABELS = {'24H': 'Next 24 Hours', '7D': 'Next 7 Days', '30D': 'Next Month',
+                  '3M': 'Next 3 Months', '6M': 'Next 6 Months', '1Y': 'Next Year'}
+
+
+def compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, dominance):
+    """Reconcile technicals, macro/policy, news and chart into one Bitcoin Market State."""
+    tech = int(quant['quant_score'])
+    pol = int(policy['score']) if policy else 50
+    news_score = int(round(50 + (news_sig['signal'] * 30))) if news_sig else 50
+    news_score = max(0, min(100, news_score))
+    chart_bias = chart['structure_bias'] if chart else 'Neutral'
+    chart_score = 70 if chart_bias == 'Bullish' else (30 if chart_bias == 'Bearish' else 50)
+
+    overall = int(round(tech * 0.45 + pol * 0.20 + news_score * 0.15 + chart_score * 0.20))
+    overall = max(0, min(100, overall))
+    label = _quant_score_label(overall)
+
+    comps = [
+        {'name': 'Technicals', 'score': tech, 'weight': 45},
+        {'name': 'Macro / Policy', 'score': pol, 'weight': 20},
+        {'name': 'Chart Structure', 'score': chart_score, 'weight': 20},
+        {'name': 'News Flow', 'score': news_score, 'weight': 15},
+    ]
+    bull = sum(1 for c in comps if c['score'] >= 55)
+    bear = sum(1 for c in comps if c['score'] <= 45)
+    if bull >= 3:
+        alignment = 'Strong Agreement · Bullish'
+    elif bear >= 3:
+        alignment = 'Strong Agreement · Bearish'
+    elif bull and bear:
+        alignment = 'Conflicting Signals'
+    else:
+        alignment = 'Mixed / Neutral'
+
+    # --- Risk level (distinct from directional score) ---
+    vol_pct = float(quant['regime'].get('vol_percentile', 50) or 50)
+    event_risk = 0
+    now = datetime.datetime.utcnow().date()
+    if policy:
+        for e in policy.get('calendar', []):
+            try:
+                days = (datetime.datetime.strptime(e['date'], '%Y-%m-%d').date() - now).days
+                if 0 <= days <= 3 and e.get('importance') == 'Very High':
+                    event_risk = max(event_risk, 28)
+                elif 0 <= days <= 7:
+                    event_risk = max(event_risk, 16)
+            except Exception:  # noqa
+                pass
+    news_risk = 0
+    if news_sig and news_sig['bias'] == 'Bearish' and news_sig['n_high_impact'] >= 1:
+        news_risk = 12
+    risk_score = int(round(min(100, vol_pct * 0.6 + event_risk + news_risk)))
+    risk_level = ('Extreme' if risk_score >= 80 else 'High' if risk_score >= 60
+                  else 'Elevated' if risk_score >= 45 else 'Moderate' if risk_score >= 30 else 'Low')
+
+    # --- Outlook table across every horizon (24H → 1Y) ---
+    outlook = []
+    for f in all_outlook:
+        h = float(f.get('higher_adj', f['higher']))
+        outlook.append({
+            'horizon': f['horizon'], 'label': OUTLOOK_LABELS.get(f['horizon'], f['horizon']),
+            'higher': round(h, 1), 'lower': round(100 - h, 1),
+            'lean': 'UP' if h >= 50 else 'DOWN',
+            'confidence': f.get('confidence', 'Low'), 'accuracy': f.get('accuracy'),
+            'base': f.get('base'), 'bull': f.get('bull'), 'bear': f.get('bear'),
+            'expiry': f.get('expiry'), 'news_adjusted': 'news_link' in f,
+        })
+
+    def _out(h):
+        return next((o for o in outlook if o['horizon'] == h), None)
+    o24, o7, o1m, o1y = _out('24H'), _out('7D'), _out('30D'), _out('1Y')
+
+    def lean_txt(o):
+        if not o:
+            return 'unclear'
+        return f"{'higher' if o['lean'] == 'UP' else 'lower'} ({max(o['higher'], o['lower'])}%)"
+
+    regime = quant['regime']['regime']
+    dom_txt = f"BTC dominance is {dominance['dominance']}% ({dominance['direction'].lower()}). " if dominance else ''
+    cyc_txt = f"The halving cycle is ~{cycle['cycle_progress_pct']}% complete ({cycle['phase']}). " if cycle else ''
+    news_txt = ''
+    if news_sig:
+        news_txt = f"News flow is {news_sig['bias'].lower()}"
+        if news_sig.get('top_driver'):
+            news_txt += f" (biggest driver: \"{news_sig['top_driver']}\")"
+        news_txt += '. '
+    summary = (
+        f"Bitcoin's unified market state is {label} with an overall conviction score of {overall}/100. "
+        f"The market is in a '{regime}' regime. {quant['regime']['description']} "
+        f"Technicals ({tech}/100), macro & policy ({pol}/100), chart structure ({chart_bias.lower()}) and news flow "
+        f"({news_score}/100) are showing {alignment.lower()}. {news_txt}{dom_txt}{cyc_txt}"
+        f"Near term, the engine leans {lean_txt(o24)} over 24h and {lean_txt(o7)} over 7 days; "
+        f"the longer-term view leans {lean_txt(o1m)} over the next month and {lean_txt(o1y)} over the next year. "
+        f"Overall risk is currently {risk_level}. Treat every figure as probabilities, not certainties — not financial advice."
+    )
+
+    return {
+        'overall_score': overall, 'label': label, 'regime': regime,
+        'regime_description': quant['regime']['description'],
+        'alignment': alignment, 'components': comps,
+        'risk_level': risk_level, 'risk_score': risk_score,
+        'risk_drivers': {'volatility_percentile': round(vol_pct), 'event_risk': event_risk,
+                         'news_risk': news_risk},
+        'outlook': outlook, 'summary': summary,
+        'news_signal': (news_sig['signal'] if news_sig else None),
+        'news_bias': (news_sig['bias'] if news_sig else None),
+    }
+
+
+CHAT_SYSTEM = (
+    "You are 'Quant', the AI analyst built into the BTCIQ Bitcoin dashboard (powered by BitCentAI, "
+    "a Bitcoin-Centred Intelligence Engine). Answer the user's question using ONLY the LIVE DASHBOARD "
+    "DATA provided below. If the data does not contain the answer, say you don't have that data rather "
+    "than guessing — never invent numbers, prices or events. Speak in clear, plain English and be "
+    "concise (usually under 130 words). Always frame predictions as probabilities/odds, not certainties, "
+    "and never give definitive buy/sell financial advice. You may explain what the numbers mean and why "
+    "the engine leans a certain way.\n\n"
+    "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
+)
+
+
+def build_chat_context():
+    run = runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0})
+    if not run:
+        return 'No dashboard data is available yet.'
+    news = news_col.find_one(sort=[('created_at', -1)], projection={'_id': 0})
+    dec = run.get('decision') or {}
+    L = []
+    L.append(f"As of {run.get('as_of')}: BTC/USD last close ${run.get('last_close')} ({run.get('day_change_pct')}% on the day), data source {run.get('data_source')}.")
+    L.append(f"Bitcoin Quant Score {run.get('quant_score')}/100 ({run.get('quant_label')}). Next-day model signal: {run.get('signal')} at {run.get('confidence')}% confidence.")
+    L.append(f"Market regime: {run['regime']['regime']} — {run['regime']['description']} (30d trend {run['regime'].get('trend30d_pct')}%, volatility {run['regime'].get('vol_percentile')}th percentile).")
+    if dec:
+        L.append(f"Unified Decision Engine: overall {dec.get('overall_score')}/100 ({dec.get('label')}), risk level {dec.get('risk_level')}, signal alignment: {dec.get('alignment')}.")
+        L.append("Decision summary: " + dec.get('summary', ''))
+    for f in run.get('forecasts', []):
+        h = f.get('higher_adj', f['higher'])
+        nl = f.get('news_link')
+        extra = f" (news-adjusted from {nl['higher_base']}%)" if nl else ''
+        L.append(f"{f['horizon']} forecast: {h}% higher / {round(100 - h, 1)}% lower{extra}, confidence {f['confidence']}, backtest accuracy {f['accuracy']}%. Scenarios — Bull ${f['bull']} / Base ${f['base']} / Bear ${f['bear']}. Invalidated {f['invalidation_dir']} ${f['invalidation']}.")
+    for o in run.get('long_outlook', []):
+        L.append(f"{o['horizon']} outlook: {o['higher']}% higher, base ${o['base']} (bull ${o['bull']} / bear ${o['bear']}).")
+    L.append("Top bullish factors: " + " | ".join(run['factors']['bullish']))
+    L.append("Top risk factors: " + " | ".join(run['factors']['risk']))
+    if run.get('policy'):
+        p = run['policy']
+        L.append(f"Policy & Liquidity Score {p['score']}/100 ({p['label']}); Global Liquidity Impulse {p['liquidity_impulse']}/100 ({p['liquidity_state']}). DXY {p['dxy']}, 10Y yield {p['y10']}%, VIX {p['vix']}.")
+    if run.get('dominance'):
+        dm = run['dominance']
+        L.append(f"BTC dominance {dm['dominance']}% ({dm['direction']}), total crypto market cap ${dm['total_mcap_t']}T. {dm['interpretation']}")
+    if run.get('cycle'):
+        cy = run['cycle']
+        L.append(f"Halving cycle: {cy['cycle_progress_pct']}% through, phase '{cy['phase']}', {cy['days_since_halving']} days since the {cy['last_halving_date']} halving, block reward {cy['reward']} BTC.")
+    if run.get('chart'):
+        ch = run['chart']
+        L.append(f"Chart structure: {ch['structure']} ({ch['structure_bias']}). {ch['predictive']['primary_setup']}")
+    if run.get('scoreboard'):
+        sb = run['scoreboard']
+        L.append(f"Backtest scoreboard: {sb['winRate']}% win rate over {sb['total']} graded predictions ({sb['wins']} wins / {sb['losses']} losses).")
+    if news:
+        b = news.get('briefing', {})
+        L.append(f"News briefing: bias {b.get('bias')}, {b.get('total')} stories, {b.get('major_stories')} high-impact. Top tailwind: {b.get('top_tailwind')}. Top risk: {b.get('top_risk')}.")
+        for c in sorted(news.get('cards', []), key=lambda z: -z.get('impact', 0))[:3]:
+            L.append(f"News [impact {c.get('impact')}]: {c.get('title')} — {(c.get('ai') or {}).get('direction')}.")
+    return "\n".join(L)
 
 
 def compute():
@@ -1218,6 +1470,20 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
 
+    # --- News → Forecast Link + Unified Bitcoin Decision Engine ---
+    news_sig = news_forecast_link = decision = None
+    try:
+        news_doc = news_col.find_one(sort=[('created_at', -1)])
+        news_sig = compute_news_signal(news_doc)
+        news_forecast_link = apply_news_link(quant['forecasts'], news_sig)  # mutates 24H/7D
+    except Exception:  # noqa
+        traceback.print_exc()
+    all_outlook = list(quant['forecasts']) + list(quant.get('long_outlook', []))
+    try:
+        decision = compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, dominance)
+    except Exception:  # noqa
+        traceback.print_exc()
+
     doc = {
         'id': str(uuid.uuid4()),
         'created_at': datetime.datetime.utcnow().isoformat(),
@@ -1248,7 +1514,10 @@ def compute():
         'quant_breakdown': quant['quant_breakdown'],
         'regime': quant['regime'],
         'forecasts': quant['forecasts'],
+        'long_outlook': quant.get('long_outlook', []),
         'factors': quant['factors'],
+        'decision': decision,
+        'news_forecast_link': news_forecast_link,
         'cycle': cycle,
         'dominance': dominance,
         'chart': chart,
@@ -1360,3 +1629,41 @@ def news():
 def news_refresh():
     threading.Thread(target=run_news_bg, daemon=True).start()
     return {'status': 'started'}
+
+
+@app.get('/api/v1/chat/history')
+def chat_history(session_id: str):
+    msgs = list(chat_col.find({'session_id': session_id}, {'_id': 0}).sort('created_at', 1))
+    return {'session_id': session_id, 'messages': msgs}
+
+
+@app.post('/api/v1/chat')
+def chat_endpoint(payload: dict = Body(...)):
+    session_id = (str(payload.get('session_id') or uuid.uuid4()))[:80]
+    message = (payload.get('message') or '').strip()[:2000]
+    if not message:
+        return {'error': 'empty message', 'text': 'Please type a question.'}
+    if not (EMERGENT_LLM_KEY and _HAS_LLM):
+        return {'error': 'llm_unconfigured',
+                'text': 'The Ask Quant chat model is not configured on this server.'}
+    try:
+        ctx = build_chat_context()
+        hist = list(chat_col.find({'session_id': session_id}, {'_id': 0}).sort('created_at', 1))
+        hist_txt = ''
+        for h in hist[-5:]:
+            hist_txt += f"User: {h.get('user')}\nQuant: {h.get('assistant')}\n"
+        user_text = (f"Recent conversation:\n{hist_txt}\n" if hist_txt else '') + f"Question: {message}"
+        chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'askquant-{session_id}',
+                        system_message=CHAT_SYSTEM.format(ctx=ctx))
+                .with_model('gemini', CHAT_MODEL)
+                .with_params(temperature=0.2, max_tokens=700))
+        reply = asyncio.run(chat.send_message(UserMessage(text=user_text)))
+        text = (getattr(reply, 'text', None) or str(reply)).strip()
+        chat_col.insert_one({'_id': str(uuid.uuid4()), 'session_id': session_id,
+                             'user': message, 'assistant': text, 'model': CHAT_MODEL,
+                             'created_at': datetime.datetime.utcnow().isoformat()})
+        return {'session_id': session_id, 'text': text, 'model': CHAT_MODEL}
+    except Exception as ex:  # noqa
+        traceback.print_exc()
+        return {'error': 'chat_failed',
+                'text': 'Sorry — I could not answer that just now. Please try again in a moment.'}

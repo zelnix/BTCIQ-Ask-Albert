@@ -1,8 +1,8 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'BTC Quant AI — Predictive Dashboard',
-  description: 'Real Bitcoin data, price-agnostic features, RandomForest next-day signal & rolling accuracy.',
+  title: 'BTCIQ — Bitcoin Intelligence, powered by BitCentAI',
+  description: 'BTCIQ: real Bitcoin data, a unified decision engine, probability forecasts, news-linked odds and an AI analyst — powered by BitCentAI, our Bitcoin-Centred Intelligence Engine.',
 };
 
 export default function RootLayout({ children }) {

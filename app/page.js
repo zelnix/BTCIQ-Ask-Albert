@@ -10,6 +10,7 @@ import {
   ArrowUpRight, ArrowDownRight, Cpu, Database, Trophy, Radio, History,
   Check, X, LayoutDashboard, Target, FlaskConical, Bell, MessageCircle,
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
+  Brain, Send, ShieldAlert, Scale,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -55,8 +56,8 @@ const SECTIONS = [
     blurb: 'Soon: build no-code rules (e.g. "buy when the score > 70") and backtest them with fees, slippage and drawdown.' },
   { id: 'alerts', label: 'Alerts', icon: Bell,
     blurb: 'A live feed of what just changed and what is coming: regime shifts, liquidity state, chart triggers, cross-market moves and upcoming high-impact policy events.' },
-  { id: 'ask', label: 'Ask Quant', icon: MessageCircle, soon: true,
-    blurb: 'Soon: chat with the engine — "Why did the score fall?" — with plain-English answers grounded in the real numbers.' },
+  { id: 'ask', label: 'Ask Quant', icon: MessageCircle,
+    blurb: 'Chat with the engine in plain English — "Why did the score fall?", "What is the 7-day outlook?" — and get answers grounded strictly in the live dashboard numbers (powered by Gemini 3 Flash). It will never invent data.' },
 ];
 
 /* --------------------------- small components ------------------------ */
@@ -167,12 +168,102 @@ function reviewCycle(d) {
 }
 
 /* --------------------------- sections -------------------------------- */
+const riskColor = (lvl) => ({
+  Low: 'text-emerald-400', Moderate: 'text-lime-400', Elevated: 'text-amber-400',
+  High: 'text-orange-400', Extreme: 'text-red-400',
+}[lvl] || 'text-slate-300');
+const riskRing = (lvl) => ({
+  Low: 'ring-emerald-500/30', Moderate: 'ring-lime-500/30', Elevated: 'ring-amber-500/30',
+  High: 'ring-orange-500/30', Extreme: 'ring-red-500/30',
+}[lvl] || 'ring-slate-800');
+const alignColor = (a) => (a || '').includes('Bullish') ? 'text-emerald-400'
+  : (a || '').includes('Bearish') ? 'text-red-400'
+  : (a || '').includes('Conflict') ? 'text-amber-400' : 'text-slate-300';
+
+function DecisionEngineCard({ d }) {
+  const dec = d.decision;
+  if (!dec) return null;
+  return (
+    <Card className="border-0 bg-gradient-to-br from-sky-500/10 via-violet-500/5 to-slate-900 p-6 ring-1 ring-sky-500/25">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <Brain className="h-5 w-5 text-sky-400" />
+        <h3 className="text-lg font-bold text-white">Bitcoin Market State</h3>
+        <span className="text-[11px] text-slate-500">Unified Decision Engine · reconciles every signal</span>
+        <Badge variant="outline" className={`ml-auto border-slate-700 ${alignColor(dec.alignment)}`}>{dec.alignment}</Badge>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+          <p className="text-[11px] uppercase tracking-wider text-slate-400">Overall Score</p>
+          <p className="mt-1 text-4xl font-black" style={{ color: scoreColor(dec.overall_score) }}>{dec.overall_score}</p>
+          <p className="text-sm font-semibold" style={{ color: scoreColor(dec.overall_score) }}>{dec.label}</p>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+          <p className="text-[11px] uppercase tracking-wider text-slate-400">Market Regime</p>
+          <p className="mt-1 text-lg font-bold leading-tight text-white">{dec.regime}</p>
+        </div>
+        <div className={`rounded-xl border border-slate-800 bg-slate-950/50 p-4 ring-1 ${riskRing(dec.risk_level)}`}>
+          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400"><ShieldAlert className="h-3 w-3" />Risk Level</p>
+          <p className={`mt-1 text-2xl font-black ${riskColor(dec.risk_level)}`}>{dec.risk_level}</p>
+          <p className="text-[11px] text-slate-500">risk index {dec.risk_score}/100</p>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400"><Scale className="h-3 w-3" />Signal Alignment</p>
+          <p className={`mt-1 text-sm font-bold leading-tight ${alignColor(dec.alignment)}`}>{dec.alignment}</p>
+        </div>
+      </div>
+
+      {/* component contributions */}
+      <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-4">
+        {dec.components.map((c) => (
+          <div key={c.name} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-slate-400">{c.name}</span>
+              <span className="font-mono font-bold" style={{ color: scoreColor(c.score) }}>{c.score}</span>
+            </div>
+            <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+              <div className="h-full rounded-full" style={{ width: `${c.score}%`, backgroundColor: scoreColor(c.score) }} />
+            </div>
+            <p className="mt-1 text-[10px] text-slate-500">weight {c.weight}%</p>
+          </div>
+        ))}
+      </div>
+
+      {/* multi-horizon outlook 24H → 1Y */}
+      <div className="mt-5">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Directional Outlook · 24 hours to 1 year</p>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+          {dec.outlook.map((o) => {
+            const up = o.lean === 'UP';
+            return (
+              <div key={o.horizon} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-center">
+                <p className="text-[11px] font-medium text-slate-400">{o.label}</p>
+                <p className={`mt-1 flex items-center justify-center gap-1 text-lg font-black ${up ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {up ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}{Math.max(o.higher, o.lower)}%
+                </p>
+                <p className={`text-[10px] ${up ? 'text-emerald-400/80' : 'text-red-400/80'}`}>{up ? 'higher' : 'lower'}</p>
+                {o.news_adjusted && <p className="mt-0.5 text-[9px] text-violet-400/80">news-adj.</p>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/50 p-4">
+        <div className="mb-1 flex items-center gap-2 text-slate-300"><Sparkles className="h-4 w-4 text-sky-400" /><span className="text-sm font-semibold">The Bottom Line</span></div>
+        <p className="text-sm leading-relaxed text-slate-300">{dec.summary}</p>
+      </div>
+    </Card>
+  );
+}
+
 function OverviewSection({ d, ticker }) {
   const f = f24(d);
   const ch = ticker?.change24h ?? d.day_change_pct;
   return (
     <div className="space-y-5">
       <SectionHead icon={LayoutDashboard} title="Overview" blurb={SECTIONS[0].blurb} />
+      <DecisionEngineCard d={d} />
       <AiReview text={reviewOverview(d)} />
       <MarketIntelCard d={d} />
 
@@ -214,12 +305,12 @@ function OverviewSection({ d, ticker }) {
           </Card>
           {f && (
             <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">24-Hour Odds</p>
+              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">24-Hour Odds{f.news_link ? ' · news-adjusted' : ''}</p>
               <div className="mt-2 flex items-center gap-3">
                 <div className="flex-1">
-                  <div className="flex justify-between text-xs"><span className="text-emerald-400">Higher {f.higher}%</span><span className="text-red-400">{f.lower}% Lower</span></div>
+                  <div className="flex justify-between text-xs"><span className="text-emerald-400">Higher {f.news_link ? f.news_link.higher_adj : f.higher}%</span><span className="text-red-400">{f.news_link ? f.news_link.lower_adj : f.lower}% Lower</span></div>
                   <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-red-500/40">
-                    <div className="h-full rounded-full bg-emerald-400" style={{ width: `${f.higher}%` }} />
+                    <div className="h-full rounded-full bg-emerald-400" style={{ width: `${f.news_link ? f.news_link.higher_adj : f.higher}%` }} />
                   </div>
                 </div>
               </div>
@@ -251,8 +342,32 @@ function OverviewSection({ d, ticker }) {
   );
 }
 
+function NewsLinkBar({ nl }) {
+  const up = nl.delta > 0;
+  const flat = nl.delta === 0;
+  return (
+    <div className="mt-3 rounded-lg border border-violet-500/25 bg-violet-500/5 p-3">
+      <div className="flex items-center gap-2">
+        <Newspaper className="h-3.5 w-3.5 text-violet-400" />
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-300">News Forecast Link</span>
+        <span className={`ml-auto text-xs font-bold ${up ? 'text-emerald-400' : flat ? 'text-slate-400' : 'text-red-400'}`}>{up ? '+' : ''}{nl.delta} pts</span>
+      </div>
+      <div className="mt-2 flex items-center gap-2 text-xs">
+        <span className="rounded bg-slate-800 px-2 py-0.5 font-mono text-slate-400">base {nl.higher_base}%</span>
+        <span className="text-slate-500">→</span>
+        <span className={`rounded px-2 py-0.5 font-mono font-bold ${up ? 'bg-emerald-500/10 text-emerald-400' : flat ? 'bg-slate-800 text-slate-300' : 'bg-red-500/10 text-red-400'}`}>adjusted {nl.higher_adj}%</span>
+        <span className={`ml-auto rounded border px-1.5 py-0.5 text-[10px] font-semibold ${DIR_COLOR[(nl.bias || 'neutral').toLowerCase()]}`}>{nl.bias} news</span>
+      </div>
+      {nl.top_driver && <p className="mt-2 text-[11px] text-slate-500">Top driver: <span className="text-slate-400">{nl.top_driver}</span></p>}
+    </div>
+  );
+}
+
 function ForecastCard({ f }) {
-  const bullish = f.higher >= f.lower;
+  const nl = f.news_link;
+  const eff = nl ? nl.higher_adj : f.higher;
+  const effLow = nl ? nl.lower_adj : f.lower;
+  const bullish = eff >= 50;
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
       <div className="flex items-center justify-between">
@@ -260,11 +375,13 @@ function ForecastCard({ f }) {
         <Badge variant="outline" className={`border-slate-700 ${bullish ? 'text-emerald-400' : 'text-red-400'}`}>{bullish ? 'Leans Up' : 'Leans Down'}</Badge>
       </div>
       <div className="mt-3">
-        <div className="flex justify-between text-sm font-semibold"><span className="text-emerald-400">Higher {f.higher}%</span><span className="text-red-400">{f.lower}% Lower</span></div>
+        <div className="flex justify-between text-sm font-semibold"><span className="text-emerald-400">Higher {eff}%</span><span className="text-red-400">{effLow}% Lower</span></div>
         <div className="mt-1 h-2.5 w-full overflow-hidden rounded-full bg-red-500/40">
-          <div className="h-full rounded-full bg-emerald-400" style={{ width: `${f.higher}%` }} />
+          <div className="h-full rounded-full bg-emerald-400" style={{ width: `${eff}%` }} />
         </div>
+        {nl && <p className="mt-1 text-[10px] text-slate-500">base model {f.higher}% · adjusted by live news</p>}
       </div>
+      {nl && <NewsLinkBar nl={nl} />}
       <div className="mt-4 grid grid-cols-3 gap-2 text-center">
         <div className="rounded-lg bg-emerald-500/10 p-2"><p className="text-[10px] text-slate-400">Bull</p><p className="text-sm font-bold text-emerald-400">{fmtUsd(f.bull)}</p></div>
         <div className="rounded-lg bg-slate-800/60 p-2"><p className="text-[10px] text-slate-400">Base</p><p className="text-sm font-bold text-slate-200">{fmtUsd(f.base)}</p></div>
@@ -867,6 +984,101 @@ function NewsSection({ news, status, onRefresh, refreshing }) {
   );
 }
 
+/* ----------------------------- Ask Quant ----------------------------- */
+function AskQuantSection({ d }) {
+  const [sessionId] = React.useState(() => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)));
+  const [messages, setMessages] = React.useState([]);
+  const [input, setInput] = React.useState('');
+  const [loading, setLoading] = React.useState(false);
+  const endRef = React.useRef(null);
+
+  React.useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
+
+  const suggestions = [
+    'Summarise the current Bitcoin market state in plain English.',
+    'Why is the quant score where it is right now?',
+    "What's the 7-day outlook and how confident is it?",
+    'How is the latest news affecting the forecast?',
+    'What are the biggest risks right now?',
+  ];
+
+  const send = async (text) => {
+    const msg = (text ?? input).trim();
+    if (!msg || loading) return;
+    setInput('');
+    setMessages((m) => [...m, { role: 'user', text: msg }]);
+    setLoading(true);
+    try {
+      const r = await fetch('/api/v1/chat', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, message: msg }),
+      });
+      const j = await r.json();
+      setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.' }]);
+    } catch (e) {
+      setMessages((m) => [...m, { role: 'assistant', text: 'Network error — please try again.' }]);
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={MessageCircle} title="Ask Quant" blurb={SECTIONS.find((s) => s.id === 'ask').blurb} />
+      <Card className="flex h-[560px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
+        <div className="flex items-center gap-2 border-b border-slate-800 px-5 py-3">
+          <div className="rounded-lg bg-gradient-to-br from-sky-500 to-violet-600 p-1.5"><Brain className="h-4 w-4 text-white" /></div>
+          <div><p className="text-sm font-semibold text-white">Quant · AI Analyst</p><p className="text-[10px] text-slate-500">Grounded in live dashboard data · Gemini 3 Flash</p></div>
+          <span className="ml-auto flex items-center gap-1 text-[10px] font-bold text-emerald-400"><span className="h-2 w-2 rounded-full bg-emerald-400" />LIVE</span>
+        </div>
+        <div className="flex-1 space-y-4 overflow-y-auto p-5">
+          {messages.length === 0 && (
+            <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
+              <div className="rounded-full bg-slate-800 p-4"><MessageCircle className="h-7 w-7 text-sky-400" /></div>
+              <div>
+                <p className="font-semibold text-slate-200">Ask me anything about the current market</p>
+                <p className="mt-1 max-w-sm text-xs text-slate-500">I only use the live numbers on this dashboard — score, regime, forecasts, news, policy and cycle. I won't invent data.</p>
+              </div>
+              <div className="flex max-w-lg flex-wrap justify-center gap-2">
+                {suggestions.map((s, i) => (
+                  <button key={i} onClick={() => send(s)} className="rounded-full border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-xs text-slate-300 hover:border-sky-500/40 hover:text-sky-300">{s}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          {messages.map((m, i) => (
+            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role === 'user' ? 'bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>{m.text}</div>
+            </div>
+          ))}
+          {loading && (
+            <div className="flex justify-start">
+              <div className="flex items-center gap-1.5 rounded-2xl bg-slate-950/60 px-4 py-3 ring-1 ring-slate-800">
+                <span className="h-2 w-2 animate-bounce rounded-full bg-sky-400" style={{ animationDelay: '0ms' }} />
+                <span className="h-2 w-2 animate-bounce rounded-full bg-sky-400" style={{ animationDelay: '150ms' }} />
+                <span className="h-2 w-2 animate-bounce rounded-full bg-sky-400" style={{ animationDelay: '300ms' }} />
+              </div>
+            </div>
+          )}
+          <div ref={endRef} />
+        </div>
+        <div className="border-t border-slate-800 p-3">
+          <div className="flex items-end gap-2">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+              rows={1}
+              placeholder="Ask about the score, forecasts, news impact, risks…"
+              className="max-h-32 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-sky-500/50 focus:outline-none"
+            />
+            <Button onClick={() => send()} disabled={loading || !input.trim()} className="gap-1.5 bg-sky-500 hover:bg-sky-400"><Send className="h-4 w-4" />Send</Button>
+          </div>
+          <p className="mt-2 text-center text-[10px] text-slate-600">Educational research assistant · not financial advice · grounded in live data but can still be imperfect.</p>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 /* ----------------------------- page ---------------------------------- */
 export default function DashboardPage() {
   const [data, setData] = useState(null);
@@ -938,8 +1150,9 @@ export default function DashboardPage() {
   if (status === 'loading' || status === 'computing') {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-slate-950 px-6">
+        <img src="/btciq-logo.png" alt="BTCIQ" className="h-14 w-auto object-contain" />
         <div className="relative"><div className="h-16 w-16 animate-spin rounded-full border-4 border-slate-800 border-t-sky-400" /><Cpu className="absolute inset-0 m-auto h-6 w-6 text-sky-400" /></div>
-        <div className="text-center"><h2 className="text-lg font-semibold text-slate-100">Building Bitcoin intelligence…</h2><p className="mt-1 text-sm text-slate-400">Real market data · score · regime · multi-horizon forecasts · backtests</p></div>
+        <div className="text-center"><h2 className="text-lg font-semibold text-slate-100">Building Bitcoin intelligence…</h2><p className="mt-1 text-sm text-slate-400">BTCIQ · powered by BitCentAI · decision engine · news-linked forecasts · backtests</p></div>
       </main>
     );
   }
@@ -966,6 +1179,7 @@ export default function DashboardPage() {
     if (active === 'analysis') return <AnalysisSection d={d} />;
     if (active === 'performance') return <PerformanceSection d={d} />;
     if (active === 'alerts') return <AlertsSection d={d} />;
+    if (active === 'ask') return <AskQuantSection d={d} />;
     return <ComingSoonSection section={activeSection} />;
   };
 
@@ -974,9 +1188,9 @@ export default function DashboardPage() {
       <div className="flex">
         {/* Sidebar */}
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-800 bg-slate-900/50 p-4 md:flex">
-          <div className="mb-6 flex items-center gap-2 px-2">
-            <div className="rounded-xl bg-gradient-to-br from-sky-500 to-violet-600 p-2"><Activity className="h-5 w-5 text-white" /></div>
-            <div><p className="text-sm font-bold leading-tight text-white">Bitcoin Quant</p><p className="text-[10px] text-slate-500">Explainable Intelligence</p></div>
+          <div className="mb-6 flex flex-col gap-1.5 px-1">
+            <img src="/btciq-logo.png" alt="BTCIQ" className="h-11 w-auto object-contain" />
+            <p className="pl-0.5 text-[10px] text-slate-500">Powered by BitCentAI</p>
           </div>
           <nav className="flex-1 space-y-1">
             {SECTIONS.map((s) => {
@@ -1001,7 +1215,7 @@ export default function DashboardPage() {
         <div className="min-w-0 flex-1">
           {/* Top bar */}
           <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/80 px-4 py-3 backdrop-blur md:px-8">
-            <div className="flex items-center gap-2 md:hidden"><Activity className="h-5 w-5 text-sky-400" /><span className="font-bold">Bitcoin Quant</span></div>
+            <div className="flex items-center gap-2 md:hidden"><img src="/btciq-logo.png" alt="BTCIQ" className="h-6 w-auto object-contain" /></div>
             <div className="hidden items-center gap-2 md:flex">
               <span className="flex items-center gap-1 text-xs font-bold text-emerald-400">
                 <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" /></span>LIVE
@@ -1022,7 +1236,7 @@ export default function DashboardPage() {
           </div>
 
           <main className="mx-auto max-w-6xl px-4 py-6 md:px-8">{renderSection()}</main>
-          <footer className="pb-8 text-center text-xs text-slate-600">Educational research tool · not financial advice · real data via {d.data_source}</footer>
+          <footer className="pb-8 text-center text-xs text-slate-600">BTCIQ · powered by BitCentAI · educational research tool, not financial advice · real data via {d.data_source}</footer>
         </div>
       </div>
     </div>

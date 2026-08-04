@@ -223,6 +223,39 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive intelligence layer validation. All NEW fields validated: (1) quant_score=44 (integer 0-100) ✅ (2) quant_label='Weakly Bearish' (non-empty string) ✅ (3) quant_breakdown: 9 items with exactly 4 active (Trend=35%, Momentum=30%, Volume=20%, Volatility=15%) and 5 inactive (Derivatives, Liquidity, On-chain, Sentiment, Macro with score=null, weight=0) ✅ (4) regime: 'Weak Bearish Trend' with all required fields (regime, description, behavior, trend30d_pct=0.5%, vol_percentile=14) ✅ (5) forecasts: 3 items (24H, 7D, 30D) with all required fields validated - higher+lower≈100%, bull>bear, invalidation_dir logic correct (lean=UP→below, lean=DOWN→above), expiry dates valid YYYY-MM-DD format ✅ (6) factors: bullish (1 item) and risk (2 items) lists non-empty with valid strings ✅ (7) All EXISTING fields still present (signal, confidence, cv_folds, importances, performance, features, scoreboard, trades, live_record) ✅ Also verified GET /api/v1/health (compute_status='done', runs=6) ✅ and GET /api/v1/ticker (live price=$64,110.50 from Kraken) ✅ working correctly."
+  - task: "Unified Decision Engine (dashboard.decision) - overall_score, regime, risk_level, alignment, components, 24H→1Y outlook, summary"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW. compute_decision_engine reconciles technicals (quant_score), macro/policy (policy score), chart structure and news flow into a master Bitcoin Market State. dashboard.decision returns: overall_score (0-100), label, regime, regime_description, alignment (Strong Agreement/Conflicting/Mixed), components (4 items: Technicals w45, Macro/Policy w20, Chart Structure w20, News Flow w15), risk_level (Low→Extreme) + risk_score + risk_drivers, outlook (list across 24H/7D/30D/3M/6M/1Y each with label/higher/lower/lean/confidence/base/bull/bear/expiry/news_adjusted), summary (plain-English), news_signal, news_bias. Verified via curl: overall 48 Neutral, risk Low, 6 outlook horizons. Also dashboard.long_outlook added (3M/6M/1Y horizons, shrinkage toward 50% applied for long horizons)."
+  - task: "News → Forecast Link (dashboard.news_forecast_link + forecasts[].news_link) - impact-weighted news nudges 24H/7D probabilities"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW. compute_news_signal builds an impact-weighted directional signal in [-1,1] from the latest news cards. apply_news_link nudges the 24H (K=7) and 7D (K=4.5) forecast probabilities (capped ±8 pts) and attaches forecasts[].news_link = {applied, higher_base, higher_adj, lower_base, lower_adj, delta, bias, signal, top_driver}; also sets forecasts[].higher_adj/lower_adj. dashboard.news_forecast_link summarises {signal, bias, n_high_impact, n_stories, top_driver, top_driver_dir, model_bias, applied:[{horizon,base,adj,delta}]}. Verified via curl: signal=-0.163 Bearish, 24H 45.7%→44.6% (-1.1), 7D 48.2%→47.5% (-0.7). Only 24H/7D get news_link; 30D unchanged."
+  - task: "Ask Quant chat (POST /api/v1/chat, GET /api/v1/chat/history) - Gemini 3 Flash grounded in live dashboard data"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW. POST /api/v1/chat {session_id, message} builds a grounded system prompt from build_chat_context() (latest run + news docs: score, regime, decision, forecasts, long_outlook, factors, policy, dominance, cycle, chart, scoreboard, top news) and calls Gemini via emergentintegrations LlmChat with model CHAT_MODEL='gemini-3-flash-preview' (verified available on the Emergent gateway). Stores each Q&A in ask_quant_chat collection; replays last 5 turns for multi-turn memory. Returns {session_id, text, model}. GET /api/v1/chat/history?session_id returns stored messages. Verified via curl: grounded answer with correct score, multi-turn memory recalled prior score, and anti-hallucination (declined to predict an exact Christmas price / Ethereum gas not in data). Empty message returns friendly error."
 
 frontend:
   - task: "Quant dashboard UI (signal card, dual-axis Recharts chart, feature matrix, importance, CV folds)"
@@ -240,11 +273,14 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 3
+  test_sequence: 4
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Unified Decision Engine (dashboard.decision) - overall_score, regime, risk_level, alignment, components, 24H→1Y outlook, summary"
+    - "News → Forecast Link (dashboard.news_forecast_link + forecasts[].news_link) - impact-weighted news nudges 24H/7D probabilities"
+    - "Ask Quant chat (POST /api/v1/chat, GET /api/v1/chat/history) - Gemini 3 Flash grounded in live dashboard data"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -252,9 +288,23 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      Please test the backend ML API. IMPORTANT: call all endpoints via the Next.js proxy base
-      (use the external base URL + /api/v1/...), since that is the real path the browser uses.
-      Endpoints:
+      Please test the THREE new backend features via the Next.js proxy (external base URL + /api/v1/...).
+      Data is REAL (ccxt Kraken); no keys needed except EMERGENT_LLM_KEY (already set) for chat.
+
+      1) GET /api/v1/dashboard -> validate NEW top-level 'decision' object:
+         - overall_score (int 0-100), label (str), regime (str), regime_description (str)
+         - alignment (str), components (list of 4: names Technicals/Macro-Policy/Chart Structure/News Flow, each score 0-100 + weight)
+         - risk_level in [Low,Moderate,Elevated,High,Extreme], risk_score (0-100), risk_drivers (dict)
+         - outlook: list (6 items) horizons 24H,7D,30D,3M,6M,1Y; each has label, higher, lower(≈100-higher), lean in [UP,DOWN], confidence, base/bull/bear, expiry, news_adjusted(bool)
+         - summary (non-empty str), news_signal, news_bias
+         Also validate NEW 'long_outlook' (3 items: 3M,6M,1Y with higher/base/bull/bear) and that 'news_forecast_link' exists.
+
+      2) News Forecast Link: dashboard.news_forecast_link = {signal(-1..1), bias, n_high_impact, n_stories, top_driver, top_driver_dir, model_bias, applied:[{horizon,base,adj,delta}]}.
+         In dashboard.forecasts, the 24H and 7D items MUST have a 'news_link' object {applied, higher_base, higher_adj, lower_base, lower_adj, delta, bias, signal, top_driver} and higher_adj/lower_adj fields; 30D must NOT have news_link. Validate higher_adj = clamp(higher_base + delta) and lower_adj ≈ 100-higher_adj.
+
+      3) POST /api/v1/chat with {session_id:"test-1", message:"What is the current quant score and 7-day outlook?"} -> expect 200 JSON {session_id, text (non-empty), model:"gemini-3-flash-preview"}. Then POST again same session with a follow-up ("what score did you just say?") to confirm multi-turn memory. Then POST {session_id:"test-2", message:"predict the exact BTC price on Christmas and Ethereum gas fee"} to confirm it declines/says it lacks that data (anti-hallucination). Empty message should return a friendly error (no crash). GET /api/v1/chat/history?session_id=test-1 should return the stored messages.
+
+      IMPORTANT: Do NOT test WebSockets. Confirm all EXISTING dashboard fields still present (signal, forecasts, scoreboard, trades, quant_score, regime, policy, dominance, chart, cycle, alerts, news).
     -agent: "testing"
     -message: |
       ✅ ALL BACKEND TESTS PASSED (3/3)
