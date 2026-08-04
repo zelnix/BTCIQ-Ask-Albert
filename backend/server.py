@@ -13,13 +13,20 @@ Exposed under /api/v1/* and proxied by the Next.js /api layer.
 import os
 import uuid
 import math
+import json
 import threading
 import datetime
 import traceback
+import urllib.request
 
 import ccxt
 import numpy as np
 import pandas as pd
+try:
+    import shap  # SHAP factor contributions
+    _HAS_SHAP = True
+except Exception:  # noqa
+    _HAS_SHAP = False
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
@@ -38,6 +45,7 @@ client = MongoClient(MONGO_URL)
 db = client[DB_NAME]
 runs_col = db['btc_runs']
 signals_col = db['live_signals']
+dominance_col = db['dominance_hist']
 
 # in-memory ticker cache (avoid hammering the exchange on every poll)
 _ticker_cache = {'data': None, 'ts': 0.0}
@@ -194,6 +202,285 @@ def build_features(df):
 
 
 # =====================================================================
+# INSTITUTIONAL-GRADE ENGINES (no-key: block data, CoinGecko, chart TA)
+# =====================================================================
+def _http_json(url, timeout=12):
+    req = urllib.request.Request(url, headers={'User-Agent': 'BitcoinQuant/1.0'})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode('utf-8'))
+
+
+def _http_text(url, timeout=12):
+    req = urllib.request.Request(url, headers={'User-Agent': 'BitcoinQuant/1.0'})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read().decode('utf-8').strip()
+
+
+HALVINGS = [
+    (0, '2009-01-03', 50.0),
+    (210000, '2012-11-28', 25.0),
+    (420000, '2016-07-09', 12.5),
+    (630000, '2020-05-11', 6.25),
+    (840000, '2024-04-20', 3.125),
+]
+HALVING_REF_PRICE = {1: 12.0, 2: 650.0, 3: 8600.0, 4: 63900.0}  # approx BTC price on halving day
+CYCLE_DAYS = 1460  # ~4 years
+
+
+def fetch_block_height():
+    for url in ['https://mempool.space/api/blocks/tip/height', 'https://blockchain.info/q/getblockcount']:
+        try:
+            return int(_http_text(url))
+        except Exception:  # noqa
+            continue
+    return None
+
+
+def compute_cycle_context(price, regime_name):
+    height = fetch_block_height()
+    if not height:
+        return None
+    interval = 210000
+    epoch = min(height // interval, 4)
+    reward = 50.0 / (2 ** epoch)
+    last_block, last_date, _ = HALVINGS[epoch]
+    next_block = (epoch + 1) * interval
+    blocks_to_next = max(0, next_block - height)
+    est_days_to_next = round(blocks_to_next * 10 / 1440, 1)
+    last_dt = datetime.datetime.strptime(last_date, '%Y-%m-%d')
+    days_since = (datetime.datetime.utcnow() - last_dt).days
+    ref = HALVING_REF_PRICE.get(epoch)
+    cycle_perf = round((price / ref - 1) * 100, 1) if ref else None
+    progress = round(min(1.0, days_since / CYCLE_DAYS) * 100, 1)
+
+    frac = days_since / CYCLE_DAYS
+    if blocks_to_next < 21000:
+        phase = 'Pre-Halving Transition'
+    elif frac < 0.10:
+        phase = 'Post-Halving Repricing'
+    elif frac < 0.35:
+        phase = 'Expansion'
+    elif frac < 0.50:
+        phase = 'Price Discovery'
+    elif frac < 0.62:
+        phase = 'Distribution Risk'
+    elif frac < 0.85:
+        phase = 'Contraction'
+    else:
+        phase = 'Accumulation'
+    # blend with live regime (calendar is only context, not destiny)
+    if 'Bearish' in regime_name and phase in ('Price Discovery', 'Distribution Risk'):
+        phase = 'Contraction'
+    return {
+        'block_height': height, 'epoch': epoch, 'halving_number': epoch,
+        'reward': reward, 'last_halving_date': last_date, 'days_since_halving': days_since,
+        'next_halving_block': next_block, 'blocks_to_next': blocks_to_next,
+        'est_days_to_next': est_days_to_next, 'cycle_perf_pct': cycle_perf,
+        'cycle_progress_pct': progress, 'phase': phase,
+    }
+
+
+def fetch_dominance(price_change_24h):
+    try:
+        g = _http_json('https://api.coingecko.com/api/v3/global')['data']
+    except Exception:  # noqa
+        return None
+    dom = round(float(g['market_cap_percentage']['btc']), 2)
+    total = float(g['total_market_cap']['usd'])
+    today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+    dominance_col.update_one({'date': today},
+                             {'$set': {'dominance': dom, 'total_mcap': total}}, upsert=True)
+    # derive change from stored history if present
+    hist = list(dominance_col.find({}, {'_id': 0}).sort('date', -1).limit(40))
+
+    def change_over(days):
+        if len(hist) <= days:
+            return None
+        return round(dom - hist[days]['dominance'], 2)
+
+    d7 = change_over(7)
+    d30 = change_over(30)
+    dom_dir = 'Neutral'
+    ref = d7 if d7 is not None else None
+    if ref is not None:
+        dom_dir = 'Rising' if ref > 0.15 else ('Falling' if ref < -0.15 else 'Neutral')
+    # 2D interpretation (price vs dominance)
+    p_up = price_change_24h >= 0
+    if dom_dir == 'Neutral':
+        interp = 'Dominance is flat — no strong rotation signal yet (history is still building).'
+    elif p_up and dom_dir == 'Rising':
+        interp = 'Price up + dominance up: capital is concentrating into Bitcoin.'
+    elif p_up and dom_dir == 'Falling':
+        interp = 'Price up + dominance down: broad crypto risk-on expansion.'
+    elif (not p_up) and dom_dir == 'Rising':
+        interp = 'Price down + dominance up: defensive rotation out of altcoins into Bitcoin.'
+    else:
+        interp = 'Price down + dominance down: broad crypto-market weakness.'
+    return {'dominance': dom, 'total_mcap_t': round(total / 1e12, 3),
+            'change_7d': d7, 'change_30d': d30, 'direction': dom_dir,
+            'interpretation': interp, 'history_points': len(hist)}
+
+
+def _swings(series, order=4):
+    vals = series.values
+    highs, lows = [], []
+    for i in range(order, len(vals) - order):
+        w = vals[i - order:i + order + 1]
+        if vals[i] == w.max():
+            highs.append((i, float(vals[i])))
+        if vals[i] == w.min():
+            lows.append((i, float(vals[i])))
+    return highs, lows
+
+
+def _cluster_levels(points, price, tol=0.015):
+    levels = []
+    for _, p in sorted(points, key=lambda z: z[1]):
+        placed = False
+        for lv in levels:
+            if abs(p - lv['price']) / price < tol:
+                lv['price'] = (lv['price'] * lv['strength'] + p) / (lv['strength'] + 1)
+                lv['strength'] += 1
+                placed = True
+                break
+        if not placed:
+            levels.append({'price': p, 'strength': 1})
+    return levels
+
+
+def compute_chart_intelligence(df):
+    d = df.tail(260).reset_index(drop=True)
+    close = d['close']; high = d['high']; low = d['low']; vol = d['volume']
+    price = float(close.iloc[-1])
+    ema20 = _ema(close, 20).iloc[-1]; ema50 = _ema(close, 50).iloc[-1]
+    ema200 = _ema(close, 200).iloc[-1] if len(close) >= 200 else _ema(close, 100).iloc[-1]
+
+    if price > ema20 > ema50 and price > ema200:
+        structure = 'Uptrend'; struct_bias = 'Bullish'
+    elif price < ema20 < ema50 and price < ema200:
+        structure = 'Downtrend'; struct_bias = 'Bearish'
+    else:
+        structure = 'Range / Transition'; struct_bias = 'Neutral'
+
+    highs, lows = _swings(close, order=4)
+    res = [lv for lv in _cluster_levels(highs, price) if lv['price'] > price * 1.001]
+    sup = [lv for lv in _cluster_levels(lows, price) if lv['price'] < price * 0.999]
+    res = sorted(res, key=lambda z: (-z['strength'], z['price']))[:3]
+    sup = sorted(sup, key=lambda z: (-z['strength'], -z['price']))[:3]
+    sr_levels = ([{'price': round(l['price'], 0), 'type': 'resistance', 'strength': int(l['strength'])} for l in res]
+                 + [{'price': round(l['price'], 0), 'type': 'support', 'strength': int(l['strength'])} for l in sup])
+
+    signals = []
+    signals.append({'type': 'Moving-Average Structure', 'bias': struct_bias,
+                    'detail': f'Price {"above" if price>ema50 else "below"} EMA50 and EMA200 — {structure.lower()} structure.'})
+
+    hi20 = float(high.iloc[-21:-1].max()); lo20 = float(low.iloc[-21:-1].min())
+    volz = float((vol.iloc[-1] - vol.tail(20).mean()) / (vol.tail(20).std() or 1))
+    if price > hi20:
+        signals.append({'type': 'Breakout', 'bias': 'Bullish',
+                        'detail': f'Close broke above the 20-day high (${hi20:,.0f}){" with volume confirmation" if volz>0.5 else " but volume is light"}.'})
+    elif price < lo20:
+        signals.append({'type': 'Breakdown', 'bias': 'Bearish',
+                        'detail': f'Close broke below the 20-day low (${lo20:,.0f}){" with volume confirmation" if volz>0.5 else " but volume is light"}.'})
+
+    bbw = ((close.rolling(20).mean() + 2 * close.rolling(20).std()) - (close.rolling(20).mean() - 2 * close.rolling(20).std())) / close.rolling(20).mean()
+    bbw_pct = float((bbw.tail(180) < bbw.iloc[-1]).mean())
+    if bbw_pct < 0.2:
+        signals.append({'type': 'Volatility Compression', 'bias': 'Neutral',
+                        'detail': f'Bollinger Band width is in the {round(bbw_pct*100)}th percentile — a squeeze that often precedes a large move.'})
+
+    rsi_s = _rsi(close, 14)
+    if len(lows) >= 2 and len(highs) >= 2:
+        (i1, p1), (i2, p2) = lows[-2], lows[-1]
+        if p2 < p1 and rsi_s.iloc[i2] > rsi_s.iloc[i1]:
+            signals.append({'type': 'Bullish Momentum Divergence', 'bias': 'Bullish',
+                            'detail': 'Price made a lower low while RSI made a higher low — waning downside momentum.'})
+        (j1, q1), (j2, q2) = highs[-2], highs[-1]
+        if q2 > q1 and rsi_s.iloc[j2] < rsi_s.iloc[j1]:
+            signals.append({'type': 'Bearish Momentum Divergence', 'bias': 'Bearish',
+                            'detail': 'Price made a higher high while RSI made a lower high — waning upside momentum.'})
+
+    # last-candle pattern
+    o1, c1, h1, l1 = float(d['open'].iloc[-1]), price, float(high.iloc[-1]), float(low.iloc[-1])
+    o0, c0 = float(d['open'].iloc[-2]), float(close.iloc[-2])
+    body = abs(c1 - o1); rng = max(h1 - l1, 1e-9); upper = h1 - max(c1, o1); lower = min(c1, o1) - l1
+    pattern = None
+    if c1 > o1 and c0 < o0 and c1 >= o0 and o1 <= c0:
+        pattern = ('Bullish Engulfing', 'Bullish')
+    elif c1 < o1 and c0 > o0 and o1 >= c0 and c1 <= o0:
+        pattern = ('Bearish Engulfing', 'Bearish')
+    elif lower > body * 2 and upper < body:
+        pattern = ('Hammer', 'Bullish')
+    elif upper > body * 2 and lower < body:
+        pattern = ('Shooting Star', 'Bearish')
+    elif body < rng * 0.1:
+        pattern = ('Doji', 'Neutral')
+    if pattern:
+        signals.append({'type': f'Candlestick: {pattern[0]}', 'bias': pattern[1],
+                        'detail': f'The latest daily candle printed a {pattern[0].lower()} pattern.'})
+
+    # Predictive chart model: historical base rates over full df
+    cf = df['close']
+    up_break = cf > cf.rolling(20).max().shift(1)
+    dn_break = cf < cf.rolling(20).min().shift(1)
+    fwd5_up = cf.shift(-5) > cf
+    bo_up = float(fwd5_up[up_break].mean()) if up_break.sum() > 5 else 0.5
+    bo_dn = float((~fwd5_up)[dn_break].mean()) if dn_break.sum() > 5 else 0.5
+    breakout_up = round(bo_up * 100, 1)
+    breakdown = round(bo_dn * 100, 1)
+    consolidation = round(max(0.0, 100 - breakout_up - breakdown), 1)
+    near_res = res[0]['price'] if res else None
+    near_sup = sup[0]['price'] if sup else None
+    if price > hi20:
+        primary = f'Fresh breakout above ${hi20:,.0f}. Historically {breakout_up}% of 20-day-high breakouts saw a higher close within 5 days.'
+    elif near_res and (near_res - price) / price < 0.03:
+        primary = f'Price is testing resistance near ${near_res:,.0f}. A 4h/daily close above it with volume would favour continuation.'
+    elif near_sup and (price - near_sup) / price < 0.03:
+        primary = f'Price is leaning on support near ${near_sup:,.0f}. Holding it keeps the structure intact.'
+    else:
+        primary = f'Price is mid-range between support (${near_sup:,.0f})' if near_sup else 'Price is in open air'
+        primary += f' and resistance (${near_res:,.0f}).' if near_res else '.'
+
+    ohlc = [{'t': r['timestamp'].strftime('%m/%d'),
+             'o': round(float(r['open']), 0), 'h': round(float(r['high']), 0),
+             'l': round(float(r['low']), 0), 'c': round(float(r['close']), 0)}
+            for _, r in df.tail(90).iterrows()]
+
+    return {
+        'structure': structure, 'structure_bias': struct_bias,
+        'signals': signals, 'sr_levels': sr_levels,
+        'predictive': {'breakout_up': breakout_up, 'breakdown': breakdown,
+                       'consolidation': consolidation, 'primary_setup': primary},
+        'ohlc': ohlc,
+        'range20': {'high': round(hi20, 0), 'low': round(lo20, 0)},
+    }
+
+
+def build_market_intel(quant, forecasts, cycle, dominance, chart):
+    f24 = next((f for f in forecasts if f['horizon'] == '24H'), None)
+    f7 = next((f for f in forecasts if f['horizon'] == '7D'), None)
+    dom_txt = f"{dominance['direction']} ({dominance['dominance']}%)" if dominance else 'n/a'
+    return {
+        'quant_score': quant['quant_score'], 'quant_label': quant['quant_label'],
+        'regime': quant['regime']['regime'],
+        'higher_24h': f24['higher'] if f24 else None,
+        'higher_7d': f7['higher'] if f7 else None,
+        'confidence': f7['confidence'] if f7 else (f24['confidence'] if f24 else 'n/a'),
+        'technical_structure': chart['structure'] if chart else 'n/a',
+        'pressure_map': 'Awaiting data source (Glassnode)',
+        'smart_money': 'Awaiting data source (Glassnode)',
+        'exchange_supply': 'Awaiting data source (Glassnode)',
+        'derivatives_risk': 'Awaiting data source (CoinGlass/CME)',
+        'crowd': 'Awaiting data source (LunarCrush)',
+        'hype_risk': 'Awaiting data source (LunarCrush)',
+        'dominance': dom_txt,
+        'cycle_phase': cycle['phase'] if cycle else 'n/a',
+        'top_positive': quant['factors']['bullish'][0],
+        'top_risk': quant['factors']['risk'][0],
+    }
+
+
+# =====================================================================
 # STEP 3-5: TARGET, CV, WALK-FORWARD BACKTEST, LIVE SIGNAL
 # =====================================================================
 def _clamp(v, lo=0.0, hi=100.0):
@@ -239,6 +526,26 @@ def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts):
     cl = list(fm.classes_)
     pr = fm.predict_proba(live_X)[0]
     p_up = float(pr[cl.index(1)]) if 1 in cl else 0.0
+
+    # SHAP factor contributions for the live prediction (probability space, class = up)
+    contributions = []
+    if _HAS_SHAP:
+        try:
+            expl = shap.TreeExplainer(fm)
+            sv = expl.shap_values(live_X)
+            arr = None
+            if isinstance(sv, list):
+                arr = np.array(sv[1][0]) if len(sv) > 1 else np.array(sv[0][0])
+            else:
+                a = np.array(sv)
+                arr = a[0, :, 1] if (a.ndim == 3 and a.shape[2] > 1) else (a[0, :, 0] if a.ndim == 3 else a[0])
+            for f, val in zip(FEATURE_COLS, arr):
+                contributions.append({'feature': f, 'label': FEATURE_META[f]['label'],
+                                      'category': FEATURE_META[f]['category'],
+                                      'contribution': round(float(val) * 100, 2)})
+            contributions.sort(key=lambda z: -abs(z['contribution']))
+        except Exception:  # noqa
+            contributions = []
     higher = round(p_up * 100, 1)
     lower = round(100 - higher, 1)
     # scenario ranges from drift + volatility scaled by sqrt(horizon)
@@ -267,6 +574,7 @@ def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts):
         'invalidation_dir': 'below' if bullish_lean else 'above',
         'lean': 'UP' if bullish_lean else 'DOWN',
         'expiry': (as_of_ts + pd.Timedelta(days=h)).strftime('%Y-%m-%d'),
+        'contributions': contributions,
     }
 
 
@@ -576,6 +884,25 @@ def compute():
     # --- Quant Score, Market Regime, multi-horizon forecasts, explainable factors ---
     quant = compute_quant_analysis(df, feats, last_close, live_row['timestamp'].iloc[0])
 
+    # --- Institutional-grade no-key engines ---
+    cycle = dominance = chart = market_intel = None
+    try:
+        cycle = compute_cycle_context(last_close, quant['regime']['regime'])
+    except Exception:  # noqa
+        traceback.print_exc()
+    try:
+        dominance = fetch_dominance(day_change)
+    except Exception:  # noqa
+        traceback.print_exc()
+    try:
+        chart = compute_chart_intelligence(df)
+    except Exception:  # noqa
+        traceback.print_exc()
+    try:
+        market_intel = build_market_intel(quant, quant['forecasts'], cycle, dominance, chart)
+    except Exception:  # noqa
+        traceback.print_exc()
+
     doc = {
         'id': str(uuid.uuid4()),
         'created_at': datetime.datetime.utcnow().isoformat(),
@@ -607,6 +934,10 @@ def compute():
         'regime': quant['regime'],
         'forecasts': quant['forecasts'],
         'factors': quant['factors'],
+        'cycle': cycle,
+        'dominance': dominance,
+        'chart': chart,
+        'market_intel': market_intel,
     }
 
     to_store = dict(doc)

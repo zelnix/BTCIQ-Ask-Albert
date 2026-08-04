@@ -9,7 +9,7 @@ import {
   TrendingUp, TrendingDown, RefreshCw, Activity, Gauge, Waves, BarChart3,
   ArrowUpRight, ArrowDownRight, Cpu, Database, Trophy, Radio, History,
   Check, X, LayoutDashboard, Target, FlaskConical, Bell, MessageCircle,
-  Sparkles, Info, Lock, Compass,
+  Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -38,7 +38,11 @@ const SECTIONS = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard,
     blurb: 'A 10-second read of the market: one overall score, the current market "mood" (regime), the live price and the near-term odds.' },
   { id: 'forecasts', label: 'Forecasts', icon: Target,
-    blurb: 'Probability-based predictions for the next 24 hours, 7 days and 30 days — never certainties, always odds with a bull/base/bear price range.' },
+    blurb: 'Probability-based predictions for the next 24 hours, 7 days and 30 days — never certainties, always odds with a bull/base/bear price range and the maths behind each one.' },
+  { id: 'chart', label: 'Chart Intelligence', icon: CandlestickChart,
+    blurb: 'Automated technical read of the daily chart: support/resistance zones, trend structure, breakouts, momentum divergences and candlestick patterns — plus historical odds for the current setup.' },
+  { id: 'cycle', label: 'Cycle & Macro', icon: Globe,
+    blurb: 'Where Bitcoin sits in its halving cycle and how capital is rotating across the wider crypto market (BTC dominance).' },
   { id: 'analysis', label: 'Quant Analysis', icon: BarChart3,
     blurb: 'The evidence behind the score: each indicator category, the raw feature values the model reads, and which ones matter most.' },
   { id: 'performance', label: 'Performance', icon: Trophy,
@@ -145,6 +149,18 @@ function reviewPerformance(d) {
   const streak = sb.currentStreak >= 0 ? `${sb.currentStreak} correct in a row` : `${Math.abs(sb.currentStreak)} wrong in a row`;
   return `Across ${sb.total} graded out-of-sample predictions the engine is right ${sb.winRate}% of the time — ${edge >= 0 ? `+${edge}` : edge} points versus a coin-flip — with a best run of ${sb.bestWinStreak} straight wins and currently ${streak}. These are honest, non-deleted results. Forward-live tracking has ${d.live_record.tracked} signal(s) logged and grades automatically as each new daily candle closes${d.live_record.winRate != null ? ` (live hit-rate ${d.live_record.winRate}%)` : ''}.`;
 }
+function reviewChart(d) {
+  const c = d.chart; if (!c) return 'Chart analysis is being generated.';
+  const p = c.predictive;
+  const keySig = c.signals.find((s) => s.bias !== 'Neutral') || c.signals[0];
+  return `The daily chart shows a ${c.structure.toLowerCase()} structure. ${p.primary_setup} Historically, similar setups broke higher ${p.breakout_up}% of the time and lower ${p.breakdown}% within five days. ${keySig ? `Most notable signal right now: ${keySig.type} (${keySig.bias}).` : ''} The detection engine finds the levels; the probabilities come from base rates in ${d.n_samples} days of real data — not opinion.`;
+}
+function reviewCycle(d) {
+  const c = d.cycle, dom = d.dominance;
+  const cyc = c ? `Bitcoin is ~${c.cycle_progress_pct}% through its 4-year halving cycle (${c.days_since_halving} days since the ${c.last_halving_date} halving, block reward ${c.reward} BTC). The calendar-plus-price read places it in a "${c.phase}" phase, with the next halving an estimated ${c.est_days_to_next} days away.` : '';
+  const dtxt = dom ? ` BTC dominance is ${dom.dominance}% (${dom.direction.toLowerCase()}), total crypto market cap ~$${dom.total_mcap_t}T — ${dom.interpretation}` : '';
+  return `${cyc}${dtxt} Cycle timing is context, not a price rule — every cycle has played out under different liquidity and macro conditions.`;
+}
 
 /* --------------------------- sections -------------------------------- */
 function OverviewSection({ d, ticker }) {
@@ -154,6 +170,7 @@ function OverviewSection({ d, ticker }) {
     <div className="space-y-5">
       <SectionHead icon={LayoutDashboard} title="Overview" blurb={SECTIONS[0].blurb} />
       <AiReview text={reviewOverview(d)} />
+      <MarketIntelCard d={d} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="flex flex-col items-center border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
@@ -256,6 +273,23 @@ function ForecastCard({ f }) {
         <div className="flex justify-between"><span className="text-slate-400">Invalidated {f.invalidation_dir}</span><span className="font-mono text-amber-400">{fmtUsd(f.invalidation)}</span></div>
         <div className="flex justify-between"><span className="text-slate-400">Expires</span><span className="font-mono text-slate-400">{f.expiry}</span></div>
       </div>
+      {f.contributions && f.contributions.length > 0 && (
+        <div className="mt-4 border-t border-slate-800 pt-3">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Factor contributions (SHAP)</p>
+          <div className="space-y-1">
+            {f.contributions.slice(0, 4).map((ctr) => (
+              <div key={ctr.feature} className="flex items-center gap-2 text-xs">
+                <span className="w-28 shrink-0 truncate text-slate-400">{ctr.label}</span>
+                <div className="flex h-3 flex-1 items-center">
+                  <div className="flex w-1/2 justify-end">{ctr.contribution < 0 && <div className="h-2 rounded-l bg-red-400" style={{ width: `${Math.min(100, Math.abs(ctr.contribution) * 12)}%` }} />}</div>
+                  <div className="flex w-1/2">{ctr.contribution >= 0 && <div className="h-2 rounded-r bg-emerald-400" style={{ width: `${Math.min(100, ctr.contribution * 12)}%` }} />}</div>
+                </div>
+                <span className={`w-12 shrink-0 text-right font-mono ${ctr.contribution >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ctr.contribution >= 0 ? '+' : ''}{ctr.contribution}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </Card>
   );
 }
@@ -455,6 +489,157 @@ function ComingSoonSection({ section }) {
   );
 }
 
+function MarketIntelCard({ d }) {
+  const mi = d.market_intel; if (!mi) return null;
+  const rows = [
+    ['Overall Quant Score', `${mi.quant_score} — ${mi.quant_label}`],
+    ['Market Regime', mi.regime],
+    ['24h Higher Probability', mi.higher_24h != null ? `${mi.higher_24h}%` : 'n/a'],
+    ['7d Higher Probability', mi.higher_7d != null ? `${mi.higher_7d}%` : 'n/a'],
+    ['Model Confidence', mi.confidence],
+    ['Technical Structure', mi.technical_structure],
+    ['BTC Dominance', mi.dominance],
+    ['Cycle Phase', mi.cycle_phase],
+    ['Smart Money', mi.smart_money],
+    ['Exchange Supply', mi.exchange_supply],
+    ['Pressure Map', mi.pressure_map],
+    ['Derivatives Risk', mi.derivatives_risk],
+    ['Crowd Intelligence', mi.crowd],
+    ['Social Hype Risk', mi.hype_risk],
+  ];
+  return (
+    <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+      <div className="mb-4 flex items-center gap-2"><Landmark className="h-5 w-5 text-sky-400" /><h3 className="font-semibold text-slate-100">Market Intelligence</h3></div>
+      <div className="grid grid-cols-1 gap-x-8 gap-y-1.5 md:grid-cols-2">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex items-center justify-between border-b border-slate-800/50 py-1.5 text-sm">
+            <span className="text-slate-400">{k}</span>
+            <span className={`text-right font-medium ${String(v).startsWith('Awaiting') ? 'text-slate-600' : 'text-slate-100'}`}>{v}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="text-[11px] font-semibold uppercase text-emerald-400">Primary Tailwind</p><p className="mt-1 text-sm text-slate-300">{mi.top_positive}</p></div>
+        <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><p className="text-[11px] font-semibold uppercase text-red-400">Primary Risk</p><p className="mt-1 text-sm text-slate-300">{mi.top_risk}</p></div>
+      </div>
+    </Card>
+  );
+}
+
+function CandleChart({ ohlc, sr }) {
+  if (!ohlc || !ohlc.length) return null;
+  const W = 780, H = 340, padL = 8, padR = 62, padT = 12, padB = 22;
+  const srp = (sr || []).map((s) => s.price);
+  const vals = ohlc.flatMap((d) => [d.h, d.l]).concat(srp).filter((v) => v != null);
+  const min = Math.min(...vals), max = Math.max(...vals); const span = (max - min) || 1;
+  const n = ohlc.length; const cw = (W - padL - padR) / n;
+  const y = (v) => padT + (1 - (v - min) / span) * (H - padT - padB);
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 360 }}>
+      {(sr || []).map((s, i) => (
+        <g key={i}>
+          <line x1={padL} x2={W - padR} y1={y(s.price)} y2={y(s.price)} stroke={s.type === 'resistance' ? '#f87171' : '#34d399'} strokeDasharray="4 3" strokeWidth="1" opacity="0.45" />
+          <text x={W - padR + 3} y={y(s.price) + 3} fill={s.type === 'resistance' ? '#f87171' : '#34d399'} fontSize="9">${(s.price / 1000).toFixed(1)}k</text>
+        </g>
+      ))}
+      {ohlc.map((d, i) => {
+        const x = padL + i * cw + cw / 2; const up = d.c >= d.o; const col = up ? '#34d399' : '#f87171';
+        const yO = y(d.o), yC = y(d.c); const top = Math.min(yO, yC); const bh = Math.max(Math.abs(yC - yO), 1);
+        return (
+          <g key={i}>
+            <line x1={x} x2={x} y1={y(d.h)} y2={y(d.l)} stroke={col} strokeWidth="1" />
+            <rect x={x - Math.max(cw * 0.3, 1)} y={top} width={Math.max(cw * 0.6, 1.5)} height={bh} fill={col} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function ChartSection({ d }) {
+  const c = d.chart;
+  if (!c) return <ComingSoonSection section={SECTIONS.find((s) => s.id === 'chart')} />;
+  const p = c.predictive;
+  const biasColor = (b) => b === 'Bullish' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : b === 'Bearish' ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-slate-300 border-slate-700 bg-slate-800/40';
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={CandlestickChart} title="Chart Intelligence" blurb={SECTIONS.find((s) => s.id === 'chart').blurb} />
+      <AiReview text={reviewChart(d)} />
+      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="font-semibold text-slate-100">Daily Candles · Auto S/R</h3>
+          <span className="text-xs text-slate-500">last 90 days · <span className="text-emerald-400">support</span> / <span className="text-red-400">resistance</span></span>
+        </div>
+        <CandleChart ohlc={c.ohlc} sr={c.sr_levels} />
+      </Card>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800 lg:col-span-1">
+          <h3 className="mb-3 font-semibold text-slate-100">Predictive Setup</h3>
+          <p className="mb-3 text-sm text-slate-400">{p.primary_setup}</p>
+          <div className="space-y-2">
+            {[['Breakout up', p.breakout_up, 'bg-emerald-400'], ['Breakdown', p.breakdown, 'bg-red-400'], ['Consolidation', p.consolidation, 'bg-slate-500']].map(([lbl, v, cls]) => (
+              <div key={lbl}>
+                <div className="flex justify-between text-xs"><span className="text-slate-400">{lbl}</span><span className="font-mono text-slate-200">{v}%</span></div>
+                <div className="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-800"><div className={`h-full ${cls}`} style={{ width: `${v}%` }} /></div>
+              </div>
+            ))}
+          </div>
+        </Card>
+        <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800 lg:col-span-2">
+          <h3 className="mb-3 font-semibold text-slate-100">Detected Signals</h3>
+          <div className="space-y-2">
+            {c.signals.map((s, i) => (
+              <div key={i} className="flex items-start gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                <span className={`shrink-0 rounded border px-2 py-0.5 text-[11px] font-semibold ${biasColor(s.bias)}`}>{s.bias}</span>
+                <div><p className="text-sm font-medium text-slate-200">{s.type}</p><p className="text-xs text-slate-500">{s.detail}</p></div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function CycleSection({ d }) {
+  const c = d.cycle, dom = d.dominance;
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={Globe} title="Cycle & Macro" blurb={SECTIONS.find((s) => s.id === 'cycle').blurb} />
+      <AiReview text={reviewCycle(d)} />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {c && (
+          <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+            <div className="mb-3 flex items-center gap-2"><Layers className="h-5 w-5 text-amber-400" /><h3 className="font-semibold text-slate-100">Halving Cycle</h3><Badge variant="outline" className="ml-auto border-slate-700 text-amber-400">{c.phase}</Badge></div>
+            <div className="mb-4">
+              <div className="flex justify-between text-xs text-slate-500"><span>Last halving {c.last_halving_date}</span><span>{c.cycle_progress_pct}% through cycle</span></div>
+              <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500" style={{ width: `${c.cycle_progress_pct}%` }} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              {[['Days since halving', c.days_since_halving], ['Block reward', `${c.reward} BTC`], ['Block height', c.block_height.toLocaleString()], ['Next halving in', `~${c.est_days_to_next} days`], ['Blocks to next', c.blocks_to_next.toLocaleString()], ['Since-halving perf', c.cycle_perf_pct != null ? `${c.cycle_perf_pct}%` : 'n/a']].map(([k, v]) => (
+                <div key={k} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">{k}</p><p className="mt-0.5 font-bold text-white">{v}</p></div>
+              ))}
+            </div>
+          </Card>
+        )}
+        {dom && (
+          <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+            <div className="mb-3 flex items-center gap-2"><Compass className="h-5 w-5 text-sky-400" /><h3 className="font-semibold text-slate-100">BTC Dominance</h3><Badge variant="outline" className="ml-auto border-slate-700 text-sky-400">{dom.direction}</Badge></div>
+            <div className="flex items-end gap-2"><span className="text-4xl font-black text-white">{dom.dominance}%</span><span className="mb-1 text-sm text-slate-400">of crypto market cap</span></div>
+            <div className="mt-3 grid grid-cols-3 gap-3 text-center text-sm">
+              <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">Total mcap</p><p className="mt-0.5 font-bold text-white">${dom.total_mcap_t}T</p></div>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">7d change</p><p className="mt-0.5 font-bold text-white">{dom.change_7d != null ? `${dom.change_7d}%` : '—'}</p></div>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">30d change</p><p className="mt-0.5 font-bold text-white">{dom.change_30d != null ? `${dom.change_30d}%` : '—'}</p></div>
+            </div>
+            <p className="mt-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-xs text-slate-400">{dom.interpretation}</p>
+            {dom.change_7d == null && <p className="mt-2 text-[11px] text-slate-600">7d/30d changes build as daily snapshots accumulate ({dom.history_points} logged).</p>}
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ----------------------------- page ---------------------------------- */
 export default function DashboardPage() {
   const [data, setData] = useState(null);
@@ -522,6 +707,8 @@ export default function DashboardPage() {
   const renderSection = () => {
     if (active === 'overview') return <OverviewSection d={d} ticker={ticker} />;
     if (active === 'forecasts') return <ForecastsSection d={d} />;
+    if (active === 'chart') return <ChartSection d={d} />;
+    if (active === 'cycle') return <CycleSection d={d} />;
     if (active === 'analysis') return <AnalysisSection d={d} />;
     if (active === 'performance') return <PerformanceSection d={d} />;
     return <ComingSoonSection section={activeSection} />;
