@@ -196,6 +196,233 @@ def build_features(df):
 # =====================================================================
 # STEP 3-5: TARGET, CV, WALK-FORWARD BACKTEST, LIVE SIGNAL
 # =====================================================================
+def _clamp(v, lo=0.0, hi=100.0):
+    return max(lo, min(hi, float(v)))
+
+
+def _quant_score_label(s):
+    if s >= 80: return 'Strongly Bullish'
+    if s >= 60: return 'Moderately Bullish'
+    if s >= 55: return 'Weakly Bullish'
+    if s > 45:  return 'Neutral'
+    if s > 40:  return 'Weakly Bearish'
+    if s > 20:  return 'Bearish'
+    return 'Strongly Bearish'
+
+
+def _sig_word(s):
+    if s >= 58: return 'Bullish'
+    if s <= 42: return 'Bearish'
+    return 'Neutral'
+
+
+def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts):
+    """Train a horizon-specific RandomForest and project bull/base/bear ranges."""
+    n = len(Xfull)
+    y_h = (close.shift(-h) > close).astype(int)
+    Xv = Xfull.iloc[:n - h]
+    yv = y_h.iloc[:n - h]
+    # backtest accuracy via time-series split
+    accs = []
+    try:
+        tscv = TimeSeriesSplit(n_splits=3)
+        for tr, te in tscv.split(Xv):
+            m = RandomForestClassifier(n_estimators=120, max_depth=5, random_state=42, n_jobs=-1)
+            m.fit(Xv.iloc[tr], yv.iloc[tr])
+            accs.append(accuracy_score(yv.iloc[te], m.predict(Xv.iloc[te])))
+    except Exception:  # noqa
+        accs = [0.5]
+    acc = float(np.mean(accs)) if accs else 0.5
+    # final model -> live probability
+    fm = RandomForestClassifier(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
+    fm.fit(Xv, yv)
+    cl = list(fm.classes_)
+    pr = fm.predict_proba(live_X)[0]
+    p_up = float(pr[cl.index(1)]) if 1 in cl else 0.0
+    higher = round(p_up * 100, 1)
+    lower = round(100 - higher, 1)
+    # scenario ranges from drift + volatility scaled by sqrt(horizon)
+    drift = mu * h
+    vol = sigma * math.sqrt(h)
+    base = price * math.exp(drift)
+    bull = price * math.exp(drift + vol)
+    bear = price * math.exp(drift - vol)
+    exp_low = price * math.exp(drift - 0.5 * vol)
+    exp_high = price * math.exp(drift + 0.5 * vol)
+    # confidence from probability margin + realised backtest edge
+    margin = abs(p_up - 0.5) * 2
+    conf_val = margin * 0.6 + max(0.0, (acc - 0.5)) * 2 * 0.4
+    conf_label = 'High' if conf_val > 0.45 else ('Moderate' if conf_val > 0.2 else 'Low')
+    bullish_lean = higher >= lower
+    invalidation = bear if bullish_lean else bull
+    label = {1: '24H', 7: '7D', 30: '30D'}.get(h, f'{h}D')
+    return {
+        'horizon': label, 'days': h,
+        'higher': higher, 'lower': lower,
+        'expected_low': round(exp_low, 0), 'expected_high': round(exp_high, 0),
+        'bull': round(bull, 0), 'base': round(base, 0), 'bear': round(bear, 0),
+        'confidence': conf_label, 'confidence_pct': round(conf_val * 100, 0),
+        'accuracy': round(acc * 100, 1),
+        'invalidation': round(invalidation, 0),
+        'invalidation_dir': 'below' if bullish_lean else 'above',
+        'lean': 'UP' if bullish_lean else 'DOWN',
+        'expiry': (as_of_ts + pd.Timedelta(days=h)).strftime('%Y-%m-%d'),
+    }
+
+
+def compute_quant_analysis(df, feats, price, as_of_ts):
+    close = df['close']
+    logret = np.log(close / close.shift(1)).dropna()
+    recent = logret.tail(90)
+    mu = float(recent.mean()) if len(recent) else 0.0
+    sigma = float(recent.std()) if len(recent) else 0.02
+
+    # --- Category sub-scores (0-100, higher = more constructive) ---
+    ema_ratio = float(feats['EMA_Ratio'])
+    macd = float(feats['MACD_Hist_Norm'])
+    rsi = float(feats['RSI']) * 100
+    stoch = float(feats['StochRSI']) * 100
+    vz = float(feats['Volume_Z'])
+    vr = float(feats['Volume_Ratio'])
+    atr_now = float(feats['ATR_Pct'])
+    atr_series = df['ATR_Pct'].tail(365)
+    atr_pct = float((atr_series < atr_now).mean()) if len(atr_series) else 0.5
+
+    trend_score = _clamp(50 + 50 * math.tanh((ema_ratio / 0.02) * 0.6 + (macd / 0.004) * 0.4))
+    momentum_score = _clamp(0.6 * rsi + 0.4 * stoch)
+    volume_score = _clamp(50 + 50 * math.tanh(vz / 1.5))
+    volatility_score = _clamp(100 * (1 - atr_pct))
+
+    weights = {'Trend': 0.35, 'Momentum': 0.30, 'Volume': 0.20, 'Volatility': 0.15}
+    scores = {'Trend': trend_score, 'Momentum': momentum_score,
+              'Volume': volume_score, 'Volatility': volatility_score}
+    quant = round(sum(scores[k] * weights[k] for k in weights))
+
+    breakdown = [
+        {'name': 'Trend', 'score': round(trend_score), 'weight': int(weights['Trend'] * 100),
+         'signal': _sig_word(trend_score), 'active': True,
+         'note': f"EMA 9/21 spread {round(ema_ratio*100,2)}%, MACD histogram {round(macd*100,3)}%"},
+        {'name': 'Momentum', 'score': round(momentum_score), 'weight': int(weights['Momentum'] * 100),
+         'signal': _sig_word(momentum_score), 'active': True,
+         'note': f"RSI {round(rsi,1)}, Stochastic RSI {round(stoch,1)}"},
+        {'name': 'Volume', 'score': round(volume_score), 'weight': int(weights['Volume'] * 100),
+         'signal': _sig_word(volume_score), 'active': True,
+         'note': f"Volume {round(vr,2)}x the 20-day norm (z {round(vz,2)})"},
+        {'name': 'Volatility', 'score': round(volatility_score), 'weight': int(weights['Volatility'] * 100),
+         'signal': 'Calm' if volatility_score >= 55 else ('Elevated' if volatility_score <= 40 else 'Normal'),
+         'active': True,
+         'note': f"ATR {round(atr_now*100,2)}% ({round(atr_pct*100)}th percentile of the last year)"},
+        {'name': 'Derivatives', 'score': None, 'weight': 0, 'signal': 'Coming soon', 'active': False,
+         'note': 'Requires a derivatives data source (funding, OI, basis)'},
+        {'name': 'Liquidity', 'score': None, 'weight': 0, 'signal': 'Coming soon', 'active': False,
+         'note': 'Requires order-book / exchange liquidity data'},
+        {'name': 'On-chain', 'score': None, 'weight': 0, 'signal': 'Coming soon', 'active': False,
+         'note': 'Requires an on-chain provider (Glassnode / CryptoQuant)'},
+        {'name': 'Sentiment', 'score': None, 'weight': 0, 'signal': 'Coming soon', 'active': False,
+         'note': 'Requires a social / news sentiment feed'},
+        {'name': 'Macro', 'score': None, 'weight': 0, 'signal': 'Coming soon', 'active': False,
+         'note': 'Requires macro data (DXY, rates, risk assets)'},
+    ]
+
+    # --- Market Regime Engine ---
+    ema9 = _ema(close, 9); ema21 = _ema(close, 21); ema50 = _ema(close, 50)
+    slope50 = float(ema50.iloc[-1] / ema50.iloc[-11] - 1) if len(ema50) > 11 else 0.0
+    slope30 = float(close.iloc[-1] / close.iloc[-31] - 1) if len(close) > 31 else 0.0
+    slope60 = float(close.iloc[-1] / close.iloc[-61] - 1) if len(close) > 61 else 0.0
+    up_align = ema9.iloc[-1] > ema21.iloc[-1] > ema50.iloc[-1]
+    down_align = ema9.iloc[-1] < ema21.iloc[-1] < ema50.iloc[-1]
+    rng20 = float((close.tail(20).max() - close.tail(20).min()) / close.iloc[-1])
+    vol_shock = atr_pct > 0.92
+
+    if vol_shock:
+        regime = 'Volatility Shock'
+        regime_desc = 'Volatility is in the top decile of the past year — expect wide, erratic swings.'
+        behavior = 'The engine widens risk bounds and lowers position conviction until volatility normalises.'
+    elif up_align and slope30 > 0.08 and slope50 > 0.03:
+        regime = 'Strong Bullish Trend'
+        regime_desc = 'Price is above rising short/medium-term averages with strong upward slope.'
+        behavior = 'The model favours trend-continuation and treats dips as higher-probability longs.'
+    elif up_align or (slope30 > 0.02 and ema9.iloc[-1] > ema21.iloc[-1]):
+        regime = 'Weak Bullish Trend'
+        regime_desc = 'A mild uptrend with modest momentum and shallow slope.'
+        behavior = 'The model leans bullish but keeps conviction moderate.'
+    elif down_align and slope30 < -0.08 and slope50 < -0.03:
+        regime = 'Strong Bearish Trend'
+        regime_desc = 'Price is below falling averages with a steep downward slope.'
+        behavior = 'The model avoids longs and treats rallies as lower-probability.'
+    elif down_align or (slope30 < -0.02 and ema9.iloc[-1] < ema21.iloc[-1]):
+        regime = 'Weak Bearish Trend'
+        regime_desc = 'A mild downtrend with soft momentum.'
+        behavior = 'The model leans bearish with moderate conviction.'
+    elif rng20 < 0.08 and slope60 < -0.05:
+        regime = 'Accumulation'
+        regime_desc = 'Price is basing in a tight range after a decline, with stabilising volume.'
+        behavior = 'The model watches for a breakout and treats the base as support.'
+    elif rng20 < 0.08 and slope60 > 0.05:
+        regime = 'Distribution'
+        regime_desc = 'Price is stalling in a tight range after a rally — momentum is fading.'
+        behavior = 'The model turns cautious and flags reversal risk.'
+    else:
+        regime = 'Consolidation'
+        regime_desc = 'Range-bound price with flat moving averages and no dominant trend.'
+        behavior = 'The model reduces directional conviction and waits for a break.'
+
+    regime_obj = {'regime': regime, 'description': regime_desc, 'behavior': behavior,
+                  'trend30d_pct': round(slope30 * 100, 1), 'vol_percentile': round(atr_pct * 100)}
+
+    # --- Multi-horizon probability forecasts ---
+    Xfull = df[FEATURE_COLS]
+    live_X = Xfull.iloc[[-1]]
+    forecasts = []
+    for h in [1, 7, 30]:
+        try:
+            forecasts.append(_horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts))
+        except Exception:  # noqa
+            traceback.print_exc()
+
+    # --- Explainable factors: top bullish + top risk ---
+    bulls, risks = [], []
+    if trend_score >= 58:
+        bulls.append((trend_score - 50, f"Price is trading above its short/medium-term trend (EMA 9 > 21) with a {'positive' if macd>=0 else 'improving'} MACD histogram."))
+    elif trend_score <= 42:
+        risks.append((50 - trend_score, "Trend is bearish — price sits below key moving averages with a negative MACD histogram."))
+    if 55 <= rsi < 72:
+        bulls.append((rsi - 50, f"Momentum is constructive with RSI at {round(rsi,1)} and no overbought stress yet."))
+    elif rsi >= 72:
+        risks.append((rsi - 50, f"RSI is overbought at {round(rsi,1)} — elevated risk of a near-term pullback."))
+    elif rsi < 45:
+        risks.append((50 - rsi, f"Momentum is weak with RSI at {round(rsi,1)}, below the neutral line."))
+    if vz >= 0.5:
+        bulls.append((vz * 20, f"Volume is running {round(vr,2)}x its 20-day average, confirming participation behind the move."))
+    elif vz <= -0.5:
+        risks.append((abs(vz) * 20, f"Volume is below normal ({round(vr,2)}x) — the current move lacks conviction."))
+    if atr_pct >= 0.8:
+        risks.append((atr_pct * 30, f"Volatility is elevated (ATR at the {round(atr_pct*100)}th percentile), widening the risk bounds."))
+    elif atr_pct <= 0.3:
+        bulls.append((30 * (0.3 - atr_pct) + 5, "Volatility is subdued, a historically constructive backdrop for steady moves."))
+    if stoch >= 80:
+        risks.append((stoch - 60, "Stochastic RSI is stretched near the top of its band — short-term exhaustion risk."))
+    elif stoch <= 20:
+        bulls.append((30, "Stochastic RSI is oversold, a common spot for local reversals higher."))
+
+    bulls = [b[1] for b in sorted(bulls, key=lambda z: -z[0])][:3]
+    risks = [r[1] for r in sorted(risks, key=lambda z: -z[0])][:3]
+    if not bulls:
+        bulls = ["No strong bullish factors right now — signals are mixed to neutral."]
+    if not risks:
+        risks = ["No major risk factors flagged — conditions look relatively balanced."]
+
+    return {
+        'quant_score': int(quant),
+        'quant_label': _quant_score_label(quant),
+        'quant_breakdown': breakdown,
+        'regime': regime_obj,
+        'forecasts': forecasts,
+        'factors': {'bullish': bulls, 'risk': risks},
+    }
+
+
+
 def compute():
     df, source = fetch_ohlcv()
     df = build_features(df)
@@ -346,6 +573,9 @@ def compute():
         traceback.print_exc()
     live_record = compute_live_record()
 
+    # --- Quant Score, Market Regime, multi-horizon forecasts, explainable factors ---
+    quant = compute_quant_analysis(df, feats, last_close, live_row['timestamp'].iloc[0])
+
     doc = {
         'id': str(uuid.uuid4()),
         'created_at': datetime.datetime.utcnow().isoformat(),
@@ -371,6 +601,12 @@ def compute():
         'scoreboard': scoreboard,
         'trades': recent_trades,
         'live_record': live_record,
+        'quant_score': quant['quant_score'],
+        'quant_label': quant['quant_label'],
+        'quant_breakdown': quant['quant_breakdown'],
+        'regime': quant['regime'],
+        'forecasts': quant['forecasts'],
+        'factors': quant['factors'],
     }
 
     to_store = dict(doc)

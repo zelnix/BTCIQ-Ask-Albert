@@ -209,9 +209,20 @@ backend:
         -working: "NA"
         -agent: "main"
         -comment: "New. live_record: tracked/resolved/correct/winRate. record_live_signal upserts one per as_of date; grade_pending resolves when target candle close known. predict_for_date returned."
+  - task: "Intelligence layer: quant_score, quant_label, quant_breakdown, regime, forecasts (24H/7D/30D), factors"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "New dashboard fields. quant_score 0-100 + label; quant_breakdown 9 categories (4 active Trend/Momentum/Volume/Volatility + 5 coming-soon with score null); regime object (regime/description/behavior/trend30d_pct/vol_percentile); forecasts list of 3 {horizon,higher,lower,bull,base,bear,expected_low,expected_high,confidence,confidence_pct,accuracy,invalidation,invalidation_dir,lean,expiry}; factors {bullish[], risk[]}. Verified via curl: score 44 Weakly Bearish, regime Weak Bearish Trend, 3 forecasts."
         -working: true
         -agent: "testing"
-        -comment: "✅ PASSED validation. live_record: tracked=1, resolved=0, correct=0, winRate=None (null is valid when no resolved signals yet). All fields present and valid types. predict_for_date='2026-08-05' (valid YYYY-MM-DD format). Tested refresh stability: tracked count remained stable (1->1) after refresh, confirming record_live_signal upsert logic working correctly (one record per as_of date, not incrementing unboundedly)."
+        -comment: "✅ PASSED comprehensive intelligence layer validation. All NEW fields validated: (1) quant_score=44 (integer 0-100) ✅ (2) quant_label='Weakly Bearish' (non-empty string) ✅ (3) quant_breakdown: 9 items with exactly 4 active (Trend=35%, Momentum=30%, Volume=20%, Volatility=15%) and 5 inactive (Derivatives, Liquidity, On-chain, Sentiment, Macro with score=null, weight=0) ✅ (4) regime: 'Weak Bearish Trend' with all required fields (regime, description, behavior, trend30d_pct=0.5%, vol_percentile=14) ✅ (5) forecasts: 3 items (24H, 7D, 30D) with all required fields validated - higher+lower≈100%, bull>bear, invalidation_dir logic correct (lean=UP→below, lean=DOWN→above), expiry dates valid YYYY-MM-DD format ✅ (6) factors: bullish (1 item) and risk (2 items) lists non-empty with valid strings ✅ (7) All EXISTING fields still present (signal, confidence, cv_folds, importances, performance, features, scoreboard, trades, live_record) ✅ Also verified GET /api/v1/health (compute_status='done', runs=6) ✅ and GET /api/v1/ticker (live price=$64,110.50 from Kraken) ✅ working correctly."
 
 frontend:
   - task: "Quant dashboard UI (signal card, dual-axis Recharts chart, feature matrix, importance, CV folds)"
@@ -229,7 +240,7 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 2
+  test_sequence: 3
   run_ui: false
 
 test_plan:
@@ -318,3 +329,75 @@ agent_communication:
          - CRITICAL: tracked count stable (1->1), confirming upsert logic working correctly
       
       NO CRITICAL ISSUES FOUND. All new backend features working as expected with real data.
+    -agent: "testing"
+    -message: |
+      ✅ INTELLIGENCE LAYER TESTS COMPLETED - ALL PASSED
+      
+      Completed comprehensive validation of NEW intelligence layer fields on GET /api/v1/dashboard:
+      
+      1. quant_score - ✅ PASSED
+         - Value: 44 (valid integer 0-100)
+         - Type validation: integer ✅
+         - Range validation: 0-100 ✅
+      
+      2. quant_label - ✅ PASSED
+         - Value: 'Weakly Bearish' (non-empty string)
+         - Type validation: string ✅
+         - Non-empty validation: ✅
+      
+      3. quant_breakdown - ✅ PASSED
+         - Count: 9 items (exactly as expected) ✅
+         - Active items (4): Trend (35%), Momentum (30%), Volume (20%), Volatility (15%)
+           * All have score 0-100 ✅
+           * All have weight in {35,30,20,15} ✅
+           * All have valid signal strings ✅
+           * All have active=true ✅
+         - Inactive items (5): Derivatives, Liquidity, On-chain, Sentiment, Macro
+           * All have score=null ✅
+           * All have weight=0 ✅
+           * All have active=false ✅
+         - All items have required fields: name, score, weight, signal, active, note ✅
+      
+      4. regime - ✅ PASSED
+         - Value: 'Weak Bearish Trend'
+         - All required fields present: regime, description, behavior, trend30d_pct, vol_percentile ✅
+         - regime: non-empty string ✅
+         - description: string ✅
+         - behavior: string ✅
+         - trend30d_pct: 0.5% (number) ✅
+         - vol_percentile: 14 (number 0-100) ✅
+      
+      5. forecasts - ✅ PASSED
+         - Count: 3 items (exactly as expected) ✅
+         - Horizons: 24H, 7D, 30D (all present) ✅
+         - All items have 15 required fields ✅
+         - Validation checks for each forecast:
+           * higher + lower ≈ 100% ✅
+           * bull > bear ✅
+           * bull, base, bear > 0 ✅
+           * expected_low, expected_high > 0 ✅
+           * confidence in ['Low','Moderate','High'] ✅
+           * confidence_pct is number ✅
+           * accuracy 0-100 ✅
+           * invalidation > 0 ✅
+           * invalidation_dir in ['above','below'] ✅
+           * lean in ['UP','DOWN'] ✅
+           * Logic check: lean=UP → invalidation_dir='below', lean=DOWN → invalidation_dir='above' ✅
+           * expiry valid YYYY-MM-DD format ✅
+         - Example: 24H forecast: higher=47.7%, lower=52.3%, bull=$64,888, bear=$62,563, lean=DOWN, invalidation_dir=above ✅
+      
+      6. factors - ✅ PASSED
+         - Structure: object with 'bullish' and 'risk' keys ✅
+         - bullish: list with 1 item (non-empty, up to 3 items) ✅
+         - risk: list with 2 items (non-empty, up to 3 items) ✅
+         - All items are non-empty strings ✅
+      
+      7. Existing fields - ✅ PASSED
+         - All existing fields still present: signal, confidence, cv_folds, importances, performance, features, scoreboard, trades, live_record ✅
+      
+      Also verified:
+      - GET /api/v1/health: compute_status='done', runs=6 ✅
+      - GET /api/v1/ticker: live price=$64,110.50 from Kraken ✅
+      
+      NO CRITICAL ISSUES FOUND. All intelligence layer fields working as expected with real data.
+      Data is REAL (ccxt Kraken). All validations passed including type checks, range checks, logic checks, and format validations.
