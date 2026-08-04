@@ -11,9 +11,11 @@ Real BTC/USD daily data (ccxt: Kraken primary, Coinbase fallback)
 Exposed under /api/v1/* and proxied by the Next.js /api layer.
 """
 import os
+import re
 import uuid
 import math
 import json
+import asyncio
 import threading
 import datetime
 import traceback
@@ -46,6 +48,16 @@ db = client[DB_NAME]
 runs_col = db['btc_runs']
 signals_col = db['live_signals']
 dominance_col = db['dominance_hist']
+news_col = db['news']
+
+EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+GEMINI_MODEL = 'gemini-2.5-flash'
+try:
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    import feedparser
+    _HAS_LLM = True
+except Exception:  # noqa
+    _HAS_LLM = False
 
 # in-memory ticker cache (avoid hammering the exchange on every poll)
 _ticker_cache = {'data': None, 'ts': 0.0}
@@ -627,6 +639,151 @@ def compute_alerts(quant, cycle, policy, chart, cm):
 
 
 # =====================================================================
+# BTC NEWS INTELLIGENCE (keyless RSS + Gemini 2.5 Flash summaries)
+# =====================================================================
+NEWS_SOURCES = [
+    ('CoinDesk', 'https://www.coindesk.com/arc/outboundfeeds/rss/', 72),
+    ('Cointelegraph', 'https://cointelegraph.com/rss', 68),
+    ('Bitcoin Magazine', 'https://bitcoinmagazine.com/feed', 68),
+    ('Decrypt', 'https://decrypt.co/feed', 68),
+    ('Federal Reserve', 'https://www.federalreserve.gov/feeds/press_all.xml', 95),
+]
+BTC_KEYWORDS = ['bitcoin', 'btc', 'crypto', 'ether', 'ethereum', 'sec', 'etf', 'federal reserve',
+                'interest rate', 'rate cut', 'rate hike', 'inflation', 'cpi', 'stablecoin', 'coinbase',
+                'binance', 'microstrategy', 'halving', 'mining', 'blackrock', 'custody', 'fomc',
+                'monetary', 'open market', 'payroll', 'employment', 'treasury']
+
+NEWS_SYSTEM = (
+    "You are a Bitcoin market news analyst. Given a headline and article text, return ONLY one JSON "
+    "object (no markdown, no prose) with EXACTLY these keys: "
+    '{"summary": "2-sentence factual summary", "why_it_matters": "1-2 sentences on why it matters for Bitcoin", '
+    '"direction": "bullish|bearish|mixed|neutral", "bullish_pct": int, "bearish_pct": int, "neutral_pct": int, '
+    '"impact_score": int 0-100, "confidence": float 0-1, '
+    '"time_horizons": {"immediate":"bullish|bearish|mixed|neutral","seven_day":"...","long_term":"..."}, '
+    '"categories": ["one or more of: central_banks, inflation_employment, regulation, etf, institutional_adoption, '
+    'corporate_holdings, exchange_custody, security_breach, mining_network, stablecoins, whale_onchain, derivatives, '
+    'geopolitics, technology_protocol, social_sentiment, rumor"]}. '
+    "Rules: bullish_pct+bearish_pct+neutral_pct MUST sum to 100. Only use the provided material; never invent facts "
+    "or quotes. If the story is not Bitcoin-relevant, set direction neutral and a low impact_score. "
+    "Keep 'summary' under 40 words and 'why_it_matters' under 35 words. Output compact valid JSON only."
+)
+
+
+def generate_news_summary(headline, text):
+    chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'news-{abs(hash(headline)) % 99999}',
+                    system_message=NEWS_SYSTEM)
+            .with_model('gemini', GEMINI_MODEL)
+            .with_params(temperature=0.0, max_tokens=1200))
+    reply = asyncio.run(chat.send_message(UserMessage(text=f'Headline: {headline}\n\nArticle:\n{text[:4000]}')))
+    raw = (getattr(reply, 'text', None) or str(reply)).strip()
+    if '```' in raw:
+        raw = re.sub(r'```(?:json)?', '', raw).strip()
+    s, e = raw.find('{'), raw.rfind('}')
+    obj = json.loads(raw[s:e + 1])
+    return obj
+
+
+def _norm_title(t):
+    return re.sub(r'[^a-z0-9]', '', (t or '').lower())[:45]
+
+
+def fetch_news():
+    entries = []
+    for name, url, cred in NEWS_SOURCES:
+        try:
+            fp = feedparser.parse(url)
+            for e in fp.entries[:12]:
+                title = e.get('title', '')
+                summ = re.sub('<[^>]+>', '', e.get('summary', e.get('description', '')))[:1400]
+                blob = (title + ' ' + summ).lower()
+                if name != 'Federal Reserve' and not any(k in blob for k in BTC_KEYWORDS):
+                    continue
+                entries.append({'source': name, 'credibility': cred, 'title': title,
+                                'summary': summ.strip(), 'link': e.get('link', ''),
+                                'published': e.get('published', e.get('updated', ''))})
+        except Exception:  # noqa
+            traceback.print_exc()
+
+    seen, uniq = set(), []
+    for e in entries:
+        k = _norm_title(e['title'])
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        uniq.append(e)
+    # per-source cap for diversity, then take top 6
+    per_src, top = {}, []
+    for e in uniq:
+        if per_src.get(e['source'], 0) >= 2:
+            continue
+        per_src[e['source']] = per_src.get(e['source'], 0) + 1
+        top.append(e)
+        if len(top) >= 6:
+            break
+
+    cards = []
+    for e in top:
+        ai = None
+        if EMERGENT_LLM_KEY and _HAS_LLM:
+            try:
+                ai = generate_news_summary(e['title'], e['summary'] or e['title'])
+            except Exception:  # noqa
+                traceback.print_exc()
+        if not ai:
+            ai = {'summary': (e['summary'] or e['title'])[:220], 'why_it_matters': '',
+                  'direction': 'neutral', 'bullish_pct': 40, 'bearish_pct': 30, 'neutral_pct': 30,
+                  'impact_score': 40, 'confidence': 0.4,
+                  'time_horizons': {'immediate': 'neutral', 'seven_day': 'neutral', 'long_term': 'neutral'},
+                  'categories': ['general']}
+        try:
+            imp = int(round(float(ai.get('impact_score', 40)) * (0.55 + 0.45 * e['credibility'] / 100)))
+        except Exception:  # noqa
+            imp = 40
+        imp = max(0, min(100, imp))
+        imp_label = ('Market Moving' if imp >= 85 else 'High Impact' if imp >= 70 else 'Important'
+                     if imp >= 50 else 'Monitor' if imp >= 30 else 'Low Significance')
+        cards.append({**e, 'ai': ai, 'impact': imp, 'impact_label': imp_label})
+    cards.sort(key=lambda c: -c['impact'])
+
+    bull = sum(1 for c in cards if c['ai'].get('direction') == 'bullish')
+    bear = sum(1 for c in cards if c['ai'].get('direction') == 'bearish')
+    bias = 'Moderately Bullish' if bull > bear else 'Moderately Bearish' if bear > bull else 'Mixed / Neutral'
+    tail = next((c for c in cards if c['ai'].get('direction') == 'bullish'), None)
+    risk = next((c for c in cards if c['ai'].get('direction') == 'bearish'), None)
+    briefing = {
+        'bias': bias, 'total': len(cards),
+        'major_stories': sum(1 for c in cards if c['impact'] >= 70),
+        'market_moving': sum(1 for c in cards if c['impact'] >= 85),
+        'top_tailwind': (tail['ai'].get('why_it_matters') or tail['title']) if tail else 'No clear bullish catalyst in the current feed.',
+        'top_risk': (risk['ai'].get('why_it_matters') or risk['title']) if risk else 'No clear bearish catalyst in the current feed.',
+        'next_event': POLICY_CALENDAR[0] if POLICY_CALENDAR else None,
+    }
+    doc = {'id': str(uuid.uuid4()), 'created_at': datetime.datetime.utcnow().isoformat(),
+           'cards': cards, 'briefing': briefing,
+           'model': (GEMINI_MODEL if (EMERGENT_LLM_KEY and _HAS_LLM) else 'rule-based')}
+    news_col.delete_many({})
+    news_col.insert_one({**doc, '_id': doc['id']})
+    return doc
+
+
+_news_state = {'status': 'idle', 'error': None}
+
+
+def run_news_bg():
+    if _news_state['status'] == 'running':
+        return
+    _news_state['status'] = 'running'
+    _news_state['error'] = None
+    try:
+        fetch_news()
+        _news_state['status'] = 'done'
+    except Exception as ex:  # noqa
+        _news_state['status'] = 'error'
+        _news_state['error'] = str(ex)
+        traceback.print_exc()
+
+
+# =====================================================================
 # STEP 3-5: TARGET, CV, WALK-FORWARD BACKTEST, LIVE SIGNAL
 # =====================================================================
 def _clamp(v, lo=0.0, hi=100.0):
@@ -1128,11 +1285,14 @@ def _startup():
     try:
         scheduler = BackgroundScheduler(timezone='UTC')
         scheduler.add_job(run_compute_bg, 'cron', hour=0, minute=5, id='daily_refresh')
+        scheduler.add_job(run_news_bg, 'interval', hours=1, id='news_refresh')
         scheduler.start()
     except Exception:  # noqa
         traceback.print_exc()
     if runs_col.count_documents({}) == 0:
         threading.Thread(target=run_compute_bg, daemon=True).start()
+    if news_col.count_documents({}) == 0:
+        threading.Thread(target=run_news_bg, daemon=True).start()
 
 
 @app.get('/api/v1/health')
@@ -1183,4 +1343,20 @@ def dashboard():
 @app.post('/api/v1/refresh')
 def refresh():
     threading.Thread(target=run_compute_bg, daemon=True).start()
+    return {'status': 'started'}
+
+
+@app.get('/api/v1/news')
+def news():
+    doc = news_col.find_one(sort=[('created_at', -1)], projection={'_id': 0})
+    if not doc:
+        if _news_state['status'] not in ('running',):
+            threading.Thread(target=run_news_bg, daemon=True).start()
+        return {'status': 'error' if _news_state['status'] == 'error' else 'computing', 'error': _news_state['error']}
+    return {'status': 'ready', 'news_status': _news_state['status'], **doc}
+
+
+@app.post('/api/v1/news/refresh')
+def news_refresh():
+    threading.Thread(target=run_news_bg, daemon=True).start()
     return {'status': 'started'}

@@ -9,7 +9,7 @@ import {
   TrendingUp, TrendingDown, RefreshCw, Activity, Gauge, Waves, BarChart3,
   ArrowUpRight, ArrowDownRight, Cpu, Database, Trophy, Radio, History,
   Check, X, LayoutDashboard, Target, FlaskConical, Bell, MessageCircle,
-  Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe,
+  Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -41,6 +41,8 @@ const SECTIONS = [
     blurb: 'Probability-based predictions for the next 24 hours, 7 days and 30 days — never certainties, always odds with a bull/base/bear price range and the maths behind each one.' },
   { id: 'chart', label: 'Chart Intelligence', icon: CandlestickChart,
     blurb: 'Automated technical read of the daily chart: support/resistance zones, trend structure, breakouts, momentum divergences and candlestick patterns — plus historical odds for the current setup.' },
+  { id: 'news', label: 'BTC News', icon: Newspaper,
+    blurb: 'The news. The meaning. The probable market impact. Each story becomes an AI intelligence card — what happened, why it matters for Bitcoin, likely direction, and an impact score — with links to the original source.' },
   { id: 'cycle', label: 'Cycle & Macro', icon: Globe,
     blurb: 'Where Bitcoin sits in its halving cycle and how capital is rotating across the wider crypto market (BTC dominance).' },
   { id: 'policy', label: 'Policy & Liquidity', icon: Landmark,
@@ -778,6 +780,93 @@ function AlertsSection({ d }) {
   );
 }
 
+const DIR_COLOR = {
+  bullish: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
+  bearish: 'text-red-400 border-red-500/30 bg-red-500/10',
+  mixed: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
+  neutral: 'text-slate-400 border-slate-700 bg-slate-800/40',
+};
+
+function NewsCard({ c }) {
+  const ai = c.ai || {};
+  const dir = ai.direction || 'neutral';
+  const th = ai.time_horizons || {};
+  return (
+    <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <span className="rounded bg-slate-800 px-2 py-0.5 font-medium text-slate-300">{c.source}</span>
+        <span className="text-slate-500">credibility {c.credibility}</span>
+        <span className={`rounded border px-2 py-0.5 font-semibold uppercase ${DIR_COLOR[dir]}`}>{dir}</span>
+        <span className="ml-auto rounded-full bg-sky-500/10 px-2 py-0.5 font-bold text-sky-400">Impact {c.impact} · {c.impact_label}</span>
+      </div>
+      <a href={c.link} target="_blank" rel="noreferrer" className="mt-2 block text-base font-semibold text-slate-100 hover:text-sky-300">{c.title}</a>
+      <p className="mt-2 text-sm text-slate-300">{ai.summary}</p>
+      {ai.why_it_matters && <p className="mt-2 text-sm text-slate-400"><span className="font-semibold text-slate-300">Why it matters: </span>{ai.why_it_matters}</p>}
+      <div className="mt-3 flex items-center gap-1.5">
+        <div className="flex h-2 flex-1 overflow-hidden rounded-full bg-slate-800">
+          <div className="h-full bg-emerald-400" style={{ width: `${ai.bullish_pct || 0}%` }} />
+          <div className="h-full bg-slate-500" style={{ width: `${ai.neutral_pct || 0}%` }} />
+          <div className="h-full bg-red-400" style={{ width: `${ai.bearish_pct || 0}%` }} />
+        </div>
+      </div>
+      <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span className="text-emerald-400">▲ {ai.bullish_pct || 0}%</span><span>neutral {ai.neutral_pct || 0}%</span><span className="text-red-400">▼ {ai.bearish_pct || 0}%</span></div>
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
+        {th.immediate && <span className="rounded border border-slate-800 px-1.5 py-0.5 text-slate-400">Now: <span className={signalText(th.immediate === 'bullish' ? 'Bullish' : th.immediate === 'bearish' ? 'Bearish' : 'Neutral')}>{th.immediate}</span></span>}
+        {th.seven_day && <span className="rounded border border-slate-800 px-1.5 py-0.5 text-slate-400">7d: {th.seven_day}</span>}
+        {th.long_term && <span className="rounded border border-slate-800 px-1.5 py-0.5 text-slate-400">Long: {th.long_term}</span>}
+        {(ai.categories || []).slice(0, 3).map((cat, i) => <span key={i} className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-400">{String(cat).replace(/_/g, ' ')}</span>)}
+        {ai.confidence != null && <span className="ml-auto text-slate-500">confidence {Math.round((ai.confidence || 0) * 100)}%</span>}
+      </div>
+    </Card>
+  );
+}
+
+function NewsSection({ news, status, onRefresh, refreshing }) {
+  const [filter, setFilter] = React.useState('all');
+  if (status !== 'ready' || !news) {
+    return (
+      <div className="space-y-5">
+        <SectionHead icon={Newspaper} title="BTC News" blurb={SECTIONS.find((s) => s.id === 'news').blurb} />
+        <Card className="flex items-center justify-center gap-3 border-0 bg-slate-900 p-16 ring-1 ring-slate-800">
+          <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-700 border-t-sky-400" />
+          <span className="text-slate-400">{status === 'error' ? 'News engine error — try refresh.' : 'Gathering headlines & generating AI summaries…'}</span>
+        </Card>
+      </div>
+    );
+  }
+  const b = news.briefing || {};
+  const cards = (news.cards || []).filter((c) => filter === 'all' || (c.ai || {}).direction === filter);
+  const biasColor = b.bias === 'Moderately Bullish' ? 'text-emerald-400' : b.bias === 'Moderately Bearish' ? 'text-red-400' : 'text-amber-400';
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={Newspaper} title="BTC News" blurb={SECTIONS.find((s) => s.id === 'news').blurb} />
+      <Card className="border-0 bg-gradient-to-br from-violet-500/10 to-slate-900 p-6 ring-1 ring-violet-500/25">
+        <div className="mb-3 flex items-center gap-2"><Sparkles className="h-5 w-5 text-violet-400" /><h3 className="font-semibold text-slate-100">Daily AI Briefing</h3><span className="ml-auto text-[11px] text-slate-500">{news.model}</span></div>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="rounded-lg bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">Market News Bias</p><p className={`text-lg font-bold ${biasColor}`}>{b.bias}</p></div>
+          <div className="rounded-lg bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">Stories</p><p className="text-lg font-bold text-white">{b.total}</p></div>
+          <div className="rounded-lg bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">High-Impact</p><p className="text-lg font-bold text-white">{b.major_stories}</p></div>
+          <div className="rounded-lg bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">Next Event</p><p className="text-sm font-bold text-white">{b.next_event ? `${b.next_event.event}` : '—'}</p></div>
+        </div>
+        <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="text-[11px] font-semibold uppercase text-emerald-400">Top Tailwind</p><p className="mt-1 text-sm text-slate-300">{b.top_tailwind}</p></div>
+          <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><p className="text-[11px] font-semibold uppercase text-red-400">Top Risk</p><p className="mt-1 text-sm text-slate-300">{b.top_risk}</p></div>
+        </div>
+      </Card>
+      <div className="flex flex-wrap items-center gap-2">
+        {['all', 'bullish', 'bearish', 'mixed', 'neutral'].map((f) => (
+          <button key={f} onClick={() => setFilter(f)} className={`rounded-lg px-3 py-1.5 text-xs font-medium capitalize ${filter === f ? 'bg-sky-500/15 text-sky-300' : 'bg-slate-800/60 text-slate-400 hover:text-slate-200'}`}>{f}</button>
+        ))}
+        <Button onClick={onRefresh} disabled={refreshing} size="sm" className="ml-auto gap-2 bg-slate-800 text-slate-100 hover:bg-slate-700"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh</Button>
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {cards.map((c, i) => <NewsCard key={i} c={c} />)}
+      </div>
+      {cards.length === 0 && <p className="text-sm text-slate-500">No stories match this filter.</p>}
+    </div>
+  );
+}
+
 /* ----------------------------- page ---------------------------------- */
 export default function DashboardPage() {
   const [data, setData] = useState(null);
@@ -786,6 +875,31 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [ticker, setTicker] = useState(null);
   const [active, setActive] = useState('overview');
+  const [news, setNews] = useState(null);
+  const [newsStatus, setNewsStatus] = useState('loading');
+  const [newsRefreshing, setNewsRefreshing] = useState(false);
+
+  const loadNews = useCallback(async () => {
+    try {
+      const r = await fetch('/api/v1/news', { cache: 'no-store' });
+      const j = await r.json();
+      if (j.status === 'ready') { setNews(j); setNewsStatus('ready'); setNewsRefreshing(false); }
+      else setNewsStatus(j.status || 'computing');
+    } catch (e) { setNewsStatus('error'); }
+  }, []);
+
+  useEffect(() => {
+    loadNews();
+    const id = setInterval(() => { setNewsStatus((s) => { if (s !== 'ready') loadNews(); return s; }); }, 5000);
+    return () => clearInterval(id);
+  }, [loadNews]);
+
+  const handleNewsRefresh = async () => {
+    setNewsRefreshing(true);
+    await fetch('/api/v1/news/refresh', { method: 'POST' });
+    const id = setInterval(loadNews, 5000);
+    setTimeout(() => clearInterval(id), 70000);
+  };
 
   const load = useCallback(async () => {
     try {
@@ -846,6 +960,7 @@ export default function DashboardPage() {
     if (active === 'overview') return <OverviewSection d={d} ticker={ticker} />;
     if (active === 'forecasts') return <ForecastsSection d={d} />;
     if (active === 'chart') return <ChartSection d={d} />;
+    if (active === 'news') return <NewsSection news={news} status={newsStatus} onRefresh={handleNewsRefresh} refreshing={newsRefreshing} />;
     if (active === 'cycle') return <CycleSection d={d} />;
     if (active === 'policy') return <PolicySection d={d} />;
     if (active === 'analysis') return <AnalysisSection d={d} />;
