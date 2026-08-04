@@ -101,3 +101,143 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: |
+  Build a Bitcoin Predictive AI Quant Dashboard. User explicitly requested Python + FastAPI
+  (not JS reimplementation). Pipeline: real BTC/USD daily data -> price-agnostic stationary
+  features (RSI, StochRSI, MACD hist, EMA 9/21 ratio, ATR%, Bollinger width%, Volume Z-score,
+  Volume ratio) -> RandomForest classifier predicting next-day direction -> TimeSeriesSplit CV +
+  walk-forward backtest (accuracy over time) -> persisted to MongoDB, refreshed daily via
+  APScheduler (Celery replaced with APScheduler per user agreement). FastAPI runs internally on
+  :8001; Next.js /api/* catch-all proxies to it. Frontend shows Recharts dual-axis success-rate
+  chart + next-day signal card + feature matrix + importance + CV folds.
+  NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
+
+backend:
+  - task: "FastAPI ML engine - real BTC data fetch (ccxt Kraken primary, Coinbase fallback)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "Verified via curl: kraken returns 720 daily bars, real last_close ~64040. Binance blocked."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive backend test. Real Kraken data confirmed: last_close=$64,040.3, 720 bars fetched, all features computed correctly."
+  - task: "GET /api/v1/dashboard - signal, confidence, features, importances, cv_folds, performance"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "Returns status=ready with signal DOWN 52.69%, 491 perf points, 8 features, 5 CV folds via Next.js proxy."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED all validations via external URL. Returns status='ready', signal='DOWN', confidence=52.69%, prob_up=47.31%, prob_down=52.69%, last_close=$64,040.3, data_source='kraken', overall_accuracy=46.0%, cv_mean=49.14%, 5 CV folds (correct structure), 8 importances (sum ~100%), 491 performance points (non-empty), 8 features (all required keys present). All data types and ranges validated."
+  - task: "GET /api/v1/health and POST /api/v1/refresh (background retrain thread)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "health shows compute_status done, runs=1. refresh triggers background thread."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED both endpoints. GET /api/v1/health returns status='ok', compute_status='done', runs=1. POST /api/v1/refresh returns status='started', triggers background thread successfully. System remains stable after refresh (health shows compute_status='running', dashboard still returns 'ready' with cached data)."
+  - task: "Next.js /api catch-all proxy to internal FastAPI :8001"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "curl to localhost:3000/api/v1/dashboard returns full payload proxied from FastAPI."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED proxy functionality. All endpoints (health, dashboard, refresh) accessible via external base URL with /api prefix. Proxy correctly forwards requests to internal FastAPI :8001 and returns responses with proper status codes and content-type headers."
+
+frontend:
+  - task: "Quant dashboard UI (signal card, dual-axis Recharts chart, feature matrix, importance, CV folds)"
+    implemented: true
+    working: true
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "Verified via screenshot - all sections render with real data. Not yet tested by frontend agent (awaiting user permission)."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 1
+  run_ui: false
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Please test the backend ML API. IMPORTANT: call all endpoints via the Next.js proxy base
+      (use the external base URL + /api/v1/...), since that is the real path the browser uses.
+      Endpoints:
+    -agent: "testing"
+    -message: |
+      ✅ ALL BACKEND TESTS PASSED (3/3)
+      
+      Tested all endpoints via external base URL (https://quant-features.preview.emergentagent.com/api/v1/*):
+      
+      1. GET /api/v1/health - ✅ PASSED
+         - Returns status='ok', compute_status='done', runs=1
+         - All required fields present and valid
+      
+      2. GET /api/v1/dashboard - ✅ PASSED
+         - Returns status='ready' with complete ML data
+         - Real Kraken BTC data: last_close=$64,040.3
+         - Signal: DOWN with 52.69% confidence
+         - All required fields validated:
+           * 5 CV folds (correct structure)
+           * 8 feature importances (sum ~100%)
+           * 491 performance data points
+           * 8 features with values and units
+         - All numeric values in expected ranges
+         - Data types correct
+      
+      3. POST /api/v1/refresh - ✅ PASSED
+         - Returns status='started'
+         - Background retraining triggered successfully
+         - System remains stable (health and dashboard still respond)
+      
+      Next.js proxy working correctly - all requests properly forwarded to internal FastAPI :8001.
+      
+      NO CRITICAL ISSUES FOUND. All backend functionality working as expected with real data.
+        - GET /api/v1/health -> expect {status:'ok', compute_status:'done', runs>=1}
+        - GET /api/v1/dashboard -> expect status:'ready' with keys: signal (UP/DOWN), confidence,
+          prob_up, prob_down, last_close, data_source ('kraken' or 'coinbase'), overall_accuracy,
+          cv_mean, cv_folds (len 5), importances (len 8), performance (list of {date,iso,btcPrice,
+          aiAccuracy}), features (len 8). Validate values are real/plausible (last_close > 0,
+          confidence between 0-100, performance non-empty).
+        - POST /api/v1/refresh -> expect {status:'started'}; then health/dashboard still return ready.
+      Data is REAL (ccxt Kraken). Do NOT expect Binance (geo-blocked). No API keys required.
+      Do not test WebSockets (not implemented).

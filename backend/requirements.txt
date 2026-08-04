@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+ccxt
+pandas
+numpy
+scikit-learn
+joblib
+apscheduler
+pymongo
+python-dotenv
