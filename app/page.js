@@ -10,7 +10,7 @@ import {
   ArrowUpRight, ArrowDownRight, Cpu, Database, Trophy, Radio, History,
   Check, X, LayoutDashboard, Target, FlaskConical, Bell, MessageCircle,
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
-  Brain, Send, ShieldAlert, Scale,
+  Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -53,6 +53,12 @@ const SECTIONS = [
     blurb: 'The evidence behind the score: each indicator category, the raw feature values the model reads, and which ones matter most.' },
   { id: 'performance', label: 'Performance', icon: Trophy,
     blurb: 'The receipts. Every past prediction graded win/loss, the running accuracy over time, and an honest scoreboard — no cherry-picking.' },
+  { id: 'scorecard', label: 'Prediction Ledger', icon: ClipboardList,
+    blurb: 'Every forecast is permanently logged before the outcome is known, then graded when it matures. A public scorecard shows directional accuracy, Brier score, error and probability calibration by horizon.' },
+  { id: 'trust', label: 'Data Trust', icon: ShieldCheck,
+    blurb: 'Provenance for every number: original provider, freshness, latency and confidence. When a live feed goes stale the odds are faded and confidence is reduced automatically.' },
+  { id: 'events', label: 'Event Calendar', icon: CalendarClock,
+    blurb: 'A unified calendar of macro, derivatives and on-chain events — each with a live countdown, importance and expected volatility, so you can see what could move Bitcoin next.' },
   { id: 'strategy', label: 'Strategy Lab', icon: FlaskConical, soon: true,
     blurb: 'Soon: build no-code rules (e.g. "buy when the score > 70") and backtest them with fees, slippage and drawdown.' },
   { id: 'alerts', label: 'Alerts', icon: Bell,
@@ -190,6 +196,7 @@ function DecisionEngineCard({ d }) {
         <Brain className="h-5 w-5 text-amber-400" />
         <h3 className="text-lg font-bold text-white">Bitcoin Market State</h3>
         <span className="text-[11px] text-slate-500">Unified Decision Engine · reconciles every signal</span>
+        {dec.data_trust && <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${dec.data_trust.faded ? 'border-orange-500/30 text-orange-300' : 'border-emerald-500/25 text-emerald-300'}`}>Data trust {dec.data_trust.score}{dec.odds_faded ? ' · odds faded' : ''}</span>}
         <Badge variant="outline" className={`ml-auto border-slate-700 ${alignColor(dec.alignment)}`}>{dec.alignment}</Badge>
       </div>
 
@@ -986,6 +993,241 @@ function NewsSection({ news, status, onRefresh, refreshing }) {
   );
 }
 
+/* ----------------- Prediction Ledger / Scorecard --------------------- */
+const impColor = (i) => ({ 'Very High': 'text-red-400 border-red-500/30 bg-red-500/10',
+  High: 'text-orange-400 border-orange-500/30 bg-orange-500/10',
+  Medium: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
+  Low: 'text-slate-400 border-slate-700 bg-slate-800/40' }[i] || 'text-slate-400 border-slate-700');
+const volColor = (v) => ({ 'Very High': 'bg-red-500', High: 'bg-orange-500',
+  Elevated: 'bg-amber-500', Low: 'bg-emerald-500' }[v] || 'bg-slate-600');
+const volPct = (v) => ({ 'Very High': 100, High: 78, Elevated: 52, Low: 26 }[v] || 40);
+const feedColor = (s) => ({ live: 'text-emerald-400', degraded: 'text-amber-400',
+  stale: 'text-orange-400', down: 'text-red-400' }[s] || 'text-slate-400');
+const feedDot = (s) => ({ live: 'bg-emerald-400', degraded: 'bg-amber-400',
+  stale: 'bg-orange-400', down: 'bg-red-400' }[s] || 'bg-slate-500');
+function ageTxt(m) { if (m == null) return 'live'; if (m < 60) return `${m}m ago`; const h = Math.floor(m / 60); return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`; }
+function countdown(dateStr) {
+  const t = new Date(dateStr + 'T13:30:00Z').getTime() - Date.now();
+  if (t <= 0) return 'now';
+  const d = Math.floor(t / 86400000); const h = Math.floor((t % 86400000) / 3600000);
+  return d > 0 ? `${d}d ${h}h` : `${h}h`;
+}
+
+function Stat({ label, value, sub, color }) {
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+      <p className="text-[11px] uppercase tracking-wider text-slate-400">{label}</p>
+      <p className="mt-1 text-3xl font-black" style={color ? { color } : undefined}>{value}</p>
+      {sub && <p className="text-[11px] text-slate-500">{sub}</p>}
+    </div>
+  );
+}
+
+function ScorecardSection({ d }) {
+  const pl = d.prediction_ledger;
+  if (!pl) return <ComingSoonSection section={SECTIONS.find((s) => s.id === 'scorecard')} />;
+  const o = pl.overall;
+  const accCol = o.accuracy == null ? undefined : scoreColor(o.accuracy);
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={ClipboardList} title="Prediction Ledger" blurb={SECTIONS.find((s) => s.id === 'scorecard').blurb} />
+      <div className="rounded-xl border border-sky-500/20 bg-sky-500/[0.06] p-4 text-sm text-slate-300">
+        <span className="font-semibold text-sky-300">Accountability by design.</span> Every forecast is written to the ledger the moment it is issued — before the outcome exists — then graded automatically when it matures. Model <span className="font-mono text-slate-200">{pl.model_version}</span> · <span className="text-slate-200">{pl.total_logged}</span> forecasts logged (<span className="text-slate-200">{pl.live_logged}</span> live-forward + <span className="text-slate-200">{pl.backtested}</span> walk-forward backtest).
+      </div>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <Stat label="Directional Accuracy" value={o.accuracy == null ? '—' : `${o.accuracy}%`} sub={`${o.n} graded`} color={accCol} />
+        <Stat label="Brier Score" value={o.brier == null ? '—' : o.brier} sub="lower is better (0 = perfect)" />
+        <Stat label="Mean Abs. Error" value={o.mae_pct == null ? '—' : `${o.mae_pct}%`} sub="base-case price vs actual" />
+        <Stat label="Range Hit Rate" value={o.range_hit_pct == null ? '—' : `${o.range_hit_pct}%`} sub="actual inside base range" />
+      </div>
+
+      {Object.keys(pl.by_horizon).length > 0 && (
+        <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+          <h3 className="mb-3 text-sm font-semibold text-white">Results by Forecast Horizon</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-[11px] uppercase tracking-wider text-slate-500">
+                <th className="pb-2">Horizon</th><th className="pb-2">Graded</th><th className="pb-2">Accuracy</th><th className="pb-2">Brier</th><th className="pb-2">MAE</th><th className="pb-2">Range Hit</th></tr></thead>
+              <tbody>
+                {['24H', '7D', '30D', '3M', '6M', '1Y'].filter((h) => pl.by_horizon[h]).map((h) => {
+                  const r = pl.by_horizon[h];
+                  return (
+                    <tr key={h} className="border-t border-slate-800">
+                      <td className="py-2 font-semibold text-slate-200">{h}</td>
+                      <td className="py-2 text-slate-400">{r.n}</td>
+                      <td className="py-2 font-bold" style={{ color: scoreColor(r.accuracy) }}>{r.accuracy}%</td>
+                      <td className="py-2 text-slate-300">{r.brier ?? '—'}</td>
+                      <td className="py-2 text-slate-300">{r.mae_pct == null ? '—' : `${r.mae_pct}%`}</td>
+                      <td className="py-2 text-slate-300">{r.range_hit_pct == null ? '—' : `${r.range_hit_pct}%`}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
+      {pl.calibration?.length > 0 && (
+        <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+          <h3 className="mb-1 text-sm font-semibold text-white">Probability Calibration</h3>
+          <p className="mb-3 text-xs text-slate-500">When the model says a bucket of odds, how often did price actually go up? Closer bars = better-calibrated.</p>
+          <div className="space-y-3">
+            {pl.calibration.map((c) => (
+              <div key={c.bucket}>
+                <div className="flex justify-between text-xs text-slate-400"><span>Predicted {c.bucket} <span className="text-slate-600">({c.n})</span></span><span>realised up {c.realised_up}%</span></div>
+                <div className="mt-1 flex gap-1">
+                  <div className="h-2 flex-1 rounded-full bg-slate-800"><div className="h-full rounded-full bg-sky-500" style={{ width: `${c.avg_pred}%` }} /></div>
+                  <div className="h-2 flex-1 rounded-full bg-slate-800"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${c.realised_up}%` }} /></div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex gap-4 text-[11px] text-slate-500"><span className="flex items-center gap-1"><span className="h-2 w-3 rounded bg-sky-500" />avg predicted</span><span className="flex items-center gap-1"><span className="h-2 w-3 rounded bg-emerald-500" />actual up-rate</span></div>
+        </Card>
+      )}
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+          <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white"><CalendarClock className="h-4 w-4 text-amber-400" />Open Forecasts (awaiting outcome)</h3>
+          {pl.pending.length === 0 ? <p className="text-sm text-slate-500">No open forecasts yet — they appear here the moment each run is issued.</p> : (
+            <div className="space-y-2">
+              {pl.pending.map((p, i) => (
+                <div key={i} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 text-sm">
+                  <span className="w-10 font-bold text-slate-200">{p.horizon}</span>
+                  <span className={`font-semibold ${p.direction === 'UP' ? 'text-emerald-400' : 'text-red-400'}`}>{p.direction} {p.prob_higher}%</span>
+                  <span className="text-slate-500">→ {p.target_date}</span>
+                  <span className="ml-auto rounded bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-300">{countdown(p.target_date)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+        <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+          <h3 className="mb-3 text-sm font-semibold text-white">Recently Graded (live-forward)</h3>
+          {pl.recent.length === 0 ? <p className="text-sm text-slate-500">The first live forecasts are still maturing — 24H results land tomorrow. The scorecard above already reflects the full walk-forward backtest.</p> : (
+            <div className="space-y-2">
+              {pl.recent.map((r, i) => (
+                <div key={i} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 text-sm">
+                  {r.correct ? <Check className="h-4 w-4 text-emerald-400" /> : <X className="h-4 w-4 text-red-400" />}
+                  <span className="w-10 font-bold text-slate-200">{r.horizon}</span>
+                  <span className="text-slate-400">said {r.direction} {r.prob_higher}%</span>
+                  <span className="ml-auto text-slate-500">actual {r.actual_direction}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------- Data Trust Layer -------------------------- */
+function DataTrustSection({ d }) {
+  const h = d.data_health;
+  if (!h) return <ComingSoonSection section={SECTIONS.find((s) => s.id === 'trust')} />;
+  const col = h.score >= 90 ? '#34d399' : h.score >= 75 ? '#a3e635' : h.score >= 55 ? '#fbbf24' : '#f87171';
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={ShieldCheck} title="Data Trust" blurb={SECTIONS.find((s) => s.id === 'trust').blurb} />
+      <Card className={`border-0 bg-gradient-to-br from-slate-900 to-slate-950 p-6 ring-1 ${h.faded ? 'ring-orange-500/40' : 'ring-emerald-500/25'}`}>
+        <div className="flex flex-wrap items-center gap-6">
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-slate-400">Overall Data Trust</p>
+            <p className="text-5xl font-black" style={{ color: col }}>{h.score}</p>
+            <p className="text-sm font-semibold" style={{ color: col }}>{h.level}</p>
+          </div>
+          <div className="flex gap-3">
+            <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-4 py-2 text-center"><p className="text-xl font-bold text-emerald-400">{h.live}</p><p className="text-[10px] text-slate-500">live</p></div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-4 py-2 text-center"><p className="text-xl font-bold text-amber-400">{h.degraded}</p><p className="text-[10px] text-slate-500">delayed</p></div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-4 py-2 text-center"><p className="text-xl font-bold text-orange-400">{h.stale}</p><p className="text-[10px] text-slate-500">stale/down</p></div>
+          </div>
+          <div className={`ml-auto max-w-md rounded-lg border p-3 text-sm ${h.faded ? 'border-orange-500/30 bg-orange-500/10 text-orange-200' : 'border-emerald-500/20 bg-emerald-500/[0.06] text-emerald-200'}`}>
+            {h.faded ? <ShieldAlert className="mb-1 h-4 w-4" /> : <ShieldCheck className="mb-1 h-4 w-4" />}{h.note}
+          </div>
+        </div>
+      </Card>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        {h.feeds.map((f) => (
+          <Card key={f.id} className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800">
+            <div className="flex items-center gap-2">
+              <span className={`h-2.5 w-2.5 rounded-full ${feedDot(f.status)} ${f.status === 'live' ? 'animate-pulse' : ''}`} />
+              <h3 className="font-semibold text-white">{f.label}</h3>
+              <span className={`ml-auto text-xs font-bold uppercase ${feedColor(f.status)}`}>{f.status}</span>
+            </div>
+            <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+              <div><p className="text-slate-500">Provider</p><p className="font-medium text-slate-300">{f.provider}</p></div>
+              <div><p className="text-slate-500">Freshness</p><p className="font-medium text-slate-300">{ageTxt(f.age_min)}</p></div>
+              <div><p className="text-slate-500">Confidence</p><p className="font-medium text-slate-300">{f.confidence}%</p></div>
+            </div>
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full" style={{ width: `${f.confidence}%`, backgroundColor: f.confidence >= 90 ? '#34d399' : f.confidence >= 70 ? '#fbbf24' : '#f87171' }} /></div>
+            <p className="mt-2 text-[11px] leading-relaxed text-slate-500">{f.methodology}</p>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------- Event Calendar ---------------------------- */
+const catColor = (c) => ({ Macro: 'text-sky-400 border-sky-500/30 bg-sky-500/10',
+  Derivatives: 'text-violet-400 border-violet-500/30 bg-violet-500/10',
+  'On-Chain': 'text-amber-400 border-amber-500/30 bg-amber-500/10',
+  Regulatory: 'text-red-400 border-red-500/30 bg-red-500/10' }[c] || 'text-slate-400 border-slate-700');
+
+function EventsSection({ d }) {
+  const ec = d.event_calendar;
+  if (!ec) return <ComingSoonSection section={SECTIONS.find((s) => s.id === 'events')} />;
+  const nx = ec.next_high_impact;
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={CalendarClock} title="Event Calendar" blurb={SECTIONS.find((s) => s.id === 'events').blurb} />
+      {nx && (
+        <Card className="border-0 bg-gradient-to-r from-orange-500/10 to-slate-900 p-5 ring-1 ring-orange-500/30">
+          <div className="flex flex-wrap items-center gap-4">
+            <div><p className="text-[11px] uppercase tracking-wider text-orange-300">Next high-impact event</p><p className="text-lg font-bold text-white">{nx.title}</p><p className="text-xs text-slate-400">{nx.description}</p></div>
+            <div className="ml-auto text-center"><p className="text-3xl font-black text-orange-400">{countdown(nx.date)}</p><p className="text-[11px] text-slate-500">{nx.date}</p></div>
+          </div>
+        </Card>
+      )}
+      <div className="flex flex-wrap gap-2">
+        {Object.entries(ec.counts).map(([c, n]) => (
+          <span key={c} className={`rounded-full border px-3 py-1 text-xs font-medium ${catColor(c)}`}>{c} · {n}</span>
+        ))}
+        <span className="ml-auto text-xs text-slate-500">next {ec.window_days} days · {ec.events.length} events</span>
+      </div>
+      <div className="space-y-2">
+        {ec.events.map((e, i) => (
+          <Card key={i} className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="w-16 text-center">
+                <p className="text-lg font-black text-white">{countdown(e.date)}</p>
+                <p className="text-[10px] text-slate-500">{e.date.slice(5)}</p>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${catColor(e.category)}`}>{e.category}</span>
+                  <span className="font-semibold text-white">{e.title}</span>
+                  <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${impColor(e.importance)}`}>{e.importance}</span>
+                </div>
+                <p className="mt-0.5 text-xs text-slate-500">{e.description}</p>
+              </div>
+              <div className="w-28">
+                <p className="text-[10px] uppercase tracking-wider text-slate-500">Exp. volatility</p>
+                <div className="mt-1 flex items-center gap-2">
+                  <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800"><div className={`h-full rounded-full ${volColor(e.expected_volatility)}`} style={{ width: `${volPct(e.expected_volatility)}%` }} /></div>
+                </div>
+                <p className="mt-0.5 text-[10px] text-slate-400">{e.expected_volatility}</p>
+              </div>
+            </div>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /* ----------------------------- Ask Quant ----------------------------- */
 function AskQuantSection({ d }) {
   const [sessionId] = React.useState(() => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)));
@@ -1082,22 +1324,27 @@ function AskQuantSection({ d }) {
 }
 
 /* ----------------------------- page ---------------------------------- */
+// Module-level caches survive a Fast-Refresh / remount so the dashboard never
+// flickers back to the full-screen loader once data has been fetched once.
+let __dashCache = null;
+let __tickerCache = null;
+let __newsCache = null;
 export default function DashboardPage() {
-  const [data, setData] = useState(null);
-  const [status, setStatus] = useState('loading');
+  const [data, setData] = useState(__dashCache);
+  const [status, setStatus] = useState(__dashCache ? 'ready' : 'loading');
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [ticker, setTicker] = useState(null);
+  const [ticker, setTicker] = useState(__tickerCache);
   const [active, setActive] = useState('overview');
-  const [news, setNews] = useState(null);
-  const [newsStatus, setNewsStatus] = useState('loading');
+  const [news, setNews] = useState(__newsCache);
+  const [newsStatus, setNewsStatus] = useState(__newsCache ? 'ready' : 'loading');
   const [newsRefreshing, setNewsRefreshing] = useState(false);
 
   const loadNews = useCallback(async () => {
     try {
       const r = await fetch('/api/v1/news', { cache: 'no-store' });
       const j = await r.json();
-      if (j.status === 'ready') { setNews(j); setNewsStatus('ready'); setNewsRefreshing(false); }
+      if (j.status === 'ready') { __newsCache = j; setNews(j); setNewsStatus('ready'); setNewsRefreshing(false); }
       else setNewsStatus(j.status || 'computing');
     } catch (e) { setNewsStatus('error'); }
   }, []);
@@ -1119,7 +1366,7 @@ export default function DashboardPage() {
     try {
       const res = await fetch('/api/v1/dashboard', { cache: 'no-store' });
       const json = await res.json();
-      if (json.status === 'ready') { setData(json); setStatus('ready'); setRefreshing(false); }
+      if (json.status === 'ready') { __dashCache = json; setData(json); setStatus('ready'); setRefreshing(false); }
       else if (json.status === 'error') { setError(json.error || 'Unknown error'); setStatus('error'); }
       else setStatus('computing');
     } catch (e) { setError(String(e)); setStatus('error'); }
@@ -1134,7 +1381,7 @@ export default function DashboardPage() {
   useEffect(() => {
     let alive = true;
     const loadTicker = async () => {
-      try { const r = await fetch('/api/v1/ticker', { cache: 'no-store' }); const j = await r.json(); if (alive && j && j.price) setTicker(j); } catch (e) { /* noop */ }
+      try { const r = await fetch('/api/v1/ticker', { cache: 'no-store' }); const j = await r.json(); if (alive && j && j.price) { __tickerCache = j; setTicker(j); } } catch (e) { /* noop */ }
     };
     loadTicker();
     const t = setInterval(loadTicker, 10000);
@@ -1149,7 +1396,7 @@ export default function DashboardPage() {
     setTimeout(() => clearInterval(id), 90000);
   };
 
-  if (status === 'loading' || status === 'computing') {
+  if (!data && (status === 'loading' || status === 'computing')) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-slate-950 px-6">
         <img src="/btciq-logo.png" alt="BTCIQ" className="h-14 w-auto object-contain" />
@@ -1158,7 +1405,7 @@ export default function DashboardPage() {
       </main>
     );
   }
-  if (status === 'error') {
+  if (!data && status === 'error') {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center gap-4 bg-slate-950 px-6">
         <div className="rounded-full bg-red-500/10 p-4"><Activity className="h-8 w-8 text-red-400" /></div>
@@ -1180,6 +1427,9 @@ export default function DashboardPage() {
     if (active === 'policy') return <PolicySection d={d} />;
     if (active === 'analysis') return <AnalysisSection d={d} />;
     if (active === 'performance') return <PerformanceSection d={d} />;
+    if (active === 'scorecard') return <ScorecardSection d={d} />;
+    if (active === 'trust') return <DataTrustSection d={d} />;
+    if (active === 'events') return <EventsSection d={d} />;
     if (active === 'alerts') return <AlertsSection d={d} />;
     if (active === 'ask') return <AskQuantSection d={d} />;
     return <ComingSoonSection section={activeSection} />;

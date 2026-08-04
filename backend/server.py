@@ -50,6 +50,7 @@ signals_col = db['live_signals']
 dominance_col = db['dominance_hist']
 news_col = db['news']
 chat_col = db['ask_quant_chat']
+predictions_col = db['predictions']
 
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 GEMINI_MODEL = 'gemini-2.5-flash'
@@ -1288,6 +1289,312 @@ def build_chat_context():
     return "\n".join(L)
 
 
+# =====================================================================
+# DATA TRUST LAYER  +  PREDICTION LEDGER  +  EVENT CALENDAR
+# =====================================================================
+def _age_min(iso):
+    try:
+        t = datetime.datetime.fromisoformat(str(iso).replace('Z', ''))
+        return max(0.0, (datetime.datetime.utcnow() - t).total_seconds() / 60.0)
+    except Exception:  # noqa
+        return None
+
+
+def compute_data_health(source, crossmarket, policy, dominance, news_doc):
+    now_iso = datetime.datetime.utcnow().isoformat()
+    feeds = []
+
+    def add(fid, label, provider, ok, updated_iso, fresh_min, methodology):
+        age = _age_min(updated_iso) if updated_iso else None
+        if not ok:
+            status, conf = 'down', 10
+        elif age is None:
+            status, conf = 'live', 95
+        elif age <= fresh_min:
+            status, conf = 'live', 97
+        elif age <= fresh_min * 3:
+            status, conf = 'degraded', 72
+        else:
+            status, conf = 'stale', 42
+        feeds.append({'id': fid, 'label': label, 'provider': provider, 'status': status,
+                      'updated': updated_iso, 'age_min': round(age) if age is not None else None,
+                      'confidence': conf, 'methodology': methodology})
+
+    add('price', 'Spot & OHLCV Price', (source or 'kraken').title(), True, now_iso, 180,
+        'Daily OHLCV via ccxt; live spot via exchange ticker (polled every ~10s).')
+    add('dominance', 'BTC Dominance & Market Cap', 'CoinGecko', dominance is not None, now_iso, 180,
+        'Global market-cap share and total market cap from the CoinGecko public API.')
+    add('crossmarket', 'Cross-Market (DXY, Yields, VIX, Gold, S&P)', 'Yahoo Finance',
+        crossmarket is not None, now_iso, 360, 'Daily closes for macro assets; rolling correlations vs BTC.')
+    add('policy', 'Macro & Policy', 'Curated + Yahoo Finance', policy is not None, now_iso, 360,
+        'Rate/liquidity proxies plus a curated policy & regulation calendar.')
+    add('news', 'Bitcoin News & AI Impact', 'RSS + Gemini',
+        news_doc is not None, (news_doc or {}).get('created_at'), 120,
+        'Keyless RSS feeds clustered and scored for impact/direction by Gemini.')
+    add('fx', 'USD → AUD FX', 'Yahoo Finance', True, now_iso, 1800,
+        'AUD=X spot rate used to convert USD prices into AUD.')
+
+    conf_vals = [f['confidence'] for f in feeds]
+    score = int(round(sum(conf_vals) / len(conf_vals)))
+    live = sum(1 for f in feeds if f['status'] == 'live')
+    degraded = sum(1 for f in feeds if f['status'] == 'degraded')
+    stale = sum(1 for f in feeds if f['status'] in ('stale', 'down'))
+    level = 'High' if score >= 90 else 'Good' if score >= 75 else 'Degraded' if score >= 55 else 'Low'
+    faded = stale > 0 or score < 70
+    if stale == 0 and degraded == 0:
+        note = 'All data feeds are live and fresh — full model confidence.'
+    elif faded:
+        note = f'{stale} feed(s) stale/down, {degraded} degraded — odds are faded and confidence reduced.'
+    else:
+        note = f'{degraded} feed(s) slightly delayed — minor confidence reduction.'
+    return {'feeds': feeds, 'score': score, 'level': level, 'live': live, 'degraded': degraded,
+            'stale': stale, 'faded': faded, 'note': note, 'checked_at': now_iso}
+
+
+def apply_data_fade(decision, health):
+    """When a live feed goes stale, fade the directional odds toward 50% and flag it."""
+    if not decision or not health:
+        return
+    faded = health['faded']
+    tf = max(0.35, health['score'] / 100.0)
+    decision['data_trust'] = {'score': health['score'], 'level': health['level'], 'faded': faded}
+    decision['odds_faded'] = faded
+    if not faded:
+        return
+    for o in decision.get('outlook', []):
+        h = o['higher']
+        nh = round(50 + (h - 50) * tf, 1)
+        o['higher'], o['lower'] = nh, round(100 - nh, 1)
+        o['lean'] = 'UP' if nh >= 50 else 'DOWN'
+        o['faded'] = True
+
+
+# ---------------------------- Prediction Ledger ----------------------------
+HZ_DAYS = {'24H': 1, '7D': 7, '30D': 30, '3M': 90, '6M': 180, '1Y': 365}
+
+
+def _vol_label(f):
+    try:
+        spread = abs(f['bull'] - f['bear']) / max(1e-9, f['base'])
+    except Exception:  # noqa
+        return 'Elevated'
+    return 'Very High' if spread > 0.6 else 'High' if spread > 0.3 else 'Elevated' if spread > 0.12 else 'Low'
+
+
+def record_predictions(as_of, price_now, all_outlook, regime, source, model_version='rf-quant-v1', trigger='scheduled'):
+    """Immutably log every horizon forecast BEFORE the outcome is known (idempotent per as_of+horizon)."""
+    for f in all_outlook:
+        hz = f['horizon']
+        days = HZ_DAYS.get(hz)
+        if not days:
+            continue
+        higher = float(f.get('higher_adj', f['higher']))
+        key = f"{as_of}_{hz}"
+        doc = {
+            '_id': key, 'model_version': model_version, 'trigger': trigger,
+            'as_of': as_of, 'issued_at': datetime.datetime.utcnow().isoformat(),
+            'horizon': hz, 'horizon_days': days, 'target_date': f.get('expiry'),
+            'price_at_issue': round(float(price_now), 2), 'data_source': source,
+            'direction': 'UP' if higher >= 50 else 'DOWN',
+            'prob_higher': round(higher, 1), 'prob_lower': round(100 - higher, 1),
+            'base': f.get('base'), 'bull': f.get('bull'), 'bear': f.get('bear'),
+            'confidence': f.get('confidence'), 'regime': regime,
+            'expected_volatility': _vol_label(f),
+            'resolved': False, 'actual_close': None, 'actual_direction': None,
+            'correct': None, 'brier': None, 'abs_pct_error': None, 'range_hit': None,
+        }
+        try:
+            predictions_col.update_one({'_id': key}, {'$setOnInsert': doc}, upsert=True)
+        except Exception:  # noqa
+            traceback.print_exc()
+
+
+def seed_ledger_from_backtest(trades):
+    """Bootstrap the 24H ledger from the real walk-forward backtest (trigger='backtest')."""
+    try:
+        existing = {d['_id'] for d in predictions_col.find({'trigger': 'backtest'}, {'_id': 1})}
+        new_docs = []
+        for t in trades:
+            key = f"bt_{t['date']}_24H"
+            if key in existing:
+                continue
+            prob = t['confidence'] if t['signal'] == 'UP' else (100 - t['confidence'])
+            actual_up = 1 if t['actual'] == 'UP' else 0
+            new_docs.append({
+                '_id': key, 'model_version': 'rf-quant-v1', 'trigger': 'backtest',
+                'as_of': t['date'], 'issued_at': t['date'], 'horizon': '24H', 'horizon_days': 1,
+                'target_date': None, 'price_at_issue': t['close'], 'data_source': 'backtest',
+                'direction': t['signal'], 'prob_higher': round(prob, 1), 'prob_lower': round(100 - prob, 1),
+                'base': t['nextClose'], 'bull': None, 'bear': None, 'confidence': None, 'regime': None,
+                'expected_volatility': None, 'resolved': True,
+                'resolved_at': t['date'], 'actual_close': t['nextClose'], 'actual_direction': t['actual'],
+                'correct': bool(t['correct']), 'brier': round((prob / 100 - actual_up) ** 2, 4),
+                'abs_pct_error': None, 'range_hit': None,
+            })
+        if new_docs:
+            predictions_col.insert_many(new_docs, ordered=False)
+    except Exception:  # noqa
+        traceback.print_exc()
+
+
+def resolve_predictions(close_by_date, latest_date):
+    """Grade any matured forward predictions against the actual close."""
+    try:
+        latest = datetime.datetime.strptime(latest_date, '%Y-%m-%d').date()
+    except Exception:  # noqa
+        return
+    dates_sorted = sorted(close_by_date.keys())
+    for p in list(predictions_col.find({'resolved': False})):
+        td = p.get('target_date')
+        if not td:
+            continue
+        try:
+            tdd = datetime.datetime.strptime(td, '%Y-%m-%d').date()
+        except Exception:  # noqa
+            continue
+        if tdd > latest:
+            continue
+        ac = close_by_date.get(td)
+        if ac is None:
+            fwd = [d for d in dates_sorted if d >= td]
+            ac = close_by_date[fwd[0]] if fwd else close_by_date[dates_sorted[-1]]
+        pi = p['price_at_issue']
+        actual_dir = 'UP' if ac > pi else 'DOWN'
+        prob = p['prob_higher'] / 100.0
+        actual_up = 1 if ac > pi else 0
+        base = p.get('base') or pi
+        rng_hit = None
+        if p.get('bear') and p.get('bull'):
+            rng_hit = bool(p['bear'] <= ac <= p['bull'])
+        predictions_col.update_one({'_id': p['_id']}, {'$set': {
+            'resolved': True, 'resolved_at': datetime.datetime.utcnow().isoformat(),
+            'actual_close': round(ac, 2), 'actual_direction': actual_dir,
+            'correct': (p['direction'] == actual_dir),
+            'brier': round((prob - actual_up) ** 2, 4),
+            'abs_pct_error': round(abs(base - ac) / ac * 100, 2) if ac else None,
+            'range_hit': rng_hit,
+        }})
+
+
+def compute_scorecard():
+    resolved = list(predictions_col.find({'resolved': True}, {'_id': 0}))
+
+    def agg(items):
+        n = len(items)
+        if not n:
+            return None
+        acc = round(sum(1 for x in items if x.get('correct')) / n * 100, 1)
+        briers = [x['brier'] for x in items if x.get('brier') is not None]
+        maes = [x['abs_pct_error'] for x in items if x.get('abs_pct_error') is not None]
+        rngs = [x['range_hit'] for x in items if x.get('range_hit') is not None]
+        return {
+            'n': n, 'accuracy': acc,
+            'brier': round(sum(briers) / len(briers), 4) if briers else None,
+            'mae_pct': round(sum(maes) / len(maes), 2) if maes else None,
+            'range_hit_pct': round(sum(1 for r in rngs if r) / len(rngs) * 100, 1) if rngs else None,
+        }
+
+    overall = agg(resolved) or {'n': 0, 'accuracy': None, 'brier': None, 'mae_pct': None, 'range_hit_pct': None}
+    by_h = {}
+    for hz in ['24H', '7D', '30D', '3M', '6M', '1Y']:
+        a = agg([x for x in resolved if x.get('horizon') == hz])
+        if a:
+            by_h[hz] = a
+    # probability calibration (predicted higher% vs realised up-rate)
+    calib = []
+    for lo, hi in [(0, 40), (40, 50), (50, 60), (60, 100)]:
+        bucket = [x for x in resolved if lo <= x.get('prob_higher', 0) < hi]
+        if bucket:
+            realised = round(sum(1 for x in bucket if x.get('actual_direction') == 'UP') / len(bucket) * 100, 1)
+            calib.append({'bucket': f'{lo}-{hi}%', 'n': len(bucket),
+                          'avg_pred': round(sum(x['prob_higher'] for x in bucket) / len(bucket), 1),
+                          'realised_up': realised})
+    pending = list(predictions_col.find(
+        {'resolved': False, 'trigger': {'$ne': 'backtest'}}, {'_id': 0}).sort('target_date', 1))
+    recent = sorted([x for x in resolved if x.get('trigger') != 'backtest'],
+                    key=lambda z: z.get('resolved_at', ''), reverse=True)[:15]
+    return {
+        'overall': overall, 'by_horizon': by_h, 'calibration': calib,
+        'pending': pending[:24], 'recent': recent,
+        'total_logged': predictions_col.count_documents({}),
+        'live_logged': predictions_col.count_documents({'trigger': {'$ne': 'backtest'}}),
+        'backtested': predictions_col.count_documents({'trigger': 'backtest'}),
+        'model_version': 'rf-quant-v1',
+    }
+
+
+# ---------------------------- Event Calendar ----------------------------
+FOMC_DATES = ['2026-01-28', '2026-03-18', '2026-04-29', '2026-06-17', '2026-07-29',
+              '2026-09-16', '2026-10-28', '2026-12-09',
+              '2027-01-27', '2027-03-17', '2027-04-28', '2027-06-16']
+
+
+def compute_event_calendar(cycle, policy, window=120):
+    import calendar as _cal
+    today = datetime.datetime.utcnow().date()
+    end = today + datetime.timedelta(days=window)
+    ev = []
+
+    def add(d, cat, title, desc, imp, vol):
+        dd = datetime.datetime.strptime(d, '%Y-%m-%d').date() if isinstance(d, str) else d
+        ev.append({'date': dd.strftime('%Y-%m-%d'), 'days_until': (dd - today).days,
+                   'category': cat, 'title': title, 'description': desc,
+                   'importance': imp, 'expected_volatility': vol})
+
+    y, m = today.year, today.month
+    for _ in range(6):
+        d1 = datetime.date(y, m, 1)
+        first_fri = d1 + datetime.timedelta(days=(4 - d1.weekday()) % 7)
+        add(first_fri, 'Macro', 'US Nonfarm Payrolls',
+            'Monthly US jobs report; moves rate expectations and risk appetite.', 'High', 'Elevated')
+        try:
+            add(datetime.date(y, m, 12), 'Macro', 'US CPI Inflation (approx.)',
+                'Monthly inflation print — a strong driver of rate expectations and BTC.', 'Very High', 'High')
+        except Exception:  # noqa
+            pass
+        last_day = _cal.monthrange(y, m)[1]
+        dl = datetime.date(y, m, last_day)
+        last_fri = dl - datetime.timedelta(days=(dl.weekday() - 4) % 7)
+        if m in (3, 6, 9, 12):
+            add(last_fri, 'Derivatives', 'Quarterly Futures & Options Expiry',
+                'Large CME/Deribit quarterly expiry; elevated pinning and volatility.', 'High', 'High')
+        else:
+            add(last_fri, 'Derivatives', 'Monthly Options & Futures Expiry',
+                'Monthly BTC options/futures expiry; short-term volatility.', 'Medium', 'Elevated')
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
+    for f in FOMC_DATES:
+        fd = datetime.datetime.strptime(f, '%Y-%m-%d').date()
+        if today <= fd <= end:
+            add(f, 'Macro', 'FOMC Rate Decision',
+                'US Federal Reserve interest-rate decision & guidance — top-tier macro catalyst.',
+                'Very High', 'Very High')
+
+    anchor = datetime.date(2026, 1, 7)
+    k = 0
+    while k < 400:
+        dd = anchor + datetime.timedelta(days=14 * k)
+        k += 1
+        if dd > end:
+            break
+        if dd < today:
+            continue
+        add(dd, 'On-Chain', 'Bitcoin Difficulty Adjustment',
+            'Network retargets mining difficulty (~every 2 weeks); minor direct impact.', 'Low', 'Low')
+
+    ev = [e for e in ev if 0 <= e['days_until'] <= window]
+    ev.sort(key=lambda z: z['date'])
+    nxt = next((e for e in ev if e['importance'] in ('Very High', 'High')), None)
+    counts = {}
+    for e in ev:
+        counts[e['category']] = counts.get(e['category'], 0) + 1
+    return {'events': ev, 'window_days': window, 'next_high_impact': nxt,
+            'counts': counts, 'generated': today.strftime('%Y-%m-%d')}
+
+
 def compute():
     df, source = fetch_ohlcv()
     df = build_features(df)
@@ -1486,6 +1793,33 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
 
+    # --- Data Trust Layer (source/freshness/confidence + fade odds when stale) ---
+    data_health = None
+    try:
+        data_health = compute_data_health(source, crossmarket, policy, dominance, news_doc)
+        apply_data_fade(decision, data_health)
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    # --- Event Intelligence Calendar ---
+    event_calendar = None
+    try:
+        event_calendar = compute_event_calendar(cycle, policy)
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    # --- Prediction Ledger + public scorecard ---
+    prediction_ledger = None
+    try:
+        close_by_date = {ts.strftime('%Y-%m-%d'): float(c)
+                         for ts, c in zip(df['timestamp'], df['close'])}
+        seed_ledger_from_backtest(trades)
+        record_predictions(as_of, last_close, all_outlook, quant['regime']['regime'], source)
+        resolve_predictions(close_by_date, as_of)
+        prediction_ledger = compute_scorecard()
+    except Exception:  # noqa
+        traceback.print_exc()
+
     doc = {
         'id': str(uuid.uuid4()),
         'created_at': datetime.datetime.utcnow().isoformat(),
@@ -1520,6 +1854,9 @@ def compute():
         'factors': quant['factors'],
         'decision': decision,
         'news_forecast_link': news_forecast_link,
+        'data_health': data_health,
+        'event_calendar': event_calendar,
+        'prediction_ledger': prediction_ledger,
         'cycle': cycle,
         'dominance': dominance,
         'chart': chart,
@@ -1654,6 +1991,15 @@ def news_refresh():
 def chat_history(session_id: str):
     msgs = list(chat_col.find({'session_id': session_id}, {'_id': 0}).sort('created_at', 1))
     return {'session_id': session_id, 'messages': msgs}
+
+
+@app.get('/api/v1/scorecard')
+def scorecard():
+    try:
+        return {'status': 'ready', **compute_scorecard()}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
 
 
 @app.post('/api/v1/chat')

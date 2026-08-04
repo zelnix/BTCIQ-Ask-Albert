@@ -1,5 +1,14 @@
 const nextConfig = {
   output: 'standalone',
+  // Allow the cross-origin preview hosts to reach the dev server (/_next/* HMR etc.)
+  // Without this, Next.js 15 blocks cross-origin dev asset requests, which breaks
+  // Fast Refresh and causes the preview to reload/reset repeatedly.
+  allowedDevOrigins: [
+    '*.preview.emergentagent.com',
+    '*.preview.emergentcf.cloud',
+    '*.emergentagent.com',
+    '*.emergentcf.cloud',
+  ],
   images: {
     unoptimized: true,
     remotePatterns: [
@@ -10,18 +19,19 @@ const nextConfig = {
   serverExternalPackages: ['mongodb'],
   webpack(config, { dev }) {
     if (dev) {
-      // Reduce CPU/memory from file watching
+      // Use native file watching (avoid polling, which can trigger phantom rebuilds).
       config.watchOptions = {
-        poll: 2000, // check every 2 seconds
-        aggregateTimeout: 300, // wait before rebuilding
-        ignored: ['**/node_modules'],
+        aggregateTimeout: 300,
+        ignored: ['**/node_modules', '**/.git', '**/.next'],
       };
     }
     return config;
   },
   onDemandEntries: {
-    maxInactiveAge: 10000,
-    pagesBufferLength: 2,
+    // Keep compiled pages warm for an hour so the dev preview does not keep
+    // disposing + recompiling the page (which forces periodic HMR reloads).
+    maxInactiveAge: 60 * 60 * 1000,
+    pagesBufferLength: 5,
   },
   async headers() {
     return [
