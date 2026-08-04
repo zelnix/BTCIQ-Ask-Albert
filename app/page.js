@@ -19,6 +19,7 @@ import { Badge } from '@/components/ui/badge';
 /* ------------------------------ helpers ------------------------------ */
 const fmtUsd = (v) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v ?? 0);
+const fmtAud = (v) => 'A$' + new Intl.NumberFormat('en-AU', { maximumFractionDigits: 0 }).format(v ?? 0);
 const fmtPct = (v) => `${Number(v).toFixed(1)}%`;
 
 const CAT_COLORS = {
@@ -184,9 +185,9 @@ function DecisionEngineCard({ d }) {
   const dec = d.decision;
   if (!dec) return null;
   return (
-    <Card className="border-0 bg-gradient-to-br from-sky-500/10 via-violet-500/5 to-slate-900 p-6 ring-1 ring-sky-500/25">
+    <Card className="border-0 bg-gradient-to-br from-amber-500/[0.07] via-violet-500/[0.08] to-slate-900 p-6 ring-1 ring-violet-500/30 shadow-xl shadow-violet-950/30">
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Brain className="h-5 w-5 text-sky-400" />
+        <Brain className="h-5 w-5 text-amber-400" />
         <h3 className="text-lg font-bold text-white">Bitcoin Market State</h3>
         <span className="text-[11px] text-slate-500">Unified Decision Engine · reconciles every signal</span>
         <Badge variant="outline" className={`ml-auto border-slate-700 ${alignColor(dec.alignment)}`}>{dec.alignment}</Badge>
@@ -298,6 +299,7 @@ function OverviewSection({ d, ticker }) {
               </span>
             </div>
             <p className="mt-1 text-2xl font-bold text-white">{fmtUsd(ticker?.price ?? d.last_close)}</p>
+            {ticker?.price_aud && <p className="text-sm font-semibold text-amber-300">≈ {fmtAud(ticker.price_aud)} <span className="text-[10px] font-normal text-slate-500">AUD @ {ticker.aud_rate}</span></p>}
             <p className={`mt-1 flex items-center gap-1 text-sm font-semibold ${ch >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
               {ch >= 0 ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
               {ch}% (24h){ticker?.source ? ` · ${ticker.source}` : ''}
@@ -1184,13 +1186,17 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="flex">
+    <div className="relative min-h-screen bg-slate-950 text-slate-100">
+      <div aria-hidden className="pointer-events-none fixed inset-0 bg-[radial-gradient(55rem_38rem_at_-8%_-12%,rgba(247,147,26,0.10),transparent_58%),radial-gradient(52rem_40rem_at_112%_6%,rgba(109,94,246,0.14),transparent_55%)]" />
+      <div className="relative flex">
         {/* Sidebar */}
-        <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-800 bg-slate-900/50 p-4 md:flex">
-          <div className="mb-6 flex flex-col gap-1.5 px-1">
+        <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-900/40 p-4 backdrop-blur-sm md:flex">
+          <div className="mb-6 flex flex-col gap-1 px-1">
             <img src="/btciq-logo.png" alt="BTCIQ" className="h-11 w-auto object-contain" />
-            <p className="pl-0.5 text-[10px] text-slate-500">Powered by BitCentAI</p>
+            <p className="pl-0.5 text-[11px] font-semibold">
+              <span className="bg-gradient-to-r from-amber-400 via-sky-400 to-violet-400 bg-clip-text text-transparent">BTCIQ</span>
+              <span className="text-slate-500"> · Powered by BitCentAI</span>
+            </p>
           </div>
           <nav className="flex-1 space-y-1">
             {SECTIONS.map((s) => {
@@ -1198,7 +1204,7 @@ export default function DashboardPage() {
               const on = active === s.id;
               return (
                 <button key={s.id} onClick={() => setActive(s.id)}
-                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${on ? 'bg-sky-500/15 font-semibold text-sky-300' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'}`}>
+                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${on ? 'bg-gradient-to-r from-sky-500/20 via-violet-500/12 to-transparent font-semibold text-white ring-1 ring-sky-500/25' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'}`}>
                   <Icon className="h-4 w-4" />{s.label}
                   {s.soon && <Lock className="ml-auto h-3 w-3 text-slate-600" />}
                 </button>
@@ -1221,9 +1227,10 @@ export default function DashboardPage() {
                 <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" /></span>LIVE
               </span>
               <span className="text-lg font-bold text-white">{fmtUsd(ticker?.price ?? d.last_close)}</span>
+              {ticker?.price_aud && <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/20">≈ {fmtAud(ticker.price_aud)}</span>}
               <span className={`text-sm font-semibold ${(ticker?.change24h ?? d.day_change_pct) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ticker?.change24h ?? d.day_change_pct}%</span>
             </div>
-            <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="gap-2 bg-slate-800 text-slate-100 hover:bg-slate-700">
+            <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="gap-2 bg-gradient-to-r from-sky-500 to-violet-600 text-white shadow-lg shadow-violet-500/20 hover:from-sky-400 hover:to-violet-500">
               <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />{refreshing ? 'Retraining' : 'Retrain'}
             </Button>
           </div>

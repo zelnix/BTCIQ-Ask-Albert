@@ -64,6 +64,8 @@ except Exception:  # noqa
 
 # in-memory ticker cache (avoid hammering the exchange on every poll)
 _ticker_cache = {'data': None, 'ts': 0.0}
+# USD->AUD fx rate cache (refreshed ~30 min)
+_fx_cache = {'rate': None, 'ts': 0.0}
 
 
 def grade_pending(df):
@@ -1576,6 +1578,20 @@ def ticker():
     now = time.time()
     if _ticker_cache['data'] and (now - _ticker_cache['ts']) < 8:
         return _ticker_cache['data']
+
+    def usd_aud():
+        if _fx_cache['rate'] and (now - _fx_cache['ts']) < 1800:
+            return _fx_cache['rate']
+        try:
+            s = fetch_yahoo_series('AUD=X', '5d')
+            rate = float(s.iloc[-1])
+            if rate > 0:
+                _fx_cache['rate'] = rate
+                _fx_cache['ts'] = now
+        except Exception:  # noqa
+            traceback.print_exc()
+        return _fx_cache['rate']
+
     for name in ['kraken', 'coinbase']:
         try:
             ex = getattr(ccxt, name)({'enableRateLimit': True})
@@ -1584,8 +1600,11 @@ def ticker():
             pct = t.get('percentage')
             if pct is None and t.get('open'):
                 pct = (last - float(t['open'])) / float(t['open']) * 100
+            rate = usd_aud()
             data = {
                 'price': round(last, 2),
+                'price_aud': round(last * rate, 2) if rate else None,
+                'aud_rate': round(rate, 4) if rate else None,
                 'change24h': round(float(pct), 2) if pct is not None else 0.0,
                 'high': round(float(t.get('high') or last), 2),
                 'low': round(float(t.get('low') or last), 2),

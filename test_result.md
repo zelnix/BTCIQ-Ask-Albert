@@ -184,6 +184,9 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive test. Returns price=$63,770.10, change24h=0.49%, high=$64,183.50, low=$63,270.30, source='kraken', ts='2026-08-04T15:33:32.649292'. All fields present and valid. Tested twice 2s apart - caching working correctly (8s cache). Price in realistic BTC range. Timestamp parseable as ISO format."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED NEW AUD PRICE FEATURE validation. Ticker now returns price_aud and aud_rate fields: price=$63,900.60, price_aud=$90,713.29, aud_rate=1.4196 ✅ All validations passed: (1) price_aud is valid number > 0 ✅ (2) aud_rate in valid range 1.0-2.0 ✅ (3) price_aud ≈ price * aud_rate (diff 0.000%) ✅ (4) price_aud > price (since AUD > USD) ✅ All required fields present (price, price_aud, aud_rate, change24h, source) ✅"
   - task: "Trade Log + Scoreboard from walk-forward (dashboard.trades, dashboard.scoreboard)"
     implemented: true
     working: true
@@ -225,37 +228,46 @@ backend:
         -comment: "✅ PASSED comprehensive intelligence layer validation. All NEW fields validated: (1) quant_score=44 (integer 0-100) ✅ (2) quant_label='Weakly Bearish' (non-empty string) ✅ (3) quant_breakdown: 9 items with exactly 4 active (Trend=35%, Momentum=30%, Volume=20%, Volatility=15%) and 5 inactive (Derivatives, Liquidity, On-chain, Sentiment, Macro with score=null, weight=0) ✅ (4) regime: 'Weak Bearish Trend' with all required fields (regime, description, behavior, trend30d_pct=0.5%, vol_percentile=14) ✅ (5) forecasts: 3 items (24H, 7D, 30D) with all required fields validated - higher+lower≈100%, bull>bear, invalidation_dir logic correct (lean=UP→below, lean=DOWN→above), expiry dates valid YYYY-MM-DD format ✅ (6) factors: bullish (1 item) and risk (2 items) lists non-empty with valid strings ✅ (7) All EXISTING fields still present (signal, confidence, cv_folds, importances, performance, features, scoreboard, trades, live_record) ✅ Also verified GET /api/v1/health (compute_status='done', runs=6) ✅ and GET /api/v1/ticker (live price=$64,110.50 from Kraken) ✅ working correctly."
   - task: "Unified Decision Engine (dashboard.decision) - overall_score, regime, risk_level, alignment, components, 24H→1Y outlook, summary"
     implemented: true
-    working: "NA"
+    working: true
     file: "backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "NEW. compute_decision_engine reconciles technicals (quant_score), macro/policy (policy score), chart structure and news flow into a master Bitcoin Market State. dashboard.decision returns: overall_score (0-100), label, regime, regime_description, alignment (Strong Agreement/Conflicting/Mixed), components (4 items: Technicals w45, Macro/Policy w20, Chart Structure w20, News Flow w15), risk_level (Low→Extreme) + risk_score + risk_drivers, outlook (list across 24H/7D/30D/3M/6M/1Y each with label/higher/lower/lean/confidence/base/bull/bear/expiry/news_adjusted), summary (plain-English), news_signal, news_bias. Verified via curl: overall 48 Neutral, risk Low, 6 outlook horizons. Also dashboard.long_outlook added (3M/6M/1Y horizons, shrinkage toward 50% applied for long horizons)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. Decision object fully validated: (1) overall_score=48 (int 0-100) ✅ (2) label='Neutral' (non-empty) ✅ (3) regime='Weak Bearish Trend' (non-empty) ✅ (4) regime_description present ✅ (5) alignment='Mixed / Neutral' (non-empty) ✅ (6) components: exactly 4 items with correct names ['Technicals', 'Macro / Policy', 'Chart Structure', 'News Flow'], all with valid score (0-100) and weight (int) ✅ (7) risk_level='Low' (valid enum) ✅ (8) risk_score=8 (int 0-100) ✅ (9) risk_drivers has all required fields (volatility_percentile, event_risk, news_risk) ✅ (10) outlook: exactly 6 items with correct horizons ['24H', '7D', '30D', '3M', '6M', '1Y'], all with required fields, higher+lower≈100%, lean logic correct (UP if higher>=50) ✅ (11) summary present (792 chars) ✅ (12) news_signal=-0.163 ✅ (13) news_bias='Bearish' ✅ Also validated long_outlook: 3 items (3M, 6M, 1Y) with required fields (higher, base, bull, bear) ✅ All existing dashboard fields still present (regression test passed) ✅"
   - task: "News → Forecast Link (dashboard.news_forecast_link + forecasts[].news_link) - impact-weighted news nudges 24H/7D probabilities"
     implemented: true
-    working: "NA"
+    working: true
     file: "backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "NEW. compute_news_signal builds an impact-weighted directional signal in [-1,1] from the latest news cards. apply_news_link nudges the 24H (K=7) and 7D (K=4.5) forecast probabilities (capped ±8 pts) and attaches forecasts[].news_link = {applied, higher_base, higher_adj, lower_base, lower_adj, delta, bias, signal, top_driver}; also sets forecasts[].higher_adj/lower_adj. dashboard.news_forecast_link summarises {signal, bias, n_high_impact, n_stories, top_driver, top_driver_dir, model_bias, applied:[{horizon,base,adj,delta}]}. Verified via curl: signal=-0.163 Bearish, 24H 45.7%→44.6% (-1.1), 7D 48.2%→47.5% (-0.7). Only 24H/7D get news_link; 30D unchanged."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. News→Forecast Link fully validated: (1) dashboard.news_forecast_link present with all required fields (signal, bias, n_high_impact, n_stories, top_driver, top_driver_dir, model_bias, applied) ✅ (2) signal=-0.163 (valid range -1..1) ✅ (3) applied list has 2 items (24H, 7D) with required fields (horizon, base, adj, delta) ✅ (4) 24H forecast has news_link object with all required fields (applied, higher_base, higher_adj, lower_base, lower_adj, delta, bias, signal, top_driver) ✅ (5) 24H has higher_adj=45.0 and lower_adj=55.0 fields ✅ (6) 24H adjustment logic validated: higher_adj ≈ clamp(higher_base + delta) = clamp(46.1 + -1.1) = 45.0 ✅ (7) 24H lower_adj ≈ 100 - higher_adj (55.0 ≈ 100 - 45.0) ✅ (8) 7D forecast has news_link with all required fields ✅ (9) 7D has higher_adj=47.2 and lower_adj=52.8 ✅ (10) 7D adjustment logic validated: higher_adj ≈ clamp(47.9 + -0.7) = 47.2 ✅ (11) 7D lower_adj ≈ 100 - higher_adj ✅ (12) 30D forecast correctly does NOT have news_link ✅ All math and logic checks passed."
   - task: "Ask Quant chat (POST /api/v1/chat, GET /api/v1/chat/history) - Gemini 3 Flash grounded in live dashboard data"
     implemented: true
-    working: "NA"
+    working: true
     file: "backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "NEW. POST /api/v1/chat {session_id, message} builds a grounded system prompt from build_chat_context() (latest run + news docs: score, regime, decision, forecasts, long_outlook, factors, policy, dominance, cycle, chart, scoreboard, top news) and calls Gemini via emergentintegrations LlmChat with model CHAT_MODEL='gemini-3-flash-preview' (verified available on the Emergent gateway). Stores each Q&A in ask_quant_chat collection; replays last 5 turns for multi-turn memory. Returns {session_id, text, model}. GET /api/v1/chat/history?session_id returns stored messages. Verified via curl: grounded answer with correct score, multi-turn memory recalled prior score, and anti-hallucination (declined to predict an exact Christmas price / Ethereum gas not in data). Empty message returns friendly error."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. Ask Quant chat fully validated: (1) POST /api/v1/chat basic functionality: returns HTTP 200 with {session_id, text (non-empty, 502 chars), model='gemini-3-flash-preview'} ✅ Response correctly answered question about quant score (46/100) and 7-day outlook (52.8% lower) ✅ (2) Multi-turn memory: follow-up question 'what score did you just tell me?' correctly referenced prior conversation (mentioned score 46/100 and additional context) ✅ (3) Anti-hallucination: request for exact Christmas BTC price and ETH gas fee correctly declined with 'I do not have the data' response ✅ (4) Empty message handling: returns friendly error {error: 'empty message', text: 'Please type a question.'} without crashing ✅ (5) GET /api/v1/chat/history: returns {session_id, messages: [...]} with 2+ messages from earlier turns, all with 'user' and 'assistant' fields ✅ All chat scenarios passed including grounding, memory, anti-hallucination, and error handling."
 
 frontend:
   - task: "Quant dashboard UI (signal card, dual-axis Recharts chart, feature matrix, importance, CV folds)"
@@ -273,7 +285,7 @@ frontend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 4
+  test_sequence: 5
   run_ui: false
 
 test_plan:
@@ -451,3 +463,56 @@ agent_communication:
       
       NO CRITICAL ISSUES FOUND. All intelligence layer fields working as expected with real data.
       Data is REAL (ccxt Kraken). All validations passed including type checks, range checks, logic checks, and format validations.
+    -agent: "testing"
+    -message: |
+      ✅ ALL NEW BACKEND FEATURES TESTED AND PASSED (4/4 + REGRESSION)
+      
+      Completed comprehensive testing of ALL new features via external URL (https://quant-features.preview.emergentagent.com/api/v1/*):
+      
+      FEATURE 1 - Decision Engine (dashboard.decision) - ✅ PASSED
+      - Validated all 13 required fields: overall_score (48, int 0-100), label ('Neutral'), regime ('Weak Bearish Trend'), 
+        regime_description, alignment ('Mixed / Neutral'), components (4 items with correct names), risk_level ('Low'), 
+        risk_score (8), risk_drivers (3 fields), outlook (6 items: 24H/7D/30D/3M/6M/1Y), summary (792 chars), 
+        news_signal (-0.163), news_bias ('Bearish')
+      - All outlook items validated: higher+lower≈100%, lean logic correct (UP if higher>=50)
+      - Also validated long_outlook: 3 items (3M/6M/1Y) with required fields
+      
+      FEATURE 2 - News→Forecast Link - ✅ PASSED
+      - dashboard.news_forecast_link validated: signal=-0.163 (range -1..1), all 8 required fields present
+      - 24H forecast: has news_link with all 9 required fields, higher_adj=45.0 ≈ clamp(46.1 + -1.1), lower_adj=55.0 ≈ 100-45.0
+      - 7D forecast: has news_link with all required fields, higher_adj=47.2 ≈ clamp(47.9 + -0.7), lower_adj=52.8 ≈ 100-47.2
+      - 30D forecast: correctly does NOT have news_link
+      - All adjustment math validated
+      
+      FEATURE 3 - Ask Quant Chat - ✅ PASSED (5 scenarios)
+      - Basic: POST /api/v1/chat returns {session_id, text (502 chars), model='gemini-3-flash-preview'}, correctly answered quant score question
+      - Multi-turn memory: follow-up question correctly referenced prior conversation
+      - Anti-hallucination: correctly declined to provide unavailable data (Christmas price, ETH gas)
+      - Empty message: returns friendly error without crashing
+      - History: GET /api/v1/chat/history returns stored messages with correct structure
+      
+      FEATURE 4 - Ticker AUD Price - ✅ PASSED
+      - GET /api/v1/ticker now returns price_aud=$90,713.29 and aud_rate=1.4196
+      - Validated: price_aud ≈ price * aud_rate (diff 0.000%), price_aud > price (AUD > USD), aud_rate in range 1.0-2.0
+      
+      REGRESSION - ✅ PASSED
+      - GET /api/v1/health: status='ok', compute_status='idle', runs=11
+      - GET /api/v1/dashboard: all 21 existing fields still present (signal, confidence, prob_up, prob_down, forecasts, 
+        scoreboard, trades, quant_score, quant_label, quant_breakdown, regime, factors, importances, performance, 
+        features, policy, dominance, chart, cycle, alerts)
+      
+      TEST SUMMARY: 11/11 tests passed
+      - health (regression)
+      - ticker (AUD price feature)
+      - dashboard_decision (feature 1)
+      - dashboard_news_link (feature 2)
+      - dashboard_long_outlook
+      - dashboard_regression
+      - chat_basic (feature 3)
+      - chat_memory (feature 3)
+      - chat_anti_hallucination (feature 3)
+      - chat_empty_message (feature 3)
+      - chat_history (feature 3)
+      
+      NO CRITICAL ISSUES FOUND. All backend features working as expected with real data (ccxt Kraken).
+      WebSockets NOT tested (as instructed).
