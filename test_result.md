@@ -268,6 +268,48 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive validation via external URL. Ask Quant chat fully validated: (1) POST /api/v1/chat basic functionality: returns HTTP 200 with {session_id, text (non-empty, 502 chars), model='gemini-3-flash-preview'} ✅ Response correctly answered question about quant score (46/100) and 7-day outlook (52.8% lower) ✅ (2) Multi-turn memory: follow-up question 'what score did you just tell me?' correctly referenced prior conversation (mentioned score 46/100 and additional context) ✅ (3) Anti-hallucination: request for exact Christmas BTC price and ETH gas fee correctly declined with 'I do not have the data' response ✅ (4) Empty message handling: returns friendly error {error: 'empty message', text: 'Please type a question.'} without crashing ✅ (5) GET /api/v1/chat/history: returns {session_id, messages: [...]} with 2+ messages from earlier turns, all with 'user' and 'assistant' fields ✅ All chat scenarios passed including grounding, memory, anti-hallucination, and error handling."
+  - task: "Data Trust Layer (dashboard.data_health + decision.data_trust) - feed health monitoring + odds fading"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW ENGINE 1. compute_data_health monitors 6 data feeds (price, dominance, crossmarket, policy, news, fx) and returns score 0-100, level (High/Good/Degraded/Low), live/degraded/stale counts, faded bool, note, checked_at, feeds list. apply_data_fade adds decision.data_trust {score, level, faded} and decision.odds_faded; when faded=True, shrinks outlook probabilities toward 50% and flags them. Normally all 6 feeds live with score ~97."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. ENGINE 1 - Data Trust Layer fully validated: (1) data_health object present with all 9 required fields (score, level, live, degraded, stale, faded, note, checked_at, feeds) ✅ (2) score=97 (int 0-100) ✅ (3) level='High' (valid enum) ✅ (4) Counts: live=6, degraded=0, stale=0 (all valid ints >=0) ✅ (5) faded=False (bool) ✅ (6) note present (58 chars, non-empty string) ✅ (7) checked_at valid ISO format ✅ (8) feeds: exactly 6 items, all validated with required fields (id, label, provider, status in [live,degraded,stale,down], updated, age_min, confidence 0-100, methodology) ✅ (9) Live feeds: 6/6 (expected normally all 6) ✅ (10) Score 97 is healthy (>=90, expected ~97) ✅ (11) decision.data_trust present with score=97, level='High', faded=False ✅ (12) decision.odds_faded=False (bool) ✅ (13) When faded=False, no outlook items have 'faded' flag (odds not shrunk) ✅ All validations passed. Data is REAL (ccxt Kraken)."
+  - task: "Prediction Ledger + Scorecard (dashboard.prediction_ledger + GET /api/v1/scorecard) - immutable forecast log + performance tracking"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW ENGINE 2. record_predictions logs every horizon forecast (24H/7D/30D/3M/6M/1Y) BEFORE outcome known (idempotent per as_of+horizon). resolve_predictions grades matured forecasts against actual close. compute_scorecard returns overall {n, accuracy, brier, mae_pct, range_hit_pct}, by_horizon (dict), calibration (list of buckets), pending (list), recent (list), total_logged, live_logged, backtested (~500 from walk-forward seed), model_version='rf-quant-v1'. GET /api/v1/scorecard endpoint returns same structure with status='ready'."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. ENGINE 2 - Prediction Ledger + Scorecard fully validated: (1) dashboard.prediction_ledger present with all 9 required fields ✅ (2) overall: n=500 (total resolved), accuracy=46.0%, brier=0.2632, mae_pct=None, range_hit_pct=None - all valid ✅ (3) by_horizon: dict with key '24H' containing n/accuracy/brier ✅ (4) calibration: 4 buckets, each with bucket/n/avg_pred/realised_up ✅ (5) pending: 6 predictions, each with horizon/direction (UP/DOWN)/prob_higher/target_date ✅ (6) recent: 0 predictions (list) ✅ (7) total_logged=506 (int >0) ✅ (8) live_logged=6 (int >=0) ✅ (9) backtested=500 (expected ~500 from walk-forward seed) ✅ (10) model_version='rf-quant-v1' ✅ (11) GET /api/v1/scorecard returns status='ready' with all required fields ✅ (12) Scorecard numbers match dashboard prediction_ledger (total_logged=506, backtested=500) ✅ Minor: overall.n=500 != total_logged=506 (may include unresolved). All validations passed. Data is REAL."
+  - task: "Event Intelligence Calendar (dashboard.event_calendar) - 120-day forward event window with macro/derivatives/on-chain events"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW ENGINE 3. compute_event_calendar generates a 120-day forward calendar with macro events (CPI, NFP, FOMC), derivatives expiries (monthly/quarterly), on-chain events (difficulty adjustments). Returns window_days (==120), generated (date str), counts (dict of category->count), events (list sorted ascending by date), next_high_impact (object or null). Each event has: date (YYYY-MM-DD), days_until (0-120), category (Macro/Derivatives/On-Chain/Regulatory), title, description, importance (Low/Medium/High/Very High), expected_volatility (Low/Elevated/High/Very High). next_high_impact must have importance in [High, Very High]."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. ENGINE 3 - Event Intelligence Calendar fully validated: (1) event_calendar object present with all 5 required fields (window_days, generated, counts, events, next_high_impact) ✅ (2) window_days=120 ✅ (3) generated='2026-08-04' (valid YYYY-MM-DD) ✅ (4) counts: {'On-Chain': 9, 'Macro': 10, 'Derivatives': 4} (dict) ✅ (5) events: 23 items (non-empty list) ✅ (6) All events validated (checked first 10): each has 7 required fields (date, days_until, category, title, description, importance, expected_volatility) ✅ (7) date format YYYY-MM-DD validated ✅ (8) days_until: int 0-120 ✅ (9) category in [Macro,Derivatives,On-Chain,Regulatory] ✅ (10) title and description: non-empty strings ✅ (11) importance in [Low,Medium,High,Very High] ✅ (12) expected_volatility in [Low,Elevated,High,Very High] ✅ (13) Events sorted ascending by date ✅ (14) next_high_impact: 'US Nonfarm Payrolls' with importance='High' (valid enum [High,Very High]) ✅ All validations passed. Data is REAL."
 
 frontend:
   - task: "Quant dashboard UI (signal card, dual-axis Recharts chart, feature matrix, importance, CV folds)"
@@ -290,9 +332,9 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Unified Decision Engine (dashboard.decision) - overall_score, regime, risk_level, alignment, components, 24H→1Y outlook, summary"
-    - "News → Forecast Link (dashboard.news_forecast_link + forecasts[].news_link) - impact-weighted news nudges 24H/7D probabilities"
-    - "Ask Quant chat (POST /api/v1/chat, GET /api/v1/chat/history) - Gemini 3 Flash grounded in live dashboard data"
+    - "Data Trust Layer (dashboard.data_health + decision.data_trust)"
+    - "Prediction Ledger + Scorecard (dashboard.prediction_ledger + GET /api/v1/scorecard)"
+    - "Event Intelligence Calendar (dashboard.event_calendar)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"

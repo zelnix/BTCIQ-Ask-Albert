@@ -1,857 +1,756 @@
 #!/usr/bin/env python3
 """
-Comprehensive Backend Test for BTCIQ Dashboard
-Tests all new features: Decision Engine, News→Forecast Link, Ask Quant Chat, Ticker AUD
+Backend Test Suite for BTCIQ Dashboard - Three New Engines
+Tests via external base URL + /api/v1/... (real browser path)
 """
 import requests
-import json
 import sys
-import time
+from datetime import datetime
 
-BASE_URL = "https://quant-features.preview.emergentagent.com/api/v1"
+# External base URL from .env
+BASE_URL = "https://quant-features.preview.emergentagent.com"
 
-def log_pass(msg):
-    print(f"✅ PASS: {msg}")
-
-def log_fail(msg):
-    print(f"❌ FAIL: {msg}")
+def test_engine_1_data_trust_layer():
+    """ENGINE 1: Data Trust Layer (GET /api/v1/dashboard)"""
+    print("\n" + "="*80)
+    print("ENGINE 1 - DATA TRUST LAYER")
+    print("="*80)
     
-def log_info(msg):
-    print(f"ℹ️  INFO: {msg}")
-
-def test_health():
-    """Regression: GET /api/v1/health"""
-    print("\n" + "="*80)
-    print("TEST: GET /api/v1/health (REGRESSION)")
-    print("="*80)
     try:
-        r = requests.get(f"{BASE_URL}/health", timeout=15)
-        if r.status_code != 200:
-            log_fail(f"Health endpoint returned {r.status_code}")
-            return False
-        data = r.json()
-        log_info(f"Response: {json.dumps(data, indent=2)}")
+        url = f"{BASE_URL}/api/v1/dashboard"
+        print(f"Testing: GET {url}")
+        resp = requests.get(url, timeout=30)
         
-        # Validate required fields
-        if data.get('status') != 'ok':
-            log_fail(f"status is not 'ok': {data.get('status')}")
+        if resp.status_code != 200:
+            print(f"❌ FAILED: HTTP {resp.status_code}")
             return False
-        log_pass("status = 'ok'")
         
-        if 'compute_status' not in data:
-            log_fail("compute_status field missing")
+        data = resp.json()
+        
+        # Validate data_health object
+        if 'data_health' not in data:
+            print("❌ FAILED: Missing 'data_health' field")
             return False
-        log_pass(f"compute_status = '{data['compute_status']}'")
         
-        if 'runs' not in data or not isinstance(data['runs'], int) or data['runs'] < 1:
-            log_fail(f"runs field invalid: {data.get('runs')}")
-            return False
-        log_pass(f"runs = {data['runs']} (>= 1)")
+        dh = data['data_health']
+        print(f"\n✓ data_health object present")
         
-        log_pass("GET /api/v1/health - ALL CHECKS PASSED")
-        return True
-    except Exception as e:
-        log_fail(f"Health test exception: {e}")
-        return False
-
-def test_ticker():
-    """FEATURE 4: GET /api/v1/ticker - validate price_aud field"""
-    print("\n" + "="*80)
-    print("TEST: GET /api/v1/ticker (FEATURE 4 - AUD PRICE)")
-    print("="*80)
-    try:
-        r = requests.get(f"{BASE_URL}/ticker", timeout=15)
-        if r.status_code != 200:
-            log_fail(f"Ticker endpoint returned {r.status_code}")
-            return False
-        data = r.json()
-        log_info(f"Response: {json.dumps(data, indent=2)}")
-        
-        # Validate required fields
-        required = ['price', 'price_aud', 'aud_rate', 'change24h', 'source']
-        for field in required:
-            if field not in data:
-                log_fail(f"Missing required field: {field}")
+        # Validate top-level fields
+        required_fields = ['score', 'level', 'live', 'degraded', 'stale', 'faded', 'note', 'checked_at', 'feeds']
+        for field in required_fields:
+            if field not in dh:
+                print(f"❌ FAILED: Missing data_health.{field}")
                 return False
-        log_pass(f"All required fields present: {required}")
+        print(f"✓ All required top-level fields present")
         
-        # Validate price
-        price = data['price']
-        if not isinstance(price, (int, float)) or price <= 0:
-            log_fail(f"Invalid price: {price}")
+        # Validate score
+        score = dh['score']
+        if not isinstance(score, int) or not (0 <= score <= 100):
+            print(f"❌ FAILED: score={score} not int 0-100")
             return False
-        log_pass(f"price = ${price:,.2f} (valid number > 0)")
+        print(f"✓ score={score} (valid int 0-100)")
         
-        # Validate price_aud (NEW FEATURE)
-        price_aud = data['price_aud']
-        if price_aud is None:
-            log_fail("price_aud is None (should be a number)")
+        # Validate level
+        level = dh['level']
+        if level not in ['High', 'Good', 'Degraded', 'Low']:
+            print(f"❌ FAILED: level='{level}' not in [High,Good,Degraded,Low]")
             return False
-        if not isinstance(price_aud, (int, float)) or price_aud <= 0:
-            log_fail(f"Invalid price_aud: {price_aud}")
-            return False
-        log_pass(f"price_aud = ${price_aud:,.2f} (valid number > 0)")
+        print(f"✓ level='{level}' (valid enum)")
         
-        # Validate aud_rate
-        aud_rate = data['aud_rate']
-        if aud_rate is None:
-            log_fail("aud_rate is None (should be a number)")
+        # Validate counts
+        live = dh['live']
+        degraded = dh['degraded']
+        stale = dh['stale']
+        if not all(isinstance(x, int) and x >= 0 for x in [live, degraded, stale]):
+            print(f"❌ FAILED: Invalid counts: live={live}, degraded={degraded}, stale={stale}")
             return False
-        if not isinstance(aud_rate, (int, float)) or aud_rate <= 0:
-            log_fail(f"Invalid aud_rate: {aud_rate}")
-            return False
-        # AUD rate should be around 1.3-1.7 (AUD is weaker than USD)
-        if not (1.0 < aud_rate < 2.0):
-            log_fail(f"aud_rate {aud_rate} outside expected range 1.0-2.0")
-            return False
-        log_pass(f"aud_rate = {aud_rate} (valid, in range 1.0-2.0)")
+        print(f"✓ Counts: live={live}, degraded={degraded}, stale={stale}")
         
-        # Validate price_aud ≈ price * aud_rate
-        expected_aud = price * aud_rate
-        diff_pct = abs(price_aud - expected_aud) / expected_aud * 100
-        if diff_pct > 1.0:
-            log_fail(f"price_aud ({price_aud}) != price * aud_rate ({expected_aud:.2f}), diff {diff_pct:.2f}%")
+        # Validate faded
+        faded = dh['faded']
+        if not isinstance(faded, bool):
+            print(f"❌ FAILED: faded={faded} not bool")
             return False
-        log_pass(f"price_aud ≈ price * aud_rate (diff {diff_pct:.3f}%)")
+        print(f"✓ faded={faded} (bool)")
         
-        # Validate price_aud > price (since AUD > USD)
-        if price_aud <= price:
-            log_fail(f"price_aud ({price_aud}) should be > price ({price}) since AUD > USD")
+        # Validate note
+        note = dh['note']
+        if not isinstance(note, str) or not note:
+            print(f"❌ FAILED: note is empty or not string")
             return False
-        log_pass(f"price_aud (${price_aud:,.2f}) > price (${price:,.2f}) ✓")
+        print(f"✓ note present ({len(note)} chars)")
         
-        # Validate change24h
-        if not isinstance(data['change24h'], (int, float)):
-            log_fail(f"Invalid change24h: {data['change24h']}")
+        # Validate checked_at
+        checked_at = dh['checked_at']
+        try:
+            datetime.fromisoformat(checked_at.replace('Z', ''))
+            print(f"✓ checked_at='{checked_at}' (valid ISO format)")
+        except Exception:
+            print(f"❌ FAILED: checked_at='{checked_at}' not valid ISO format")
             return False
-        log_pass(f"change24h = {data['change24h']}%")
         
-        # Validate source
-        if data['source'] not in ['kraken', 'coinbase']:
-            log_fail(f"Invalid source: {data['source']}")
+        # Validate feeds (must be exactly 6)
+        feeds = dh['feeds']
+        if not isinstance(feeds, list) or len(feeds) != 6:
+            print(f"❌ FAILED: feeds has {len(feeds)} items, expected exactly 6")
             return False
-        log_pass(f"source = '{data['source']}'")
+        print(f"✓ feeds list has exactly 6 items")
         
-        log_pass("GET /api/v1/ticker - ALL CHECKS PASSED")
-        return True
-    except Exception as e:
-        log_fail(f"Ticker test exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def test_dashboard_decision():
-    """FEATURE 1: GET /api/v1/dashboard - validate decision object"""
-    print("\n" + "="*80)
-    print("TEST: GET /api/v1/dashboard - DECISION ENGINE (FEATURE 1)")
-    print("="*80)
-    try:
-        r = requests.get(f"{BASE_URL}/dashboard", timeout=20)
-        if r.status_code != 200:
-            log_fail(f"Dashboard endpoint returned {r.status_code}")
-            return False
-        data = r.json()
+        # Validate each feed
+        feed_required = ['id', 'label', 'provider', 'status', 'updated', 'age_min', 'confidence', 'methodology']
+        for i, feed in enumerate(feeds):
+            for field in feed_required:
+                if field not in feed:
+                    print(f"❌ FAILED: feeds[{i}] missing '{field}'")
+                    return False
+            
+            # Validate feed fields
+            if not isinstance(feed['id'], str) or not feed['id']:
+                print(f"❌ FAILED: feeds[{i}].id invalid")
+                return False
+            
+            if not isinstance(feed['label'], str) or not feed['label']:
+                print(f"❌ FAILED: feeds[{i}].label invalid")
+                return False
+            
+            if not isinstance(feed['provider'], str) or not feed['provider']:
+                print(f"❌ FAILED: feeds[{i}].provider invalid")
+                return False
+            
+            if feed['status'] not in ['live', 'degraded', 'stale', 'down']:
+                print(f"❌ FAILED: feeds[{i}].status='{feed['status']}' not in [live,degraded,stale,down]")
+                return False
+            
+            if not isinstance(feed['confidence'], int) or not (0 <= feed['confidence'] <= 100):
+                print(f"❌ FAILED: feeds[{i}].confidence={feed['confidence']} not int 0-100")
+                return False
+            
+            if not isinstance(feed['methodology'], str) or not feed['methodology']:
+                print(f"❌ FAILED: feeds[{i}].methodology invalid")
+                return False
         
-        if data.get('status') != 'ready':
-            log_fail(f"Dashboard status is not 'ready': {data.get('status')}")
-            return False
-        log_pass("status = 'ready'")
+        print(f"✓ All 6 feeds validated successfully")
         
-        # Validate decision object exists
+        # Expected: normally all feeds 'live' and score ~97
+        live_feeds = sum(1 for f in feeds if f['status'] == 'live')
+        print(f"✓ Live feeds: {live_feeds}/6 (expected: normally all 6)")
+        if score >= 90:
+            print(f"✓ Score {score} is healthy (>=90)")
+        else:
+            print(f"⚠ Minor: Score {score} is below 90 (expected ~97 normally)")
+        
+        # Validate decision.data_trust
         if 'decision' not in data:
-            log_fail("decision object missing from dashboard")
+            print("❌ FAILED: Missing 'decision' field")
             return False
-        log_pass("decision object present")
         
         decision = data['decision']
-        log_info(f"Decision keys: {list(decision.keys())}")
+        if 'data_trust' not in decision:
+            print("❌ FAILED: Missing 'decision.data_trust' field")
+            return False
         
-        # Validate overall_score
-        if 'overall_score' not in decision:
-            log_fail("decision.overall_score missing")
-            return False
-        score = decision['overall_score']
-        if not isinstance(score, int) or not (0 <= score <= 100):
-            log_fail(f"overall_score invalid: {score} (should be int 0-100)")
-            return False
-        log_pass(f"overall_score = {score} (int 0-100)")
+        dt = decision['data_trust']
+        print(f"\n✓ decision.data_trust object present")
         
-        # Validate label
-        if 'label' not in decision or not decision['label']:
-            log_fail("decision.label missing or empty")
+        # Validate data_trust fields
+        if 'score' not in dt or 'level' not in dt or 'faded' not in dt:
+            print(f"❌ FAILED: decision.data_trust missing required fields")
             return False
-        log_pass(f"label = '{decision['label']}' (non-empty)")
         
-        # Validate regime
-        if 'regime' not in decision or not decision['regime']:
-            log_fail("decision.regime missing or empty")
+        if not isinstance(dt['score'], int) or not (0 <= dt['score'] <= 100):
+            print(f"❌ FAILED: decision.data_trust.score={dt['score']} not int 0-100")
             return False
-        log_pass(f"regime = '{decision['regime']}' (non-empty)")
         
-        # Validate regime_description
-        if 'regime_description' not in decision or not decision['regime_description']:
-            log_fail("decision.regime_description missing or empty")
+        if dt['level'] not in ['High', 'Good', 'Degraded', 'Low']:
+            print(f"❌ FAILED: decision.data_trust.level='{dt['level']}' invalid")
             return False
-        log_pass(f"regime_description present (len={len(decision['regime_description'])})")
         
-        # Validate alignment
-        if 'alignment' not in decision or not decision['alignment']:
-            log_fail("decision.alignment missing or empty")
+        if not isinstance(dt['faded'], bool):
+            print(f"❌ FAILED: decision.data_trust.faded={dt['faded']} not bool")
             return False
-        log_pass(f"alignment = '{decision['alignment']}' (non-empty)")
         
-        # Validate components (should be exactly 4)
-        if 'components' not in decision:
-            log_fail("decision.components missing")
-            return False
-        components = decision['components']
-        if not isinstance(components, list) or len(components) != 4:
-            log_fail(f"components should be list of 4 items, got {len(components)}")
-            return False
-        log_pass(f"components has exactly 4 items")
+        print(f"✓ decision.data_trust: score={dt['score']}, level='{dt['level']}', faded={dt['faded']}")
         
-        # Validate component names
-        expected_names = ['Technicals', 'Macro / Policy', 'Chart Structure', 'News Flow']
-        actual_names = [c['name'] for c in components]
-        if actual_names != expected_names:
-            log_fail(f"Component names mismatch. Expected {expected_names}, got {actual_names}")
+        # Validate decision.odds_faded
+        if 'odds_faded' not in decision:
+            print("❌ FAILED: Missing 'decision.odds_faded' field")
             return False
-        log_pass(f"Component names correct: {actual_names}")
         
-        # Validate each component
-        for comp in components:
-            if 'score' not in comp or not isinstance(comp['score'], int) or not (0 <= comp['score'] <= 100):
-                log_fail(f"Component {comp.get('name')} has invalid score: {comp.get('score')}")
+        if not isinstance(decision['odds_faded'], bool):
+            print(f"❌ FAILED: decision.odds_faded={decision['odds_faded']} not bool")
+            return False
+        
+        print(f"✓ decision.odds_faded={decision['odds_faded']} (bool)")
+        
+        # When faded=False, outlook items should NOT have 'faded' flag
+        if not faded:
+            outlook = decision.get('outlook', [])
+            faded_items = [o for o in outlook if o.get('faded')]
+            if faded_items:
+                print(f"❌ FAILED: data_health.faded=False but {len(faded_items)} outlook items have 'faded' flag")
                 return False
-            if 'weight' not in comp or not isinstance(comp['weight'], int):
-                log_fail(f"Component {comp.get('name')} has invalid weight: {comp.get('weight')}")
-                return False
-        log_pass("All components have valid score (0-100) and weight (int)")
+            print(f"✓ data_health.faded=False and no outlook items are shrunk (no 'faded' flag)")
+        else:
+            print(f"⚠ data_health.faded=True - odds are faded")
         
-        # Validate risk_level
-        if 'risk_level' not in decision:
-            log_fail("decision.risk_level missing")
-            return False
-        risk_level = decision['risk_level']
-        valid_levels = ['Low', 'Moderate', 'Elevated', 'High', 'Extreme']
-        if risk_level not in valid_levels:
-            log_fail(f"risk_level '{risk_level}' not in {valid_levels}")
-            return False
-        log_pass(f"risk_level = '{risk_level}' (valid)")
-        
-        # Validate risk_score
-        if 'risk_score' not in decision:
-            log_fail("decision.risk_score missing")
-            return False
-        risk_score = decision['risk_score']
-        if not isinstance(risk_score, int) or not (0 <= risk_score <= 100):
-            log_fail(f"risk_score invalid: {risk_score} (should be int 0-100)")
-            return False
-        log_pass(f"risk_score = {risk_score} (int 0-100)")
-        
-        # Validate risk_drivers
-        if 'risk_drivers' not in decision:
-            log_fail("decision.risk_drivers missing")
-            return False
-        risk_drivers = decision['risk_drivers']
-        required_drivers = ['volatility_percentile', 'event_risk', 'news_risk']
-        for driver in required_drivers:
-            if driver not in risk_drivers:
-                log_fail(f"risk_drivers.{driver} missing")
-                return False
-        log_pass(f"risk_drivers has all required fields: {required_drivers}")
-        
-        # Validate outlook (should be 6 items: 24H, 7D, 30D, 3M, 6M, 1Y)
-        if 'outlook' not in decision:
-            log_fail("decision.outlook missing")
-            return False
-        outlook = decision['outlook']
-        if not isinstance(outlook, list) or len(outlook) != 6:
-            log_fail(f"outlook should be list of 6 items, got {len(outlook)}")
-            return False
-        log_pass(f"outlook has exactly 6 items")
-        
-        # Validate outlook horizons
-        expected_horizons = ['24H', '7D', '30D', '3M', '6M', '1Y']
-        actual_horizons = [o['horizon'] for o in outlook]
-        if actual_horizons != expected_horizons:
-            log_fail(f"Outlook horizons mismatch. Expected {expected_horizons}, got {actual_horizons}")
-            return False
-        log_pass(f"Outlook horizons correct: {actual_horizons}")
-        
-        # Validate each outlook item
-        for o in outlook:
-            required_fields = ['label', 'higher', 'lower', 'lean', 'confidence', 'base', 'bull', 'bear', 'expiry', 'news_adjusted']
-            for field in required_fields:
-                if field not in o:
-                    log_fail(f"Outlook {o['horizon']} missing field: {field}")
-                    return False
-            
-            # Validate higher + lower ≈ 100
-            if abs(o['higher'] + o['lower'] - 100) > 0.2:
-                log_fail(f"Outlook {o['horizon']}: higher ({o['higher']}) + lower ({o['lower']}) != 100")
-                return False
-            
-            # Validate lean
-            if o['lean'] not in ['UP', 'DOWN']:
-                log_fail(f"Outlook {o['horizon']}: lean '{o['lean']}' not in ['UP', 'DOWN']")
-                return False
-            
-            # Validate lean logic: UP if higher >= 50
-            expected_lean = 'UP' if o['higher'] >= 50 else 'DOWN'
-            if o['lean'] != expected_lean:
-                log_fail(f"Outlook {o['horizon']}: lean '{o['lean']}' doesn't match higher={o['higher']} (expected '{expected_lean}')")
-                return False
-        
-        log_pass("All outlook items have required fields and valid values")
-        
-        # Validate summary
-        if 'summary' not in decision or not decision['summary']:
-            log_fail("decision.summary missing or empty")
-            return False
-        log_pass(f"summary present (len={len(decision['summary'])})")
-        
-        # Validate news_signal
-        if 'news_signal' not in decision:
-            log_fail("decision.news_signal missing")
-            return False
-        log_pass(f"news_signal = {decision['news_signal']}")
-        
-        # Validate news_bias
-        if 'news_bias' not in decision:
-            log_fail("decision.news_bias missing")
-            return False
-        log_pass(f"news_bias = '{decision['news_bias']}'")
-        
-        log_pass("GET /api/v1/dashboard - DECISION ENGINE - ALL CHECKS PASSED")
+        print(f"\n✅ ENGINE 1 PASSED - Data Trust Layer validated successfully")
         return True
+        
     except Exception as e:
-        log_fail(f"Dashboard decision test exception: {e}")
+        print(f"❌ FAILED: Exception: {e}")
         import traceback
         traceback.print_exc()
         return False
 
-def test_dashboard_news_link():
-    """FEATURE 2: News→Forecast Link"""
+
+def test_engine_2_prediction_ledger():
+    """ENGINE 2: Prediction Ledger + Scorecard"""
     print("\n" + "="*80)
-    print("TEST: GET /api/v1/dashboard - NEWS→FORECAST LINK (FEATURE 2)")
+    print("ENGINE 2 - PREDICTION LEDGER + SCORECARD")
     print("="*80)
+    
     try:
-        r = requests.get(f"{BASE_URL}/dashboard", timeout=20)
-        if r.status_code != 200:
-            log_fail(f"Dashboard endpoint returned {r.status_code}")
+        # Test 1: GET /api/v1/dashboard -> validate prediction_ledger
+        url = f"{BASE_URL}/api/v1/dashboard"
+        print(f"\nTest 2.1: GET {url}")
+        resp = requests.get(url, timeout=30)
+        
+        if resp.status_code != 200:
+            print(f"❌ FAILED: HTTP {resp.status_code}")
             return False
-        data = r.json()
         
-        # Validate news_forecast_link exists
-        if 'news_forecast_link' not in data:
-            log_fail("news_forecast_link missing from dashboard")
+        data = resp.json()
+        
+        if 'prediction_ledger' not in data:
+            print("❌ FAILED: Missing 'prediction_ledger' field")
             return False
-        log_pass("news_forecast_link present")
         
-        nfl = data['news_forecast_link']
-        log_info(f"news_forecast_link keys: {list(nfl.keys())}")
+        pl = data['prediction_ledger']
+        print(f"✓ prediction_ledger object present")
         
-        # Validate news_forecast_link fields
-        required_fields = ['signal', 'bias', 'n_high_impact', 'n_stories', 'top_driver', 'top_driver_dir', 'model_bias', 'applied']
+        # Validate required fields
+        required_fields = ['overall', 'by_horizon', 'calibration', 'pending', 'recent', 
+                          'total_logged', 'live_logged', 'backtested', 'model_version']
         for field in required_fields:
-            if field not in nfl:
-                log_fail(f"news_forecast_link.{field} missing")
+            if field not in pl:
+                print(f"❌ FAILED: Missing prediction_ledger.{field}")
                 return False
-        log_pass(f"news_forecast_link has all required fields: {required_fields}")
+        print(f"✓ All required fields present")
         
-        # Validate signal range
-        signal = nfl['signal']
-        if not isinstance(signal, (int, float)) or not (-1 <= signal <= 1):
-            log_fail(f"news_forecast_link.signal invalid: {signal} (should be -1..1)")
+        # Validate overall
+        overall = pl['overall']
+        if not isinstance(overall, dict):
+            print(f"❌ FAILED: overall is not dict")
             return False
-        log_pass(f"signal = {signal} (in range -1..1)")
         
-        # Validate applied list
-        if not isinstance(nfl['applied'], list):
-            log_fail(f"news_forecast_link.applied should be list, got {type(nfl['applied'])}")
+        overall_required = ['n', 'accuracy', 'brier', 'mae_pct', 'range_hit_pct']
+        for field in overall_required:
+            if field not in overall:
+                print(f"❌ FAILED: Missing overall.{field}")
+                return False
+        
+        n = overall['n']
+        if not isinstance(n, int) or n < 0:
+            print(f"❌ FAILED: overall.n={n} invalid")
             return False
-        log_pass(f"applied is list with {len(nfl['applied'])} items")
+        print(f"✓ overall.n={n} (total resolved predictions)")
         
-        # Validate each applied item
-        for item in nfl['applied']:
-            required = ['horizon', 'base', 'adj', 'delta']
-            for field in required:
-                if field not in item:
-                    log_fail(f"applied item missing field: {field}")
+        if n > 0:
+            accuracy = overall['accuracy']
+            if not isinstance(accuracy, (int, float)) or not (0 <= accuracy <= 100):
+                print(f"❌ FAILED: overall.accuracy={accuracy} not in 0-100")
+                return False
+            print(f"✓ overall.accuracy={accuracy}%")
+            
+            brier = overall['brier']
+            if brier is not None and (not isinstance(brier, (int, float)) or not (0 <= brier <= 1)):
+                print(f"❌ FAILED: overall.brier={brier} not in 0-1")
+                return False
+            print(f"✓ overall.brier={brier}")
+            
+            mae_pct = overall['mae_pct']
+            if mae_pct is not None and not isinstance(mae_pct, (int, float)):
+                print(f"❌ FAILED: overall.mae_pct={mae_pct} invalid")
+                return False
+            print(f"✓ overall.mae_pct={mae_pct}")
+            
+            range_hit_pct = overall['range_hit_pct']
+            if range_hit_pct is not None and (not isinstance(range_hit_pct, (int, float)) or not (0 <= range_hit_pct <= 100)):
+                print(f"❌ FAILED: overall.range_hit_pct={range_hit_pct} not in 0-100")
+                return False
+            print(f"✓ overall.range_hit_pct={range_hit_pct}")
+        
+        # Validate by_horizon
+        by_horizon = pl['by_horizon']
+        if not isinstance(by_horizon, dict):
+            print(f"❌ FAILED: by_horizon is not dict")
+            return False
+        print(f"✓ by_horizon: {list(by_horizon.keys())}")
+        
+        for hz, stats in by_horizon.items():
+            if not isinstance(stats, dict):
+                print(f"❌ FAILED: by_horizon[{hz}] is not dict")
+                return False
+            for field in ['n', 'accuracy', 'brier']:
+                if field not in stats:
+                    print(f"❌ FAILED: by_horizon[{hz}] missing '{field}'")
                     return False
-        log_pass("All applied items have required fields (horizon, base, adj, delta)")
         
-        # Validate forecasts array
-        if 'forecasts' not in data:
-            log_fail("forecasts missing from dashboard")
+        # Validate calibration
+        calibration = pl['calibration']
+        if not isinstance(calibration, list):
+            print(f"❌ FAILED: calibration is not list")
             return False
-        forecasts = data['forecasts']
+        print(f"✓ calibration: {len(calibration)} buckets")
         
-        # Find 24H, 7D, 30D forecasts
-        f24 = next((f for f in forecasts if f['horizon'] == '24H'), None)
-        f7 = next((f for f in forecasts if f['horizon'] == '7D'), None)
-        f30 = next((f for f in forecasts if f['horizon'] == '30D'), None)
-        
-        if not f24:
-            log_fail("24H forecast not found")
-            return False
-        if not f7:
-            log_fail("7D forecast not found")
-            return False
-        if not f30:
-            log_fail("30D forecast not found")
-            return False
-        
-        # Validate 24H has news_link
-        if 'news_link' not in f24:
-            log_fail("24H forecast missing news_link")
-            return False
-        log_pass("24H forecast has news_link")
-        
-        nl24 = f24['news_link']
-        required_nl_fields = ['applied', 'higher_base', 'higher_adj', 'lower_base', 'lower_adj', 'delta', 'bias', 'signal', 'top_driver']
-        for field in required_nl_fields:
-            if field not in nl24:
-                log_fail(f"24H news_link missing field: {field}")
+        for bucket in calibration:
+            if not all(k in bucket for k in ['bucket', 'n', 'avg_pred', 'realised_up']):
+                print(f"❌ FAILED: calibration bucket missing required fields")
                 return False
-        log_pass(f"24H news_link has all required fields")
         
-        # Validate 24H higher_adj/lower_adj fields
-        if 'higher_adj' not in f24:
-            log_fail("24H forecast missing higher_adj")
+        # Validate pending
+        pending = pl['pending']
+        if not isinstance(pending, list):
+            print(f"❌ FAILED: pending is not list")
             return False
-        if 'lower_adj' not in f24:
-            log_fail("24H forecast missing lower_adj")
-            return False
-        log_pass("24H forecast has higher_adj and lower_adj")
+        print(f"✓ pending: {len(pending)} predictions")
         
-        # Validate 24H adjustment logic: higher_adj ≈ clamp(higher_base + delta)
-        expected_adj = max(2.0, min(98.0, nl24['higher_base'] + nl24['delta']))
-        if abs(nl24['higher_adj'] - expected_adj) > 0.2:
-            log_fail(f"24H higher_adj ({nl24['higher_adj']}) != clamp(higher_base + delta) ({expected_adj:.1f})")
-            return False
-        log_pass(f"24H higher_adj = {nl24['higher_adj']} ≈ clamp({nl24['higher_base']} + {nl24['delta']}) ✓")
-        
-        # Validate 24H lower_adj ≈ 100 - higher_adj
-        if abs(nl24['lower_adj'] - (100 - nl24['higher_adj'])) > 0.2:
-            log_fail(f"24H lower_adj ({nl24['lower_adj']}) != 100 - higher_adj ({100 - nl24['higher_adj']})")
-            return False
-        log_pass(f"24H lower_adj = {nl24['lower_adj']} ≈ 100 - higher_adj ✓")
-        
-        # Validate 7D has news_link
-        if 'news_link' not in f7:
-            log_fail("7D forecast missing news_link")
-            return False
-        log_pass("7D forecast has news_link")
-        
-        nl7 = f7['news_link']
-        for field in required_nl_fields:
-            if field not in nl7:
-                log_fail(f"7D news_link missing field: {field}")
-                return False
-        log_pass(f"7D news_link has all required fields")
-        
-        # Validate 7D higher_adj/lower_adj fields
-        if 'higher_adj' not in f7:
-            log_fail("7D forecast missing higher_adj")
-            return False
-        if 'lower_adj' not in f7:
-            log_fail("7D forecast missing lower_adj")
-            return False
-        log_pass("7D forecast has higher_adj and lower_adj")
-        
-        # Validate 7D adjustment logic
-        expected_adj_7 = max(2.0, min(98.0, nl7['higher_base'] + nl7['delta']))
-        if abs(nl7['higher_adj'] - expected_adj_7) > 0.2:
-            log_fail(f"7D higher_adj ({nl7['higher_adj']}) != clamp(higher_base + delta) ({expected_adj_7:.1f})")
-            return False
-        log_pass(f"7D higher_adj = {nl7['higher_adj']} ≈ clamp({nl7['higher_base']} + {nl7['delta']}) ✓")
-        
-        # Validate 7D lower_adj ≈ 100 - higher_adj
-        if abs(nl7['lower_adj'] - (100 - nl7['higher_adj'])) > 0.2:
-            log_fail(f"7D lower_adj ({nl7['lower_adj']}) != 100 - higher_adj ({100 - nl7['higher_adj']})")
-            return False
-        log_pass(f"7D lower_adj = {nl7['lower_adj']} ≈ 100 - higher_adj ✓")
-        
-        # Validate 30D does NOT have news_link
-        if 'news_link' in f30:
-            log_fail("30D forecast should NOT have news_link")
-            return False
-        log_pass("30D forecast correctly does NOT have news_link")
-        
-        log_pass("GET /api/v1/dashboard - NEWS→FORECAST LINK - ALL CHECKS PASSED")
-        return True
-    except Exception as e:
-        log_fail(f"News→Forecast Link test exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def test_dashboard_long_outlook():
-    """Validate long_outlook field"""
-    print("\n" + "="*80)
-    print("TEST: GET /api/v1/dashboard - LONG_OUTLOOK")
-    print("="*80)
-    try:
-        r = requests.get(f"{BASE_URL}/dashboard", timeout=20)
-        if r.status_code != 200:
-            log_fail(f"Dashboard endpoint returned {r.status_code}")
-            return False
-        data = r.json()
-        
-        # Validate long_outlook exists
-        if 'long_outlook' not in data:
-            log_fail("long_outlook missing from dashboard")
-            return False
-        log_pass("long_outlook present")
-        
-        long_outlook = data['long_outlook']
-        if not isinstance(long_outlook, list) or len(long_outlook) != 3:
-            log_fail(f"long_outlook should be list of 3 items, got {len(long_outlook)}")
-            return False
-        log_pass(f"long_outlook has exactly 3 items")
-        
-        # Validate horizons
-        expected_horizons = ['3M', '6M', '1Y']
-        actual_horizons = [o['horizon'] for o in long_outlook]
-        if actual_horizons != expected_horizons:
-            log_fail(f"long_outlook horizons mismatch. Expected {expected_horizons}, got {actual_horizons}")
-            return False
-        log_pass(f"long_outlook horizons correct: {actual_horizons}")
-        
-        # Validate each item has required fields
-        for o in long_outlook:
-            required = ['higher', 'base', 'bull', 'bear']
+        for p in pending[:3]:  # Check first 3
+            required = ['horizon', 'direction', 'prob_higher', 'target_date']
             for field in required:
-                if field not in o:
-                    log_fail(f"long_outlook {o['horizon']} missing field: {field}")
+                if field not in p:
+                    print(f"❌ FAILED: pending item missing '{field}'")
                     return False
-        log_pass("All long_outlook items have required fields (higher, base, bull, bear)")
-        
-        log_pass("GET /api/v1/dashboard - LONG_OUTLOOK - ALL CHECKS PASSED")
-        return True
-    except Exception as e:
-        log_fail(f"Long outlook test exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def test_chat_basic():
-    """FEATURE 3: POST /api/v1/chat - basic functionality"""
-    print("\n" + "="*80)
-    print("TEST: POST /api/v1/chat - BASIC FUNCTIONALITY (FEATURE 3)")
-    print("="*80)
-    try:
-        session_id = f"test-{int(time.time())}-1"
-        payload = {
-            "session_id": session_id,
-            "message": "What is the current quant score and 7-day outlook?"
-        }
-        
-        r = requests.post(f"{BASE_URL}/chat", json=payload, timeout=30)
-        if r.status_code != 200:
-            log_fail(f"Chat endpoint returned {r.status_code}")
-            return False
-        
-        data = r.json()
-        log_info(f"Response keys: {list(data.keys())}")
-        
-        # Validate response structure
-        if 'session_id' not in data:
-            log_fail("session_id missing from response")
-            return False
-        log_pass(f"session_id = '{data['session_id']}'")
-        
-        if 'text' not in data or not data['text']:
-            log_fail("text missing or empty from response")
-            return False
-        log_pass(f"text present (len={len(data['text'])})")
-        log_info(f"Response text: {data['text'][:200]}...")
-        
-        if 'model' not in data:
-            log_fail("model missing from response")
-            return False
-        if data['model'] != 'gemini-3-flash-preview':
-            log_fail(f"model should be 'gemini-3-flash-preview', got '{data['model']}'")
-            return False
-        log_pass(f"model = '{data['model']}' ✓")
-        
-        log_pass("POST /api/v1/chat - BASIC FUNCTIONALITY - ALL CHECKS PASSED")
-        return True, session_id
-    except Exception as e:
-        log_fail(f"Chat basic test exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False, None
-
-def test_chat_memory(session_id):
-    """FEATURE 3: POST /api/v1/chat - multi-turn memory"""
-    print("\n" + "="*80)
-    print("TEST: POST /api/v1/chat - MULTI-TURN MEMORY (FEATURE 3)")
-    print("="*80)
-    try:
-        if not session_id:
-            log_fail("No session_id from previous test")
-            return False
-        
-        payload = {
-            "session_id": session_id,
-            "message": "what score did you just tell me?"
-        }
-        
-        r = requests.post(f"{BASE_URL}/chat", json=payload, timeout=30)
-        if r.status_code != 200:
-            log_fail(f"Chat endpoint returned {r.status_code}")
-            return False
-        
-        data = r.json()
-        log_info(f"Response text: {data.get('text', '')[:300]}...")
-        
-        if 'text' not in data or not data['text']:
-            log_fail("text missing or empty from response")
-            return False
-        
-        # The response should reference the prior score (should contain numbers or "score")
-        text_lower = data['text'].lower()
-        if 'score' not in text_lower and not any(char.isdigit() for char in data['text']):
-            log_fail("Response doesn't seem to reference the prior score (no 'score' or numbers found)")
-            return False
-        log_pass("Response references prior conversation (contains 'score' or numbers)")
-        
-        log_pass("POST /api/v1/chat - MULTI-TURN MEMORY - ALL CHECKS PASSED")
-        return True
-    except Exception as e:
-        log_fail(f"Chat memory test exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def test_chat_anti_hallucination():
-    """FEATURE 3: POST /api/v1/chat - anti-hallucination"""
-    print("\n" + "="*80)
-    print("TEST: POST /api/v1/chat - ANTI-HALLUCINATION (FEATURE 3)")
-    print("="*80)
-    try:
-        session_id = f"test-{int(time.time())}-2"
-        payload = {
-            "session_id": session_id,
-            "message": "Tell me the exact Bitcoin price on Christmas Day and the current Ethereum gas fee"
-        }
-        
-        r = requests.post(f"{BASE_URL}/chat", json=payload, timeout=30)
-        if r.status_code != 200:
-            log_fail(f"Chat endpoint returned {r.status_code}")
-            return False
-        
-        data = r.json()
-        log_info(f"Response text: {data.get('text', '')[:300]}...")
-        
-        if 'text' not in data or not data['text']:
-            log_fail("text missing or empty from response")
-            return False
-        
-        # The response should decline or say it lacks that data
-        text_lower = data['text'].lower()
-        decline_phrases = ['don\'t have', 'do not have', 'cannot', 'can\'t', 'unable', 'not available', 
-                          'don\'t know', 'do not know', 'no data', 'lack', 'future', 'predict']
-        if not any(phrase in text_lower for phrase in decline_phrases):
-            log_fail("Response should decline/say it lacks that data (no decline phrases found)")
-            log_info(f"Expected one of: {decline_phrases}")
-            return False
-        log_pass("Response correctly declines to provide unavailable data")
-        
-        log_pass("POST /api/v1/chat - ANTI-HALLUCINATION - ALL CHECKS PASSED")
-        return True
-    except Exception as e:
-        log_fail(f"Chat anti-hallucination test exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def test_chat_empty_message():
-    """FEATURE 3: POST /api/v1/chat - empty message handling"""
-    print("\n" + "="*80)
-    print("TEST: POST /api/v1/chat - EMPTY MESSAGE HANDLING (FEATURE 3)")
-    print("="*80)
-    try:
-        session_id = f"test-{int(time.time())}-3"
-        payload = {
-            "session_id": session_id,
-            "message": ""
-        }
-        
-        r = requests.post(f"{BASE_URL}/chat", json=payload, timeout=15)
-        if r.status_code != 200:
-            log_fail(f"Chat endpoint returned {r.status_code} (should return 200 with error object)")
-            return False
-        
-        data = r.json()
-        log_info(f"Response: {json.dumps(data, indent=2)}")
-        
-        # Should return a friendly error, not crash
-        if 'error' not in data:
-            log_fail("Expected 'error' field in response for empty message")
-            return False
-        log_pass(f"error field present: '{data['error']}'")
-        
-        if 'text' not in data or not data['text']:
-            log_fail("Expected friendly 'text' message for empty input")
-            return False
-        log_pass(f"Friendly error message: '{data['text']}'")
-        
-        log_pass("POST /api/v1/chat - EMPTY MESSAGE HANDLING - ALL CHECKS PASSED")
-        return True
-    except Exception as e:
-        log_fail(f"Chat empty message test exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def test_chat_history(session_id):
-    """FEATURE 3: GET /api/v1/chat/history"""
-    print("\n" + "="*80)
-    print("TEST: GET /api/v1/chat/history (FEATURE 3)")
-    print("="*80)
-    try:
-        if not session_id:
-            log_fail("No session_id from previous test")
-            return False
-        
-        r = requests.get(f"{BASE_URL}/chat/history?session_id={session_id}", timeout=15)
-        if r.status_code != 200:
-            log_fail(f"Chat history endpoint returned {r.status_code}")
-            return False
-        
-        data = r.json()
-        log_info(f"Response keys: {list(data.keys())}")
-        
-        # Validate response structure
-        if 'session_id' not in data:
-            log_fail("session_id missing from response")
-            return False
-        log_pass(f"session_id = '{data['session_id']}'")
-        
-        if 'messages' not in data:
-            log_fail("messages missing from response")
-            return False
-        
-        messages = data['messages']
-        if not isinstance(messages, list):
-            log_fail(f"messages should be list, got {type(messages)}")
-            return False
-        log_pass(f"messages is list with {len(messages)} items")
-        
-        # Should have at least 2 messages from earlier tests
-        if len(messages) < 2:
-            log_fail(f"Expected at least 2 messages, got {len(messages)}")
-            return False
-        log_pass(f"History contains {len(messages)} messages (>= 2)")
-        
-        # Validate message structure
-        for msg in messages:
-            if 'user' not in msg or 'assistant' not in msg:
-                log_fail(f"Message missing 'user' or 'assistant' field")
+            
+            if p['direction'] not in ['UP', 'DOWN']:
+                print(f"❌ FAILED: pending direction='{p['direction']}' not in [UP,DOWN]")
                 return False
-        log_pass("All messages have 'user' and 'assistant' fields")
         
-        log_pass("GET /api/v1/chat/history - ALL CHECKS PASSED")
+        # Validate recent
+        recent = pl['recent']
+        if not isinstance(recent, list):
+            print(f"❌ FAILED: recent is not list")
+            return False
+        print(f"✓ recent: {len(recent)} predictions")
+        
+        # Validate counts
+        total_logged = pl['total_logged']
+        live_logged = pl['live_logged']
+        backtested = pl['backtested']
+        
+        if not isinstance(total_logged, int) or total_logged <= 0:
+            print(f"❌ FAILED: total_logged={total_logged} invalid")
+            return False
+        print(f"✓ total_logged={total_logged}")
+        
+        if not isinstance(live_logged, int) or live_logged < 0:
+            print(f"❌ FAILED: live_logged={live_logged} invalid")
+            return False
+        print(f"✓ live_logged={live_logged}")
+        
+        if not isinstance(backtested, int) or backtested <= 0:
+            print(f"❌ FAILED: backtested={backtested} invalid (expected ~500)")
+            return False
+        print(f"✓ backtested={backtested} (expected ~500 from walk-forward seed)")
+        
+        if backtested < 400:
+            print(f"⚠ Minor: backtested count {backtested} is lower than expected ~500")
+        
+        # Validate model_version
+        model_version = pl['model_version']
+        if model_version != 'rf-quant-v1':
+            print(f"❌ FAILED: model_version='{model_version}' != 'rf-quant-v1'")
+            return False
+        print(f"✓ model_version='{model_version}'")
+        
+        # Sanity check: overall.n should equal total resolved
+        if n > 0 and n != total_logged:
+            print(f"⚠ Minor: overall.n={n} != total_logged={total_logged} (may include unresolved)")
+        
+        # Test 2: GET /api/v1/scorecard
+        url2 = f"{BASE_URL}/api/v1/scorecard"
+        print(f"\nTest 2.2: GET {url2}")
+        resp2 = requests.get(url2, timeout=30)
+        
+        if resp2.status_code != 200:
+            print(f"❌ FAILED: HTTP {resp2.status_code}")
+            return False
+        
+        scorecard = resp2.json()
+        
+        if scorecard.get('status') != 'ready':
+            print(f"❌ FAILED: scorecard status='{scorecard.get('status')}' != 'ready'")
+            return False
+        print(f"✓ scorecard status='ready'")
+        
+        # Validate scorecard has same structure
+        for field in required_fields:
+            if field not in scorecard:
+                print(f"❌ FAILED: scorecard missing '{field}'")
+                return False
+        print(f"✓ scorecard has all required fields")
+        
+        # Numbers should match dashboard's prediction_ledger
+        if scorecard['total_logged'] != total_logged:
+            print(f"❌ FAILED: scorecard.total_logged={scorecard['total_logged']} != dashboard {total_logged}")
+            return False
+        
+        if scorecard['backtested'] != backtested:
+            print(f"❌ FAILED: scorecard.backtested={scorecard['backtested']} != dashboard {backtested}")
+            return False
+        
+        print(f"✓ scorecard numbers match dashboard prediction_ledger")
+        
+        print(f"\n✅ ENGINE 2 PASSED - Prediction Ledger + Scorecard validated successfully")
         return True
+        
     except Exception as e:
-        log_fail(f"Chat history test exception: {e}")
+        print(f"❌ FAILED: Exception: {e}")
         import traceback
         traceback.print_exc()
         return False
 
-def test_dashboard_regression():
-    """REGRESSION: Validate all existing fields still present"""
+
+def test_engine_3_event_calendar():
+    """ENGINE 3: Event Intelligence Calendar"""
     print("\n" + "="*80)
-    print("TEST: GET /api/v1/dashboard - REGRESSION (ALL EXISTING FIELDS)")
+    print("ENGINE 3 - EVENT INTELLIGENCE CALENDAR")
     print("="*80)
+    
     try:
-        r = requests.get(f"{BASE_URL}/dashboard", timeout=20)
-        if r.status_code != 200:
-            log_fail(f"Dashboard endpoint returned {r.status_code}")
-            return False
-        data = r.json()
+        url = f"{BASE_URL}/api/v1/dashboard"
+        print(f"Testing: GET {url}")
+        resp = requests.get(url, timeout=30)
         
-        # List of all existing fields that must be present
-        required_fields = [
-            'status', 'signal', 'confidence', 'prob_up', 'prob_down',
-            'forecasts', 'scoreboard', 'trades', 'quant_score', 'quant_label',
-            'quant_breakdown', 'regime', 'factors', 'importances', 'performance',
-            'features', 'policy', 'dominance', 'chart', 'cycle', 'alerts'
+        if resp.status_code != 200:
+            print(f"❌ FAILED: HTTP {resp.status_code}")
+            return False
+        
+        data = resp.json()
+        
+        if 'event_calendar' not in data:
+            print("❌ FAILED: Missing 'event_calendar' field")
+            return False
+        
+        ec = data['event_calendar']
+        print(f"✓ event_calendar object present")
+        
+        # Validate required fields
+        required_fields = ['window_days', 'generated', 'counts', 'events', 'next_high_impact']
+        for field in required_fields:
+            if field not in ec:
+                print(f"❌ FAILED: Missing event_calendar.{field}")
+                return False
+        print(f"✓ All required fields present")
+        
+        # Validate window_days
+        window_days = ec['window_days']
+        if window_days != 120:
+            print(f"❌ FAILED: window_days={window_days} != 120")
+            return False
+        print(f"✓ window_days=120")
+        
+        # Validate generated
+        generated = ec['generated']
+        try:
+            datetime.strptime(generated, '%Y-%m-%d')
+            print(f"✓ generated='{generated}' (valid YYYY-MM-DD)")
+        except Exception:
+            print(f"❌ FAILED: generated='{generated}' not valid YYYY-MM-DD")
+            return False
+        
+        # Validate counts
+        counts = ec['counts']
+        if not isinstance(counts, dict):
+            print(f"❌ FAILED: counts is not dict")
+            return False
+        print(f"✓ counts: {counts}")
+        
+        # Validate events
+        events = ec['events']
+        if not isinstance(events, list) or len(events) == 0:
+            print(f"❌ FAILED: events is not non-empty list")
+            return False
+        print(f"✓ events: {len(events)} items")
+        
+        # Validate each event
+        event_required = ['date', 'days_until', 'category', 'title', 'description', 
+                         'importance', 'expected_volatility']
+        
+        prev_date = None
+        for i, event in enumerate(events[:10]):  # Check first 10
+            for field in event_required:
+                if field not in event:
+                    print(f"❌ FAILED: events[{i}] missing '{field}'")
+                    return False
+            
+            # Validate date format
+            date = event['date']
+            try:
+                event_date = datetime.strptime(date, '%Y-%m-%d')
+            except Exception:
+                print(f"❌ FAILED: events[{i}].date='{date}' not valid YYYY-MM-DD")
+                return False
+            
+            # Check sorting (ascending by date)
+            if prev_date and date < prev_date:
+                print(f"❌ FAILED: events not sorted ascending by date (events[{i}].date={date} < prev={prev_date})")
+                return False
+            prev_date = date
+            
+            # Validate days_until
+            days_until = event['days_until']
+            if not isinstance(days_until, int) or not (0 <= days_until <= 120):
+                print(f"❌ FAILED: events[{i}].days_until={days_until} not int 0-120")
+                return False
+            
+            # Validate category
+            category = event['category']
+            if category not in ['Macro', 'Derivatives', 'On-Chain', 'Regulatory']:
+                print(f"❌ FAILED: events[{i}].category='{category}' not in [Macro,Derivatives,On-Chain,Regulatory]")
+                return False
+            
+            # Validate title
+            title = event['title']
+            if not isinstance(title, str) or not title:
+                print(f"❌ FAILED: events[{i}].title invalid")
+                return False
+            
+            # Validate description
+            description = event['description']
+            if not isinstance(description, str) or not description:
+                print(f"❌ FAILED: events[{i}].description invalid")
+                return False
+            
+            # Validate importance
+            importance = event['importance']
+            if importance not in ['Low', 'Medium', 'High', 'Very High']:
+                print(f"❌ FAILED: events[{i}].importance='{importance}' not in [Low,Medium,High,Very High]")
+                return False
+            
+            # Validate expected_volatility
+            volatility = event['expected_volatility']
+            if volatility not in ['Low', 'Elevated', 'High', 'Very High']:
+                print(f"❌ FAILED: events[{i}].expected_volatility='{volatility}' not in [Low,Elevated,High,Very High]")
+                return False
+        
+        print(f"✓ All events validated (checked first 10)")
+        print(f"✓ Events sorted ascending by date")
+        
+        # Validate next_high_impact
+        next_high = ec['next_high_impact']
+        if next_high is not None:
+            if not isinstance(next_high, dict):
+                print(f"❌ FAILED: next_high_impact is not dict or null")
+                return False
+            
+            if 'importance' not in next_high:
+                print(f"❌ FAILED: next_high_impact missing 'importance'")
+                return False
+            
+            importance = next_high['importance']
+            if importance not in ['High', 'Very High']:
+                print(f"❌ FAILED: next_high_impact.importance='{importance}' not in [High,Very High]")
+                return False
+            
+            print(f"✓ next_high_impact: '{next_high.get('title')}' (importance={importance})")
+        else:
+            print(f"✓ next_high_impact=null (no high-impact events in window)")
+        
+        print(f"\n✅ ENGINE 3 PASSED - Event Intelligence Calendar validated successfully")
+        return True
+        
+    except Exception as e:
+        print(f"❌ FAILED: Exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_regression():
+    """REGRESSION: Ensure all prior fields still present"""
+    print("\n" + "="*80)
+    print("REGRESSION - ALL PRIOR FIELDS PRESENT")
+    print("="*80)
+    
+    try:
+        # Test GET /api/v1/dashboard
+        url = f"{BASE_URL}/api/v1/dashboard"
+        print(f"\nTest: GET {url}")
+        resp = requests.get(url, timeout=30)
+        
+        if resp.status_code != 200:
+            print(f"❌ FAILED: HTTP {resp.status_code}")
+            return False
+        
+        data = resp.json()
+        
+        if data.get('status') != 'ready':
+            print(f"❌ FAILED: status='{data.get('status')}' != 'ready'")
+            return False
+        print(f"✓ status='ready'")
+        
+        # Check all prior fields
+        prior_fields = [
+            'decision', 'news_forecast_link', 'forecasts', 'long_outlook',
+            'quant_score', 'regime', 'factors', 'scoreboard', 'trades',
+            'policy', 'dominance', 'chart', 'cycle', 'alerts', 'signal',
+            'confidence', 'prob_up', 'prob_down', 'last_close', 'data_source',
+            'overall_accuracy', 'cv_folds', 'importances', 'performance', 'features'
         ]
         
         missing = []
-        for field in required_fields:
+        for field in prior_fields:
             if field not in data:
                 missing.append(field)
         
         if missing:
-            log_fail(f"Missing existing fields: {missing}")
+            print(f"❌ FAILED: Missing prior fields: {missing}")
             return False
-        log_pass(f"All {len(required_fields)} existing fields present")
         
-        log_pass("GET /api/v1/dashboard - REGRESSION - ALL CHECKS PASSED")
+        print(f"✓ All {len(prior_fields)} prior fields present")
+        
+        # Validate decision has 6 outlook horizons
+        decision = data['decision']
+        outlook = decision.get('outlook', [])
+        if len(outlook) != 6:
+            print(f"❌ FAILED: decision.outlook has {len(outlook)} items, expected 6")
+            return False
+        
+        horizons = [o['horizon'] for o in outlook]
+        expected_horizons = ['24H', '7D', '30D', '3M', '6M', '1Y']
+        if horizons != expected_horizons:
+            print(f"❌ FAILED: decision.outlook horizons={horizons} != {expected_horizons}")
+            return False
+        print(f"✓ decision.outlook has 6 horizons: {horizons}")
+        
+        # Validate forecasts (3 items: 24H, 7D, 30D)
+        forecasts = data['forecasts']
+        if len(forecasts) != 3:
+            print(f"❌ FAILED: forecasts has {len(forecasts)} items, expected 3")
+            return False
+        
+        forecast_horizons = [f['horizon'] for f in forecasts]
+        if forecast_horizons != ['24H', '7D', '30D']:
+            print(f"❌ FAILED: forecast horizons={forecast_horizons} != ['24H','7D','30D']")
+            return False
+        print(f"✓ forecasts has 3 items: {forecast_horizons}")
+        
+        # Validate 24H and 7D have news_link
+        for hz in ['24H', '7D']:
+            f = next((x for x in forecasts if x['horizon'] == hz), None)
+            if not f:
+                print(f"❌ FAILED: Missing {hz} forecast")
+                return False
+            if 'news_link' not in f:
+                print(f"❌ FAILED: {hz} forecast missing 'news_link'")
+                return False
+        print(f"✓ 24H and 7D forecasts have news_link")
+        
+        # Test GET /api/v1/ticker
+        url2 = f"{BASE_URL}/api/v1/ticker"
+        print(f"\nTest: GET {url2}")
+        resp2 = requests.get(url2, timeout=30)
+        
+        if resp2.status_code != 200:
+            print(f"❌ FAILED: HTTP {resp2.status_code}")
+            return False
+        
+        ticker = resp2.json()
+        
+        ticker_fields = ['price', 'price_aud', 'aud_rate', 'change24h', 'source']
+        for field in ticker_fields:
+            if field not in ticker:
+                print(f"❌ FAILED: ticker missing '{field}'")
+                return False
+        print(f"✓ ticker has all required fields: {ticker_fields}")
+        
+        # Test POST /api/v1/chat
+        url3 = f"{BASE_URL}/api/v1/chat"
+        print(f"\nTest: POST {url3}")
+        payload = {"session_id": "test-regression", "message": "What is the current quant score?"}
+        resp3 = requests.post(url3, json=payload, timeout=30)
+        
+        if resp3.status_code != 200:
+            print(f"❌ FAILED: HTTP {resp3.status_code}")
+            return False
+        
+        chat = resp3.json()
+        
+        if 'text' not in chat or 'model' not in chat:
+            print(f"❌ FAILED: chat missing required fields")
+            return False
+        
+        if chat.get('model') != 'gemini-3-flash-preview':
+            print(f"❌ FAILED: chat model='{chat.get('model')}' != 'gemini-3-flash-preview'")
+            return False
+        print(f"✓ chat returns text and model='gemini-3-flash-preview'")
+        
+        # Test GET /api/v1/health
+        url4 = f"{BASE_URL}/api/v1/health"
+        print(f"\nTest: GET {url4}")
+        resp4 = requests.get(url4, timeout=30)
+        
+        if resp4.status_code != 200:
+            print(f"❌ FAILED: HTTP {resp4.status_code}")
+            return False
+        
+        health = resp4.json()
+        
+        if 'compute_status' not in health or 'runs' not in health:
+            print(f"❌ FAILED: health missing required fields")
+            return False
+        
+        runs = health['runs']
+        if not isinstance(runs, int) or runs <= 0:
+            print(f"❌ FAILED: health.runs={runs} invalid")
+            return False
+        print(f"✓ health returns compute_status and runs={runs}")
+        
+        print(f"\n✅ REGRESSION PASSED - All prior fields present and working")
         return True
+        
     except Exception as e:
-        log_fail(f"Dashboard regression test exception: {e}")
+        print(f"❌ FAILED: Exception: {e}")
         import traceback
         traceback.print_exc()
         return False
 
+
 def main():
     print("\n" + "="*80)
-    print("BTCIQ BACKEND COMPREHENSIVE TEST SUITE")
-    print("Testing: Decision Engine, News→Forecast Link, Ask Quant Chat, Ticker AUD")
+    print("BTCIQ DASHBOARD - THREE NEW ENGINES BACKEND TEST")
+    print("Testing via external URL: " + BASE_URL)
     print("="*80)
     
     results = {}
     
     # Run all tests
-    results['health'] = test_health()
-    results['ticker'] = test_ticker()
-    results['dashboard_decision'] = test_dashboard_decision()
-    results['dashboard_news_link'] = test_dashboard_news_link()
-    results['dashboard_long_outlook'] = test_dashboard_long_outlook()
-    results['dashboard_regression'] = test_dashboard_regression()
-    
-    # Chat tests
-    chat_basic_result = test_chat_basic()
-    if isinstance(chat_basic_result, tuple):
-        results['chat_basic'], session_id = chat_basic_result
-    else:
-        results['chat_basic'] = chat_basic_result
-        session_id = None
-    
-    results['chat_memory'] = test_chat_memory(session_id)
-    results['chat_anti_hallucination'] = test_chat_anti_hallucination()
-    results['chat_empty_message'] = test_chat_empty_message()
-    results['chat_history'] = test_chat_history(session_id)
+    results['engine_1'] = test_engine_1_data_trust_layer()
+    results['engine_2'] = test_engine_2_prediction_ledger()
+    results['engine_3'] = test_engine_3_event_calendar()
+    results['regression'] = test_regression()
     
     # Summary
     print("\n" + "="*80)
     print("TEST SUMMARY")
     print("="*80)
     
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
+    for test_name, passed in results.items():
+        status = "✅ PASSED" if passed else "❌ FAILED"
+        print(f"{test_name}: {status}")
     
-    for test_name, result in results.items():
-        status = "✅ PASS" if result else "❌ FAIL"
-        print(f"{status}: {test_name}")
+    all_passed = all(results.values())
     
     print("\n" + "="*80)
-    print(f"TOTAL: {passed}/{total} tests passed")
+    if all_passed:
+        print("✅ ALL TESTS PASSED")
+    else:
+        print("❌ SOME TESTS FAILED")
     print("="*80)
     
-    if passed == total:
-        print("\n🎉 ALL TESTS PASSED! 🎉\n")
-        return 0
-    else:
-        print(f"\n⚠️  {total - passed} test(s) failed\n")
-        return 1
+    return 0 if all_passed else 1
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     sys.exit(main())
