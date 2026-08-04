@@ -53,6 +53,9 @@ chat_col = db['ask_quant_chat']
 predictions_col = db['predictions']
 bitmark_col = db['bitmark_snapshots']
 smart_alerts_col = db['smart_alerts']
+audit_col = db['forecast_audit']
+# Admin passcode gate for manual forecast runs (Stage-1: passcode instead of full auth)
+ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', 'btciq-admin')
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
 _forecast_trigger = {'reason': None}
 _bitmark_last_manual = {'ts': 0.0}
@@ -1237,6 +1240,128 @@ def compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, 
     }
 
 
+# ---------------------------- Risk Engine ----------------------------
+def _risk_state(score):
+    return ('Extreme' if score >= 80 else 'High' if score >= 60
+            else 'Elevated' if score >= 45 else 'Normal' if score >= 25 else 'Low')
+
+
+def compute_risk_engine(quant, chart, decision, data_health, event_calendar, last_close, feats):
+    """Dedicated risk view — direction-agnostic. Real where we have data; illustrative
+    DEMO values (clearly flagged) for feeds that need paid keys (IV, leverage, order book)."""
+    import math as _m
+    atr_now = float(feats.get('ATR_Pct', 0.03) or 0.03)          # daily realised range fraction
+    vol_pct = float(quant['regime'].get('vol_percentile', 50) or 50)
+    level = (decision or {}).get('risk_level', _risk_state(round(vol_pct)))
+    score = int((decision or {}).get('risk_score', round(vol_pct)))
+
+    # Expected move (real, from ATR scaled by sqrt(time))
+    def _band(days):
+        mv = atr_now * _m.sqrt(days)
+        return {'pct': round(mv * 100, 1),
+                'low': round(last_close * (1 - mv), 0), 'high': round(last_close * (1 + mv), 0)}
+    expected_move = {'24H': _band(1), '7D': _band(7), '30D': _band(30)}
+
+    # Support / resistance zones (real, from chart intelligence)
+    sr = (chart or {}).get('sr_levels', []) or []
+    sup = sorted([l for l in sr if l['type'] == 'support' and l['price'] < last_close],
+                 key=lambda z: last_close - z['price'])
+    res = sorted([l for l in sr if l['type'] == 'resistance' and l['price'] > last_close],
+                 key=lambda z: z['price'] - last_close)
+    downside_zone = ({'price': sup[0]['price'], 'distance_pct': round((last_close - sup[0]['price']) / last_close * 100, 1),
+                      'label': 'Primary support'} if sup else None)
+    upside_zone = ({'price': res[0]['price'], 'distance_pct': round((res[0]['price'] - last_close) / last_close * 100, 1),
+                    'label': 'Primary resistance'} if res else None)
+
+    # Macro-event risk (real, from event calendar)
+    nhi = (event_calendar or {}).get('next_high_impact')
+    macro_event_risk = 'Low'
+    macro_note = 'No high-impact events in the near window.'
+    if nhi and nhi.get('days_until') is not None:
+        du = nhi['days_until']
+        macro_event_risk = 'High' if du <= 2 else 'Elevated' if du <= 7 else 'Normal'
+        macro_note = f"{nhi.get('title')} in {du}d ({nhi.get('importance')} importance)."
+
+    # Data uncertainty (real, from data health)
+    dh_level = (data_health or {}).get('level', 'High')
+    dh_score = (data_health or {}).get('score', 95)
+    data_uncertainty = 'Low' if dh_score >= 90 else 'Normal' if dh_score >= 75 else 'Elevated' if dh_score >= 55 else 'High'
+
+    # Realised vol (real percentile) -> annualised estimate
+    realised_vol_annual = round(atr_now * _m.sqrt(365) * 100, 0)
+
+    # ----- DEMO metrics (need paid feeds; clearly flagged) -----
+    seed = int(last_close) % 100
+    demo = {
+        'implied_vol': {'value': round(realised_vol_annual + 8 + seed % 12, 0), 'unit': '% annualised',
+                        'state': 'Elevated', 'demo': True, 'source': 'Deribit/CME (needs key)'},
+        'leverage_risk': {'state': ['Normal', 'Elevated', 'High'][seed % 3], 'funding_bps': round((seed % 20) - 5, 1),
+                          'demo': True, 'source': 'CoinGlass (needs key)'},
+        'liquidation_risk': {'state': ['Normal', 'Elevated', 'High'][(seed + 1) % 3],
+                             'nearest_cluster_pct': round(2 + seed % 4, 1), 'demo': True, 'source': 'CoinGlass (needs key)'},
+        'orderbook_liquidity': {'state': ['Deep', 'Normal', 'Thin'][seed % 3], 'depth_2pct_musd': round(120 + seed, 0),
+                                'demo': True, 'source': 'Exchange L2 (needs key)'},
+    }
+
+    drivers = [
+        {'name': 'Realised volatility', 'state': _risk_state(round(vol_pct)), 'value': f'{round(vol_pct)}th pct', 'demo': False},
+        {'name': 'Macro-event risk', 'state': macro_event_risk, 'value': macro_note, 'demo': False},
+        {'name': 'Data uncertainty', 'state': data_uncertainty, 'value': f'{dh_level} ({dh_score}/100)', 'demo': False},
+        {'name': 'Implied volatility', 'state': demo['implied_vol']['state'], 'value': f"{demo['implied_vol']['value']}%", 'demo': True},
+        {'name': 'Leverage / funding', 'state': demo['leverage_risk']['state'], 'value': f"{demo['leverage_risk']['funding_bps']} bps", 'demo': True},
+        {'name': 'Liquidation risk', 'state': demo['liquidation_risk']['state'], 'value': f"cluster ~{demo['liquidation_risk']['nearest_cluster_pct']}% away", 'demo': True},
+        {'name': 'Order-book liquidity', 'state': demo['orderbook_liquidity']['state'], 'value': f"${demo['orderbook_liquidity']['depth_2pct_musd']}M @2%", 'demo': True},
+    ]
+
+    return {
+        'level': level, 'score': score, 'state_scale': ['Low', 'Normal', 'Elevated', 'High', 'Extreme'],
+        'expected_move': expected_move,
+        'realised_vol_annual': realised_vol_annual,
+        'vol_percentile': round(vol_pct),
+        'downside_zone': downside_zone, 'upside_zone': upside_zone,
+        'macro_event_risk': macro_event_risk, 'macro_note': macro_note,
+        'data_uncertainty': data_uncertainty,
+        'drivers': drivers, 'demo': demo,
+        'note': 'Risk is measured separately from direction — a constructive outlook can still carry high risk.',
+    }
+
+
+# ---------------------------- Smart Money & Institutional (DEMO) ----------------------------
+def compute_smart_money_demo(last_close, regime):
+    """DEMO on-chain / smart-money view. Illustrative only — real values need a Glassnode key."""
+    seed = int(last_close) % 100
+    trend = 'accumulation' if seed % 2 == 0 else 'distribution'
+    return {
+        'demo': True, 'source': 'Glassnode / on-chain (needs key)',
+        'headline': f'Whales in mild {trend}',
+        'metrics': [
+            {'name': 'Exchange reserves (30d)', 'value': f'{"-" if trend=="accumulation" else "+"}{round(1.2 + seed%3,1)}%', 'signal': 'Bullish' if trend == 'accumulation' else 'Bearish'},
+            {'name': 'Whale wallets ≥1k BTC', 'value': f'{"+" if trend=="accumulation" else "-"}{round(0.3 + seed%2*0.4,1)}%', 'signal': 'Bullish' if trend == 'accumulation' else 'Bearish'},
+            {'name': 'Long-term holder supply', 'value': f'+{round(0.5 + seed%3*0.3,1)}%', 'signal': 'Bullish'},
+            {'name': 'Realised profit/loss ratio', 'value': f'{round(0.8 + (seed%40)/100,2)}', 'signal': 'Neutral'},
+            {'name': 'Dormant supply movement', 'value': 'Quiet', 'signal': 'Neutral'},
+        ],
+    }
+
+
+def compute_institutional_demo(last_close):
+    """DEMO institutional / ETF flow view. Illustrative only — needs a paid ETF/CME feed."""
+    seed = int(last_close) % 100
+    net = round((seed % 60) - 20, 0)
+    return {
+        'demo': True, 'source': 'ETF issuers / CME (needs key)',
+        'headline': f'Spot ETF net flow ~${net}M (illustrative)',
+        'metrics': [
+            {'name': 'Spot ETF net flow (1d)', 'value': f'${net}M', 'signal': 'Bullish' if net > 0 else 'Bearish'},
+            {'name': 'Spot ETF net flow (7d)', 'value': f'${round(net*5,0)}M', 'signal': 'Bullish' if net > 0 else 'Bearish'},
+            {'name': 'CME open interest', 'value': f'{round(28 + seed%8,1)}k BTC', 'signal': 'Neutral'},
+            {'name': 'CME basis (annualised)', 'value': f'{round(6 + seed%6,1)}%', 'signal': 'Bullish'},
+            {'name': 'Grayscale/HODL trend', 'value': 'Stabilising', 'signal': 'Neutral'},
+        ],
+    }
+
+
+
 CHAT_SYSTEM = (
     "You are 'Albert', the friendly AI quant analyst built into the BTCIQ Bitcoin dashboard "
     "(powered by BitCentAI, a Bitcoin-Centred Intelligence Engine). You have a warm, witty, "
@@ -2124,6 +2249,18 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
 
+    # --- Risk Engine + Smart Money / Institutional (DEMO) ---
+    risk = smart_money = institutional = None
+    try:
+        risk = compute_risk_engine(quant, chart, decision, data_health, event_calendar, last_close, feats)
+    except Exception:  # noqa
+        traceback.print_exc()
+    try:
+        smart_money = compute_smart_money_demo(last_close, quant['regime']['regime'])
+        institutional = compute_institutional_demo(last_close)
+    except Exception:  # noqa
+        traceback.print_exc()
+
     # --- Prediction Ledger + public scorecard ---
     prediction_ledger = None
     try:
@@ -2180,10 +2317,12 @@ def compute():
         'forecasts': quant['forecasts'],
         'long_outlook': quant.get('long_outlook', []),
         'factors': quant['factors'],
-        'decision': decision,
-        'news_forecast_link': news_forecast_link,
+        'decision': decision,        'news_forecast_link': news_forecast_link,
         'data_health': data_health,
         'event_calendar': event_calendar,
+        'risk': risk,
+        'smart_money': smart_money,
+        'institutional': institutional,
         'prediction_ledger': prediction_ledger,
         'bitmark': bitmark,
         'cycle': cycle,
@@ -2312,6 +2451,8 @@ def dashboard():
     if not doc:
         st = _state['status']
         return {'status': 'error' if st == 'error' else 'computing', 'error': _state['error']}
+    # Add smart_alerts to the response (not stored in the run doc to save space)
+    doc['smart_alerts'] = get_smart_alerts()
     return {'status': 'ready', 'compute_status': _state['status'], **doc}
 
 
@@ -2392,8 +2533,14 @@ def replay(date: str = None, window: int = 30):
 
 
 @app.post('/api/v1/bitmark/run')
-def bitmark_run():
+def bitmark_run(payload: dict = Body(default={})):
     import time
+    passcode = (payload or {}).get('passcode', '')
+    if passcode != ADMIN_PASSCODE:
+        audit_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
+                              'action': 'manual_forecast_run', 'result': 'denied', 'reason': 'bad_passcode'})
+        return {'status': 'unauthorized',
+                'message': 'A valid admin passcode is required to trigger a manual forecast run. Enter it in Settings.'}
     now = time.time()
     cooldown = 300  # rate limit: one manual forecast every 5 minutes
     elapsed = now - _bitmark_last_manual['ts']
@@ -2405,9 +2552,17 @@ def bitmark_run():
         return {'status': 'busy', 'message': 'A forecast is already running — please wait for it to finish.'}
     _bitmark_last_manual['ts'] = now
     _forecast_trigger['reason'] = 'manual'
+    audit_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
+                          'action': 'manual_forecast_run', 'result': 'started', 'trigger': 'manual'})
     threading.Thread(target=run_compute_bg, daemon=True).start()
     return {'status': 'started',
             'message': 'Running a fresh BitMarkAI forecast against the latest data (~30s). The updated ranges and a "what changed" summary will appear when it completes.'}
+
+
+@app.get('/api/v1/audit')
+def audit_log(limit: int = 20):
+    items = list(audit_col.find({}, {'_id': 0}).sort('ts', -1).limit(limit))
+    return {'status': 'ready', 'entries': items}
 
 
 @app.post('/api/v1/chat')

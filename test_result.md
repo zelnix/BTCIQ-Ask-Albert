@@ -327,37 +327,79 @@ backend:
 
   - task: "Prediction Ledger confidence for Open Forecasts (dashboard.prediction_ledger.pending[].confidence + confidence_pct)"
     implemented: true
-    working: "NA"
+    working: true
     file: "backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "NEW. record_predictions now stores confidence_pct alongside confidence for every logged forecast. compute_scorecard() backfills any legacy pending doc missing confidence_pct by deriving BOTH label + pct from prob_higher margin so badge and % always agree. Each item in prediction_ledger.pending (and GET /api/v1/scorecard pending) now has confidence (Low/Moderate/High) and confidence_pct (int 0-100). Verified via curl: 6 pending items all have consistent confidence + confidence_pct."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. GET /api/v1/scorecard returns 6 pending forecasts, each with BOTH confidence (Low/Moderate/High) and confidence_pct (int 0-100). Validated internal consistency: higher pct -> stronger label. Fallback rule validated: pct=round(|prob_higher-50|/50*100). Label consistency checked: High pct (>45) -> 'High', Moderate (20-45) -> 'Moderate', Low (<20) -> 'Low'. All existing fields still present (horizon, direction, prob_higher, target_date). Dashboard prediction_ledger.pending also validated with same structure. All 6 pending items passed validation."
   - task: "Smart Alerts engine (GET /api/v1/alerts, POST /api/v1/alerts/ack, dashboard.smart_alerts)"
     implemented: true
-    working: "NA"
+    working: true
     file: "backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "NEW Phase-2 feature. compute_smart_alerts(doc, prev_doc) compares each run vs the previous run and logs state-change events (Regime shift, Market State/decision-label change, Quant Score band crossing, Data Trust degrade/recover, high-impact Event Risk within 3 days, large daily Volatility move) into smart_alerts collection, de-duplicated by as_of+category+signature via $setOnInsert. GET /api/v1/alerts returns {status:'ready', alerts:[...recent 50 sorted ts desc, each with id/ts/as_of/category/severity/title/message/seen], unseen:int, total:int}. POST /api/v1/alerts/ack {ids?:[...]} marks those (or all unseen if no ids) seen and returns {status:'ok', unseen}. Verified via curl: 1 alert fired (Event Risk NFP in 3d), unseen=1; ack works."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. GET /api/v1/alerts returns {status:'ready', alerts:[...], unseen:int, total:int}. Alert structure validated: all required fields present (id, ts, as_of, category, severity, title, message, seen). Category validated in [Regime, Market State, Quant Score, Data Trust, Event Risk, Volatility]. Severity validated in [high, warning, success, info]. Timestamp validated as ISO format. POST /api/v1/alerts/ack with specific ID works correctly. POST /api/v1/alerts/ack with empty body marks all seen (unseen becomes 0). GET /api/v1/dashboard includes top-level smart_alerts object with {alerts, unseen, total}. MINOR FIX: Added smart_alerts to dashboard response (was missing, now fixed in backend/server.py line 2455)."
   - task: "Time Machine historical replay (GET /api/v1/replay?date=&window=)"
     implemented: true
-    working: "NA"
+    working: true
     file: "backend/server.py"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
         -comment: "NEW Phase-2 feature. compute() now persists a 'replay' payload in the stored run doc (NOT in the dashboard response): full price series [{date,close}] + full walk-forward trades [{date,signal,confidence,close,nextClose,actual,correct}] + min_date/max_date/n. GET /api/v1/replay?date=YYYY-MM-DD&window=30 returns {status:'ready', pick_date, signal(UP/DOWN), confidence, close, next_close, actual(UP/DOWN), move_pct, correct(bool), window:[{date,close,is_pick}], rolling_accuracy, min_date, max_date, n}. No date -> defaults to max_date. Picks nearest trade at/just-before target_date; no future leakage. Verified via curl for default + 2025-11-15 (signal UP, actual DOWN, correct false, 41-pt window)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. GET /api/v1/replay (no date) returns status='ready' with all required fields: pick_date, signal (UP/DOWN), confidence (number), close (>0), next_close (>0), actual (UP/DOWN), move_pct, correct (bool), window (non-empty list with date/close/is_pick), rolling_accuracy, min_date, max_date, n. Logic validated: correct == (signal == actual) ✅, actual == 'UP' iff next_close > close ✅. Window has exactly one is_pick=true item ✅. GET /api/v1/replay?date=2025-11-15&window=20 returns pick_date=2025-11-15 (nearest <=), window length=41 (2*20+1), exactly one is_pick=true matching pick_date ✅. All validations passed. Data is REAL (500 historical trades from walk-forward backtest)."
+  - task: "Risk Engine (dashboard.risk) - direction-agnostic risk view with expected moves, volatility, support/resistance zones"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. GET /api/v1/dashboard -> risk object with all required fields: level (Low/Normal/Elevated/High/Extreme), score (int 0-100), state_scale (list of 5), expected_move {24H/7D/30D each with pct/low/high}, realised_vol_annual (number), vol_percentile (int 0-100), downside_zone/upside_zone (object with price+distance_pct or null), macro_event_risk, data_uncertainty, drivers (list with name/state/value/demo), demo (object with implied_vol/leverage_risk/liquidation_risk/orderbook_liquidity), note. Validated expected_move ranges: low < close < high for all horizons ✅. All fields present and valid. Data is REAL except DEMO metrics (clearly flagged with demo=true and 'needs key' in source)."
+  - task: "Smart Money & Institutional DEMO (dashboard.smart_money, dashboard.institutional) - illustrative on-chain and ETF flow views"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. GET /api/v1/dashboard -> smart_money and institutional objects. smart_money: demo=true ✅, source mentions 'needs key' ✅, headline (non-empty string) ✅, metrics (non-empty list, each with name/value/signal) ✅. institutional: demo=true ✅, source mentions 'needs key' ✅, headline (non-empty string) ✅, metrics (non-empty list, each with name/value/signal) ✅. Both objects clearly flagged as DEMO with illustrative data. All validations passed."
+  - task: "Manual forecast passcode gate + audit (POST /api/v1/bitmark/run, GET /api/v1/audit) - admin-only manual forecast trigger with audit trail"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. POST /api/v1/bitmark/run with no passcode -> status='unauthorized' ✅. POST with wrong passcode -> status='unauthorized' ✅. POST with correct passcode ('btciq-admin') -> status='started' (passcode accepted) ✅. Must NOT return 'unauthorized' with correct passcode ✅. GET /api/v1/audit returns {status:'ready', entries:[...]} with at least one entry ✅. Denied attempts have result='denied' ✅. Audit entry structure validated (ts, action, result) ✅. All validations passed. MINOR FIX: Fixed .env file format (EMERGENT_LLM_KEY and ADMIN_PASSCODE were on same line, now separated)."
     implemented: true
     working: true
     file: "app/page.js"
@@ -372,14 +414,11 @@ backend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 6
+  test_sequence: 7
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Prediction Ledger confidence for Open Forecasts (dashboard.prediction_ledger.pending[].confidence + confidence_pct)"
-    - "Smart Alerts engine (GET /api/v1/alerts, POST /api/v1/alerts/ack, dashboard.smart_alerts)"
-    - "Time Machine historical replay (GET /api/v1/replay?date=&window=)"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -630,3 +669,69 @@ agent_communication:
       
       NO CRITICAL ISSUES FOUND. All backend features working as expected with real data (ccxt Kraken).
       WebSockets NOT tested (as instructed).
+
+    -agent: "testing"
+    -message: |
+      ✅ ALL PHASE 2 BACKEND TESTS PASSED (7/7)
+      
+      Completed comprehensive testing of Phase 2 features via external URL (https://quant-features.preview.emergentagent.com/api/v1/*):
+      
+      TEST A - Open Forecast Confidence (P0) - ✅ PASSED
+      - GET /api/v1/scorecard: 6 pending forecasts, each with BOTH confidence (Low/Moderate/High) and confidence_pct (int 0-100)
+      - Internal consistency validated: higher pct -> stronger label
+      - Fallback rule validated: pct=round(|prob_higher-50|/50*100)
+      - Label consistency: High (>45%), Moderate (20-45%), Low (<20%)
+      - All existing fields present (horizon, direction, prob_higher, target_date)
+      - Dashboard prediction_ledger.pending also validated
+      
+      TEST B - Smart Alerts - ✅ PASSED
+      - GET /api/v1/alerts: {status:'ready', alerts:[...], unseen:int, total:int}
+      - Alert structure: id, ts (ISO), as_of, category (Regime/Market State/Quant Score/Data Trust/Event Risk/Volatility), 
+        severity (high/warning/success/info), title, message, seen (bool)
+      - POST /api/v1/alerts/ack {} marks all seen (unseen becomes 0)
+      - POST /api/v1/alerts/ack {"ids":["<id>"]} marks specific alert seen
+      - GET /api/v1/dashboard includes top-level smart_alerts {alerts, unseen, total}
+      - MINOR FIX: Added smart_alerts to dashboard response (backend/server.py line 2455)
+      
+      TEST C - Time Machine - ✅ PASSED
+      - GET /api/v1/replay (no date): defaults to max_date, all required fields present
+      - Logic validated: correct == (signal == actual), actual == 'UP' iff next_close > close
+      - Window has exactly one is_pick=true item
+      - GET /api/v1/replay?date=2025-11-15&window=20: pick_date=2025-11-15 (nearest <=), window length=41
+      - Data is REAL (500 historical trades from walk-forward backtest)
+      
+      TEST D - Risk Engine - ✅ PASSED
+      - GET /api/v1/dashboard -> risk object with all required fields
+      - level (Low/Normal/Elevated/High/Extreme), score (int 0-100), state_scale (list of 5)
+      - expected_move {24H/7D/30D each with pct/low/high}: validated low < close < high for all horizons
+      - realised_vol_annual, vol_percentile, downside_zone, upside_zone, macro_event_risk, data_uncertainty
+      - drivers (list with name/state/value/demo), demo (object), note
+      - Data is REAL except DEMO metrics (clearly flagged with demo=true)
+      
+      TEST E - Smart Money & Institutional DEMO - ✅ PASSED
+      - GET /api/v1/dashboard -> smart_money and institutional objects
+      - Both have demo=true, source mentions 'needs key', headline (non-empty), metrics (non-empty list)
+      - Each metric has name/value/signal
+      - Clearly flagged as DEMO with illustrative data
+      
+      TEST F - Manual Forecast Passcode Gate + Audit - ✅ PASSED
+      - POST /api/v1/bitmark/run with no passcode -> status='unauthorized'
+      - POST with wrong passcode -> status='unauthorized'
+      - POST with correct passcode ('btciq-admin') -> status='started' (passcode accepted)
+      - GET /api/v1/audit: {status:'ready', entries:[...]} with denied attempts having result='denied'
+      - MINOR FIX: Fixed .env file format (EMERGENT_LLM_KEY and ADMIN_PASSCODE separated)
+      
+      TEST G - REGRESSION - ✅ PASSED
+      - GET /api/v1/dashboard: status='ready' with all prior fields (decision, forecasts, bitmark, data_health, 
+        event_calendar, prediction_ledger, quant_score, regime, cycle, dominance, policy, chart, smart_alerts, 
+        news_forecast_link)
+      - GET /api/v1/health: status='ok'
+      - POST /api/v1/chat: model='gemini-3-flash-preview', assistant identifies as "Albert"
+      
+      MINOR FIXES APPLIED:
+      1. Added smart_alerts to dashboard response (backend/server.py line 2455)
+      2. Fixed .env file format (separated EMERGENT_LLM_KEY and ADMIN_PASSCODE)
+      
+      NO CRITICAL ISSUES FOUND. All backend features working as expected with REAL data (ccxt Kraken).
+      WebSockets NOT tested (as instructed).
+      Data is REAL except clearly-flagged DEMO panels (smart_money, institutional, risk.demo).

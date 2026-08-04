@@ -39,38 +39,56 @@ const signalText = (w) =>
 
 const SECTIONS = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard,
-    blurb: 'A 10-second read of the market: one overall score, the current market "mood" (regime), the live price and the near-term odds.' },
-  { id: 'bitmark', label: 'BitMarkAI', icon: Sparkles,
-    blurb: 'BitMarkAI is BTCIQ’s adaptive Bitcoin Price Prediction Engine — probability-based forecasts from one week to five years. Each horizon is weighted differently, updated on a schedule, on demand, or when a major event hits, and every change is explained.' },
+    blurb: 'Your 10-second snapshot of Bitcoin right now: the price, the market "mood", one simple score, the near-term odds, how risky things are and how sure the model is. Start here.' },
   { id: 'forecasts', label: 'Forecasts', icon: Target,
-    blurb: 'Probability-based predictions for the next 24 hours, 7 days and 30 days — never certainties, always odds with a bull/base/bear price range and the maths behind each one.' },
-  { id: 'chart', label: 'Chart Intelligence', icon: CandlestickChart,
-    blurb: 'Automated technical read of the daily chart: support/resistance zones, trend structure, breakouts, momentum divergences and candlestick patterns — plus historical odds for the current setup.' },
-  { id: 'news', label: 'BTC News', icon: Newspaper,
-    blurb: 'The news. The meaning. The probable market impact. Each story becomes an AI intelligence card — what happened, why it matters for Bitcoin, likely direction, and an impact score — with links to the original source.' },
-  { id: 'cycle', label: 'Cycle & Macro', icon: Globe,
-    blurb: 'Where Bitcoin sits in its halving cycle and how capital is rotating across the wider crypto market (BTC dominance).' },
-  { id: 'policy', label: 'Policy & Liquidity', icon: Landmark,
-    blurb: 'Are global financial conditions becoming more supportive or restrictive for Bitcoin? Central-bank policy, a Global Liquidity Impulse, cross-market correlations, and a regulation tracker that separates proposals from enacted law.' },
-  { id: 'analysis', label: 'Quant Analysis', icon: BarChart3,
-    blurb: 'The evidence behind the score: each indicator category, the raw feature values the model reads, and which ones matter most.' },
+    blurb: 'BitMarkAI’s probability-based price forecasts from 1 week to 5 years — always shown as odds and price ranges (bull / base / bear), never a single guaranteed number. Longer horizons show wider uncertainty.' },
+  { id: 'market-intel', label: 'Market Intelligence', icon: BarChart3,
+    blurb: 'The technical picture behind the score: chart structure and key levels, where Bitcoin sits in its 4-year cycle, and the raw indicators the model reads.' },
+  { id: 'smartmoney', label: 'Smart Money', icon: Waves,
+    blurb: 'On-chain "smart money" behaviour — whale wallets, exchange reserves and long-term holders. Shown as clearly-labelled demo values until an on-chain data key is connected.' },
+  { id: 'institutional', label: 'Institutional', icon: Landmark,
+    blurb: 'Institutional footprint — spot-ETF flows and CME futures positioning. Shown as clearly-labelled demo values until an ETF/CME data key is connected.' },
+  { id: 'macro', label: 'Macro & Policy', icon: Globe,
+    blurb: 'Are global money conditions helping or hurting Bitcoin? Central-bank policy, a liquidity gauge, cross-market correlations and a regulation tracker.' },
+  { id: 'news', label: 'News', icon: Newspaper,
+    blurb: 'The news, explained: what happened, why it matters for Bitcoin, the likely direction and an impact score — with links to the original source.' },
+  { id: 'risk', label: 'Risk', icon: ShieldAlert,
+    blurb: 'How bumpy conditions are right now — kept separate from direction. Expected move, key support/resistance zones, event risk and data reliability. A positive outlook can still be high risk.' },
+  { id: 'events', label: 'Events', icon: CalendarClock,
+    blurb: 'A countdown calendar of the macro, derivatives and on-chain events that could move Bitcoin next — each with importance and expected volatility.' },
   { id: 'performance', label: 'Performance', icon: Trophy,
-    blurb: 'The receipts. Every past prediction graded win/loss, the running accuracy over time, and an honest scoreboard — no cherry-picking.' },
-  { id: 'scorecard', label: 'Prediction Ledger', icon: ClipboardList,
-    blurb: 'Every forecast is permanently logged before the outcome is known, then graded when it matures. A public scorecard shows directional accuracy, Brier score, error and probability calibration by horizon.' },
-  { id: 'trust', label: 'Data Trust', icon: ShieldCheck,
-    blurb: 'Provenance for every number: original provider, freshness, latency and confidence. When a live feed goes stale the odds are faded and confidence is reduced automatically.' },
-  { id: 'events', label: 'Event Calendar', icon: CalendarClock,
-    blurb: 'A unified calendar of macro, derivatives and on-chain events — each with a live countdown, importance and expected volatility, so you can see what could move Bitcoin next.' },
-  { id: 'timemachine', label: 'Time Machine', icon: History,
-    blurb: 'Replay any day in Bitcoin’s history: see exactly what the model would have predicted on that date, the actual outcome the next day, and the surrounding price path — an honest look at how the engine behaves through every kind of market.' },
-  { id: 'strategy', label: 'Strategy Lab', icon: FlaskConical, soon: true,
-    blurb: 'Soon: build no-code rules (e.g. "buy when the score > 70") and backtest them with fees, slippage and drawdown.' },
-  { id: 'alerts', label: 'Alerts', icon: Bell,
-    blurb: 'A live feed of what just changed and what is coming: regime shifts, liquidity state, chart triggers, cross-market moves and upcoming high-impact policy events.' },
+    blurb: 'The receipts. Every forecast is logged before the outcome is known and graded when it matures — accuracy, calibration and an honest scoreboard, plus the data-trust log. Nothing is hidden.' },
+  { id: 'timemachine', label: 'Bitcoin Time Machine', icon: History,
+    blurb: 'Replay any day in Bitcoin’s history: see exactly what the model would have predicted then, what actually happened next, and the price path around it — using only the information available at the time.' },
   { id: 'ask', label: 'Ask Albert', icon: MessageCircle,
-    blurb: 'Chat with Albert, BTCIQ’s AI quant, in plain English — "Why did the score fall?", "What is the 7-day outlook?" — and get answers grounded strictly in the live dashboard numbers (powered by Gemini 3 Flash). He will never invent data.' },
+    blurb: 'Chat with Albert, BTCIQ’s AI Quant Analyst, in plain English — "Why did the score fall?", "What could move Bitcoin next?" — grounded strictly in the live dashboard numbers. He never invents data.' },
+  { id: 'alerts', label: 'Alerts', icon: Bell,
+    blurb: 'A running feed of what just changed and what is coming: regime shifts, decision changes, data-trust drops and upcoming high-impact events.' },
+  { id: 'settings', label: 'Settings', icon: Cpu,
+    blurb: 'Admin passcode for manual forecast runs, the list of data sources and their status, and BTCIQ’s about & compliance information.' },
 ];
+
+// Legacy section metadata for sub-panels that are now grouped under the new nav
+// (their components still look up a blurb/label by id).
+const LEGACY_SECTIONS = [
+  { id: 'bitmark', label: 'BitMarkAI', icon: Sparkles,
+    blurb: 'BitMarkAI is BTCIQ’s adaptive Bitcoin Price Prediction Engine — probability-based forecasts from one week to five years. Each horizon is weighted differently, updated weekly, on demand, or when a major event hits — and every change is explained. It never gives a single guaranteed price.' },
+  { id: 'chart', label: 'Chart Intelligence', icon: CandlestickChart,
+    blurb: 'An automatic read of the daily chart in plain language: support and resistance zones, trend, breakouts and momentum — plus how often similar setups played out historically.' },
+  { id: 'cycle', label: 'Cycle', icon: Globe,
+    blurb: 'Where Bitcoin sits in its ~4-year halving cycle and how money is rotating across the wider crypto market (BTC dominance). Context, not a price rule.' },
+  { id: 'policy', label: 'Macro & Policy', icon: Landmark,
+    blurb: 'Are global money conditions helping or hurting Bitcoin? Central-bank policy, a liquidity gauge, cross-market correlations and a regulation tracker that separates proposals from enacted law.' },
+  { id: 'analysis', label: 'Indicators', icon: BarChart3,
+    blurb: 'The evidence behind the score: each indicator category, the raw values the model reads, and which ones matter most right now.' },
+  { id: 'scorecard', label: 'Prediction Ledger', icon: ClipboardList,
+    blurb: 'Every forecast is permanently logged before the outcome is known, then graded when it matures — directional accuracy, Brier score, error and calibration by horizon. Nothing is deleted.' },
+  { id: 'trust', label: 'Data Trust', icon: ShieldCheck,
+    blurb: 'Where every number comes from: the source, how fresh it is, and how reliable. If a live feed goes stale the odds are automatically toned down.' },
+];
+const sec = (id) => sec(id)
+  || LEGACY_sec(id)
+  || { id, label: id, icon: Info, blurb: '' };
 
 /* --------------------------- small components ------------------------ */
 function ChartTooltip({ active, payload, label }) {
@@ -109,22 +127,24 @@ function QuantGauge({ score }) {
 }
 
 const InfoBlock = ({ children }) => (
-  <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-4 text-sm text-slate-400">
-    <div className="mb-1 flex items-center gap-2 text-slate-300">
-      <Info className="h-4 w-4" /><span className="font-semibold">What is this?</span>
+  <div className="rounded-lg border border-sky-500/20 bg-sky-500/[0.04] p-4 text-sm text-slate-400">
+    <div className="mb-1 flex items-center gap-2 text-sky-200">
+      <Info className="h-4 w-4" /><span className="font-semibold">In plain English</span>
     </div>
     {children}
   </div>
 );
 
 const AiReview = ({ text }) => (
-  <Card className="border-0 bg-gradient-to-br from-violet-500/10 to-slate-900 p-5 ring-1 ring-violet-500/25">
-    <div className="mb-2 flex items-center gap-2">
-      <Sparkles className="h-4 w-4 text-violet-400" />
-      <h3 className="text-sm font-semibold text-violet-200">AI Review</h3>
-      <span className="text-[10px] text-slate-500">generated from live model output</span>
+  <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-violet-500/[0.06] p-5 ring-1 ring-sky-500/25">
+    <div className="mb-2 flex items-center gap-2.5">
+      <img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-500/40" />
+      <div className="flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-sky-100">Albert’s Review</h3>
+        <span className="hidden text-[10px] text-slate-500 sm:inline">plain-English read of the live numbers</span>
+      </div>
     </div>
-    <p className="text-sm leading-relaxed text-slate-300">{text}</p>
+    <p className="text-sm leading-relaxed text-slate-200">{text}</p>
   </Card>
 );
 
@@ -270,69 +290,116 @@ function DecisionEngineCard({ d }) {
   );
 }
 
-function OverviewSection({ d, ticker }) {
-  const f = f24(d);
+function timeAgo(iso) {
+  if (!iso) return '—';
+  const t = Date.now() - new Date(iso).getTime();
+  if (isNaN(t)) return '—';
+  const m = Math.floor(t / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m} minute${m === 1 ? '' : 's'} ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} hour${h === 1 ? '' : 's'} ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+const RISK_TXT = {
+  Low: 'text-emerald-400', Normal: 'text-lime-400', Moderate: 'text-lime-400',
+  Elevated: 'text-amber-400', High: 'text-orange-400', Extreme: 'text-red-400',
+};
+
+function StateItem({ label, value, sub, color, big, hint }) {
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+      <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">
+        {label}
+        {hint && <span title={hint} className="cursor-help text-slate-600 hover:text-sky-400">ⓘ</span>}
+      </p>
+      <p className={`mt-1 font-black ${big ? 'text-2xl' : 'text-lg'}`} style={color ? { color } : undefined}>{value}</p>
+      {sub && <p className="text-[11px] text-slate-500">{sub}</p>}
+    </div>
+  );
+}
+
+function MarketStateHero({ d, ticker }) {
   const ch = ticker?.change24h ?? d.day_change_pct;
+  const f24o = f24(d);
+  const f7o = fBy(d, '7D');
+  const risk = d.risk || {};
+  const riskLevel = risk.level || (d.decision && d.decision.risk_level) || '—';
+  const dec = d.decision || {};
+  const modelConf = f7o?.confidence || f24o?.confidence || '—';
+  const dh = d.data_health || {};
+  return (
+    <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-slate-900 to-slate-900/60 p-6 ring-1 ring-slate-800">
+      <div aria-hidden className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-amber-500/5 blur-3xl" />
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
+          <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" /></span>
+          BITCOIN MARKET STATE
+        </span>
+        <span className="ml-auto text-[11px] text-slate-500">Updated {timeAgo(d.created_at)} · source {d.data_source}</span>
+      </div>
+
+      <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-slate-500">BTC Live Price</p>
+          <p className="text-4xl font-black text-white">{fmtUsd(ticker?.price ?? d.last_close)}</p>
+          <p className={`text-sm font-semibold ${ch >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {ch >= 0 ? '▲' : '▼'} {ch}% (24h){ticker?.price_aud ? ` · ≈ ${fmtAud(ticker.price_aud)}` : ''}
+          </p>
+        </div>
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-slate-500">Market Regime</p>
+          <p className="text-2xl font-bold text-sky-300">{d.regime.regime}</p>
+          <p className="max-w-md text-xs text-slate-500">{d.regime.description}</p>
+        </div>
+      </div>
+
+      <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        <StateItem label="Quant Score" value={`${d.quant_score}`} sub={d.quant_label} color={scoreColor(d.quant_score)} big
+          hint="A 0–100 health score for Bitcoin right now. Above 55 leans positive, below 45 leans negative, near 50 is undecided." />
+        <StateItem label="24-Hour Outlook" value={f24o ? `${Math.max(f24o.higher, f24o.lower)}%` : '—'} sub={f24o ? (f24o.higher >= f24o.lower ? 'prob. higher' : 'prob. lower') : ''} color={f24o && f24o.higher >= f24o.lower ? '#34d399' : '#f87171'}
+          hint="The model's estimated chance that Bitcoin closes higher (or lower) one day from now. It's odds, not a promise." />
+        <StateItem label="7-Day Outlook" value={f7o ? `${Math.max(f7o.higher, f7o.lower)}%` : '—'} sub={f7o ? (f7o.higher >= f7o.lower ? 'prob. higher' : 'prob. lower') : ''} color={f7o && f7o.higher >= f7o.lower ? '#34d399' : '#f87171'}
+          hint="Same idea as the 24-hour view, but looking one week ahead." />
+        <StateItem label="Risk Level" value={riskLevel} sub="how bumpy, not direction" color={undefined}
+          hint="How wild price swings could be right now — separate from whether the outlook is up or down. You can be 'leaning up' AND 'high risk' at the same time." />
+        <StateItem label="Model Confidence" value={modelConf} sub="how sure the model is" hint="How strong the model's own conviction is, based on how well it has done in similar past setups." />
+        <StateItem label="Data Confidence" value={dh.level || '—'} sub={dh.score != null ? `${dh.score}/100 feeds` : ''} hint="How fresh and reliable the underlying data feeds are. If feeds go stale, the odds are automatically toned down." />
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+        <span className={`rounded-full px-2 py-0.5 font-semibold ${RISK_TXT[riskLevel] || 'text-slate-300'} bg-slate-800/60`}>Risk: {riskLevel}</span>
+        {dec.label && <span className="rounded-full bg-slate-800/60 px-2 py-0.5 font-semibold text-slate-300">Decision: {dec.label} ({dec.overall_score}/100)</span>}
+        <span className="rounded-full bg-slate-800/60 px-2 py-0.5">Alignment: {dec.alignment || '—'}</span>
+        <span className="ml-auto italic">Probability, not certainty — not financial advice.</span>
+      </div>
+    </Card>
+  );
+}
+
+function AlbertIntroCard() {
+  return (
+    <Card className="flex items-start gap-4 border-0 bg-gradient-to-br from-sky-500/5 to-violet-500/5 p-5 ring-1 ring-sky-500/20">
+      <img src="/albert.png" alt="Albert" className="h-16 w-16 shrink-0 rounded-full object-cover ring-2 ring-sky-500/40" />
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-base font-bold text-white">Albert</h3>
+          <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-300">BTCIQ’s AI Quant Analyst</span>
+        </div>
+        <p className="mt-1 text-sm text-slate-300">Albert interprets BitMarkAI’s numbers, explains the probabilities in plain language, and helps you understand what may move Bitcoin next. “Let us examine the evidence — probability is not certainty.”</p>
+        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Albert is an original fictional BTCIQ AI Quant character inspired by the spirit of scientific curiosity. He is not Albert Einstein and does not represent Einstein’s real opinions.</p>
+      </div>
+    </Card>
+  );
+}
+
+function OverviewSection({ d, ticker }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={LayoutDashboard} title="Overview" blurb={SECTIONS[0].blurb} />
+      <MarketStateHero d={d} ticker={ticker} />
+      <AlbertIntroCard />
       <DecisionEngineCard d={d} />
       <AiReview text={reviewOverview(d)} />
-      <MarketIntelCard d={d} />
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card className="flex flex-col items-center border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-          <p className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-400">Bitcoin Quant Score</p>
-          <QuantGauge score={d.quant_score} />
-          <p className="mt-3 text-lg font-bold" style={{ color: scoreColor(d.quant_score) }}>{d.quant_label}</p>
-        </Card>
-
-        <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-          <div className="mb-2 flex items-center gap-2">
-            <Compass className="h-5 w-5 text-sky-400" />
-            <p className="text-xs font-medium uppercase tracking-wider text-slate-400">Market Regime</p>
-          </div>
-          <p className="text-2xl font-bold text-white">{d.regime.regime}</p>
-          <p className="mt-2 text-sm leading-relaxed text-slate-400">{d.regime.description}</p>
-          <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-xs text-slate-400">
-            <span className="font-semibold text-slate-200">Model behaviour:</span> {d.regime.behavior}
-          </div>
-        </Card>
-
-        <div className="space-y-4">
-          <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-            <div className="flex items-center justify-between">
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">BTC Live Price</p>
-              <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-400">
-                <span className="relative flex h-2 w-2">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
-                  <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
-                </span>LIVE
-              </span>
-            </div>
-            <p className="mt-1 text-2xl font-bold text-white">{fmtUsd(ticker?.price ?? d.last_close)}</p>
-            {ticker?.price_aud && <p className="text-sm font-semibold text-amber-300">≈ {fmtAud(ticker.price_aud)} <span className="text-[10px] font-normal text-slate-500">AUD @ {ticker.aud_rate}</span></p>}
-            <p className={`mt-1 flex items-center gap-1 text-sm font-semibold ${ch >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {ch >= 0 ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
-              {ch}% (24h){ticker?.source ? ` · ${ticker.source}` : ''}
-            </p>
-          </Card>
-          {f && (
-            <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">24-Hour Odds{f.news_link ? ' · news-adjusted' : ''}</p>
-              <div className="mt-2 flex items-center gap-3">
-                <div className="flex-1">
-                  <div className="flex justify-between text-xs"><span className="text-emerald-400">Higher {f.news_link ? f.news_link.higher_adj : f.higher}%</span><span className="text-red-400">{f.news_link ? f.news_link.lower_adj : f.lower}% Lower</span></div>
-                  <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-red-500/40">
-                    <div className="h-full rounded-full bg-emerald-400" style={{ width: `${f.news_link ? f.news_link.higher_adj : f.higher}%` }} />
-                  </div>
-                </div>
-              </div>
-              <p className="mt-2 text-xs text-slate-500">Confidence: <span className="text-slate-300">{f.confidence}</span> · invalid {f.invalidation_dir} {fmtUsd(f.invalidation)}</p>
-            </Card>
-          )}
-        </div>
-      </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
@@ -693,12 +760,12 @@ function CandleChart({ ohlc, sr }) {
 
 function ChartSection({ d }) {
   const c = d.chart;
-  if (!c) return <ComingSoonSection section={SECTIONS.find((s) => s.id === 'chart')} />;
+  if (!c) return <ComingSoonSection section={sec('chart')} />;
   const p = c.predictive;
   const biasColor = (b) => b === 'Bullish' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10' : b === 'Bearish' ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-slate-300 border-slate-700 bg-slate-800/40';
   return (
     <div className="space-y-5">
-      <SectionHead icon={CandlestickChart} title="Chart Intelligence" blurb={SECTIONS.find((s) => s.id === 'chart').blurb} />
+      <SectionHead icon={CandlestickChart} title="Chart Intelligence" blurb={sec('chart').blurb} />
       <AiReview text={reviewChart(d)} />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-3 flex items-center justify-between">
@@ -740,7 +807,7 @@ function CycleSection({ d }) {
   const c = d.cycle, dom = d.dominance;
   return (
     <div className="space-y-5">
-      <SectionHead icon={Globe} title="Cycle & Macro" blurb={SECTIONS.find((s) => s.id === 'cycle').blurb} />
+      <SectionHead icon={Globe} title="Cycle & Macro" blurb={sec('cycle').blurb} />
       <AiReview text={reviewCycle(d)} />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {c && (
@@ -788,10 +855,10 @@ const stageColor = (n) => n >= 10 ? 'text-emerald-400 border-emerald-500/30 bg-e
 
 function PolicySection({ d }) {
   const p = d.policy; const cm = d.crossmarket || [];
-  if (!p) return <ComingSoonSection section={SECTIONS.find((s) => s.id === 'policy')} />;
+  if (!p) return <ComingSoonSection section={sec('policy')} />;
   return (
     <div className="space-y-5">
-      <SectionHead icon={Landmark} title="Policy & Liquidity" blurb={SECTIONS.find((s) => s.id === 'policy').blurb} />
+      <SectionHead icon={Landmark} title="Policy & Liquidity" blurb={sec('policy').blurb} />
       <AiReview text={reviewPolicy(d)} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -901,7 +968,7 @@ function AlertsSection({ d, alertsData, onAck }) {
   const fmtTs = (iso) => { try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return iso; } };
   return (
     <div className="space-y-5">
-      <SectionHead icon={Bell} title="Smart Alerts" blurb={SECTIONS.find((s) => s.id === 'alerts').blurb} />
+      <SectionHead icon={Bell} title="Smart Alerts" blurb={sec('alerts').blurb} />
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-4 flex items-center gap-2">
@@ -995,7 +1062,7 @@ function TimeMachineSection() {
 
   return (
     <div className="space-y-5">
-      <SectionHead icon={History} title="Bitcoin Time Machine" blurb={SECTIONS.find((s) => s.id === 'timemachine').blurb} />
+      <SectionHead icon={History} title="Bitcoin Time Machine" blurb={sec('timemachine').blurb} />
 
       <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
         <div className="flex flex-wrap items-end gap-3">
@@ -1123,7 +1190,7 @@ function NewsSection({ news, status, onRefresh, refreshing }) {
   if (status !== 'ready' || !news) {
     return (
       <div className="space-y-5">
-        <SectionHead icon={Newspaper} title="BTC News" blurb={SECTIONS.find((s) => s.id === 'news').blurb} />
+        <SectionHead icon={Newspaper} title="BTC News" blurb={sec('news').blurb} />
         <Card className="flex items-center justify-center gap-3 border-0 bg-slate-900 p-16 ring-1 ring-slate-800">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-700 border-t-sky-400" />
           <span className="text-slate-400">{status === 'error' ? 'News engine error — try refresh.' : 'Gathering headlines & generating AI summaries…'}</span>
@@ -1136,7 +1203,7 @@ function NewsSection({ news, status, onRefresh, refreshing }) {
   const biasColor = b.bias === 'Moderately Bullish' ? 'text-emerald-400' : b.bias === 'Moderately Bearish' ? 'text-red-400' : 'text-amber-400';
   return (
     <div className="space-y-5">
-      <SectionHead icon={Newspaper} title="BTC News" blurb={SECTIONS.find((s) => s.id === 'news').blurb} />
+      <SectionHead icon={Newspaper} title="BTC News" blurb={sec('news').blurb} />
       <Card className="border-0 bg-gradient-to-br from-violet-500/10 to-slate-900 p-6 ring-1 ring-violet-500/25">
         <div className="mb-3 flex items-center gap-2"><Sparkles className="h-5 w-5 text-violet-400" /><h3 className="font-semibold text-slate-100">Daily AI Briefing</h3><span className="ml-auto text-[11px] text-slate-500">{news.model}</span></div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -1240,7 +1307,7 @@ function BitMarkSection({ d }) {
   const bm = d.bitmark;
   const [running, setRunning] = React.useState(false);
   const [runMsg, setRunMsg] = React.useState(null);
-  if (!bm) return <ComingSoonSection section={SECTIONS.find((s) => s.id === 'bitmark')} />;
+  if (!bm) return <ComingSoonSection section={sec('bitmark')} />;
   const trigLabel = { scheduled: 'Scheduled', manual: 'Manual run', event: 'Event-triggered' }[bm.trigger] || bm.trigger;
   const trigColor = bm.trigger === 'event' ? 'text-orange-300 border-orange-500/30' : bm.trigger === 'manual' ? 'text-sky-300 border-sky-500/30' : 'text-slate-300 border-slate-700';
   const models = bm.horizons.filter((h) => h.type === 'model');
@@ -1248,16 +1315,20 @@ function BitMarkSection({ d }) {
   const runForecast = async () => {
     if (running) return;
     setRunning(true); setRunMsg(null);
+    const passcode = (typeof window !== 'undefined' && window.localStorage.getItem('btciq_admin_passcode')) || '';
     try {
-      const r = await fetch('/api/v1/bitmark/run', { method: 'POST' });
+      const r = await fetch('/api/v1/bitmark/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode }),
+      });
       const j = await r.json();
-      setRunMsg({ status: j.status, text: j.message });
+      setRunMsg({ status: j.status, text: j.status === 'unauthorized' ? 'Admin passcode required — set it in Settings to run a manual forecast.' : j.message });
     } catch (e) { setRunMsg({ status: 'error', text: 'Could not start a forecast — please try again.' }); }
     finally { setRunning(false); }
   };
   return (
     <div className="space-y-5">
-      <SectionHead icon={Sparkles} title="BitMarkAI" blurb={SECTIONS.find((s) => s.id === 'bitmark').blurb} />
+      <SectionHead icon={Sparkles} title="BitMarkAI" blurb={sec('bitmark').blurb} />
 
       <Card className="border-0 bg-gradient-to-br from-amber-500/[0.08] via-violet-500/[0.08] to-slate-900 p-6 ring-1 ring-amber-500/25">
         <div className="flex flex-wrap items-center gap-4">
@@ -1347,12 +1418,12 @@ function Stat({ label, value, sub, color }) {
 
 function ScorecardSection({ d }) {
   const pl = d.prediction_ledger;
-  if (!pl) return <ComingSoonSection section={SECTIONS.find((s) => s.id === 'scorecard')} />;
+  if (!pl) return <ComingSoonSection section={sec('scorecard')} />;
   const o = pl.overall;
   const accCol = o.accuracy == null ? undefined : scoreColor(o.accuracy);
   return (
     <div className="space-y-5">
-      <SectionHead icon={ClipboardList} title="Prediction Ledger" blurb={SECTIONS.find((s) => s.id === 'scorecard').blurb} />
+      <SectionHead icon={ClipboardList} title="Prediction Ledger" blurb={sec('scorecard').blurb} />
       <div className="rounded-xl border border-sky-500/20 bg-sky-500/[0.06] p-4 text-sm text-slate-300">
         <span className="font-semibold text-sky-300">Accountability by design.</span> Every forecast is written to the ledger the moment it is issued — before the outcome exists — then graded automatically when it matures. Model <span className="font-mono text-slate-200">{pl.model_version}</span> · <span className="text-slate-200">{pl.total_logged}</span> forecasts logged (<span className="text-slate-200">{pl.live_logged}</span> live-forward + <span className="text-slate-200">{pl.backtested}</span> walk-forward backtest).
       </div>
@@ -1464,11 +1535,11 @@ function ScorecardSection({ d }) {
 /* ------------------------- Data Trust Layer -------------------------- */
 function DataTrustSection({ d }) {
   const h = d.data_health;
-  if (!h) return <ComingSoonSection section={SECTIONS.find((s) => s.id === 'trust')} />;
+  if (!h) return <ComingSoonSection section={sec('trust')} />;
   const col = h.score >= 90 ? '#34d399' : h.score >= 75 ? '#a3e635' : h.score >= 55 ? '#fbbf24' : '#f87171';
   return (
     <div className="space-y-5">
-      <SectionHead icon={ShieldCheck} title="Data Trust" blurb={SECTIONS.find((s) => s.id === 'trust').blurb} />
+      <SectionHead icon={ShieldCheck} title="Data Trust" blurb={sec('trust').blurb} />
       <Card className={`border-0 bg-gradient-to-br from-slate-900 to-slate-950 p-6 ring-1 ${h.faded ? 'ring-orange-500/40' : 'ring-emerald-500/25'}`}>
         <div className="flex flex-wrap items-center gap-6">
           <div>
@@ -1516,11 +1587,11 @@ const catColor = (c) => ({ Macro: 'text-sky-400 border-sky-500/30 bg-sky-500/10'
 
 function EventsSection({ d }) {
   const ec = d.event_calendar;
-  if (!ec) return <ComingSoonSection section={SECTIONS.find((s) => s.id === 'events')} />;
+  if (!ec) return <ComingSoonSection section={sec('events')} />;
   const nx = ec.next_high_impact;
   return (
     <div className="space-y-5">
-      <SectionHead icon={CalendarClock} title="Event Calendar" blurb={SECTIONS.find((s) => s.id === 'events').blurb} />
+      <SectionHead icon={CalendarClock} title="Event Calendar" blurb={sec('events').blurb} />
       {nx && (
         <Card className="border-0 bg-gradient-to-r from-orange-500/10 to-slate-900 p-5 ring-1 ring-orange-500/30">
           <div className="flex flex-wrap items-center gap-4">
@@ -1604,7 +1675,7 @@ function AskQuantSection({ d }) {
 
   return (
     <div className="space-y-5">
-      <SectionHead icon={MessageCircle} title="Ask Albert" blurb={SECTIONS.find((s) => s.id === 'ask').blurb} />
+      <SectionHead icon={MessageCircle} title="Ask Albert" blurb={sec('ask').blurb} />
       <Card className="flex h-[560px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
         <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3">
           <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
@@ -1662,6 +1733,197 @@ function AskQuantSection({ d }) {
     </div>
   );
 }
+
+/* ---------------- Stage-1: Risk / Smart Money / Institutional / Settings --------------- */
+function DemoBadge({ label = 'DEMO DATA' }) {
+  return <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-300">{label}</span>;
+}
+const sigColor = (s) => s === 'Bullish' ? 'text-emerald-400' : s === 'Bearish' ? 'text-red-400' : 'text-slate-400';
+const riskStateColor = (s) => ({ Low: 'text-emerald-400', Normal: 'text-lime-400', Deep: 'text-emerald-400',
+  Elevated: 'text-amber-400', High: 'text-orange-400', Thin: 'text-orange-400', Extreme: 'text-red-400' }[s] || 'text-slate-300');
+
+function RiskSection({ d }) {
+  const r = d.risk;
+  if (!r) return <ComingSoonSection section={sec('risk')} />;
+  const lvlColor = riskStateColor(r.level);
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={ShieldAlert} title="BTCIQ Risk" blurb={sec('risk').blurb} />
+      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+        <div className="flex flex-wrap items-center gap-6">
+          <div>
+            <p className="text-[11px] uppercase tracking-wider text-slate-400">Overall Risk Level</p>
+            <p className={`text-4xl font-black ${lvlColor}`}>{r.level}</p>
+            <p className="text-xs text-slate-500">score {r.score}/100 · direction-independent</p>
+          </div>
+          <div className="flex-1">
+            <div className="flex gap-1">
+              {r.state_scale.map((s) => (
+                <div key={s} className={`flex-1 rounded py-1 text-center text-[10px] font-semibold ${s === r.level ? `${riskStateColor(s)} bg-slate-800 ring-1 ring-slate-600` : 'text-slate-600'}`}>{s}</div>
+              ))}
+            </div>
+            <p className="mt-3 text-xs italic text-slate-500">{r.note}</p>
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+          <p className="mb-3 text-sm font-semibold text-white">Expected Move</p>
+          {['24H', '7D', '30D'].map((h) => {
+            const e = r.expected_move[h];
+            return (
+              <div key={h} className="mb-2 flex items-center justify-between text-sm">
+                <span className="text-slate-400">{h}</span>
+                <span className="font-mono text-slate-200">±{e.pct}% · {fmtUsd(e.low)}–{fmtUsd(e.high)}</span>
+              </div>
+            );
+          })}
+          <p className="mt-2 text-[11px] text-slate-500">Realised vol ≈ {r.realised_vol_annual}% annualised ({r.vol_percentile}th pct)</p>
+        </Card>
+        <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+          <p className="mb-3 text-sm font-semibold text-white">Key Zones</p>
+          {r.upside_zone && <div className="mb-2 rounded-lg border border-red-500/20 bg-red-500/5 p-2.5 text-sm"><p className="text-[11px] text-slate-400">{r.upside_zone.label}</p><p className="font-mono font-bold text-red-300">{fmtUsd(r.upside_zone.price)} <span className="text-[11px] font-normal text-slate-500">+{r.upside_zone.distance_pct}%</span></p></div>}
+          {r.downside_zone && <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2.5 text-sm"><p className="text-[11px] text-slate-400">{r.downside_zone.label}</p><p className="font-mono font-bold text-emerald-300">{fmtUsd(r.downside_zone.price)} <span className="text-[11px] font-normal text-slate-500">-{r.downside_zone.distance_pct}%</span></p></div>}
+          {!r.upside_zone && !r.downside_zone && <p className="text-sm text-slate-500">No clear zones detected right now.</p>}
+        </Card>
+        <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+          <p className="mb-3 text-sm font-semibold text-white">Environment</p>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between"><span className="text-slate-400">Macro-event risk</span><span className={riskStateColor(r.macro_event_risk)}>{r.macro_event_risk}</span></div>
+            <div className="flex justify-between"><span className="text-slate-400">Data uncertainty</span><span className={riskStateColor(r.data_uncertainty)}>{r.data_uncertainty}</span></div>
+          </div>
+          <p className="mt-2 text-[11px] text-slate-500">{r.macro_note}</p>
+        </Card>
+      </div>
+
+      <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+        <div className="mb-3 flex items-center gap-2"><h3 className="text-sm font-semibold text-white">Risk Drivers</h3><span className="text-[11px] text-slate-500">real + illustrative</span></div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {r.drivers.map((dr, i) => (
+            <div key={i} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 text-sm">
+              <span className="flex-1 text-slate-300">{dr.name}</span>
+              {dr.demo && <DemoBadge />}
+              <span className={`font-semibold ${riskStateColor(dr.state)}`}>{dr.state}</span>
+              <span className="w-40 truncate text-right text-[11px] text-slate-500">{dr.value}</span>
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 text-[11px] text-slate-600">Metrics tagged DEMO DATA (implied volatility, leverage/funding, liquidation clusters, order-book depth) are illustrative placeholders until a paid derivatives/order-book feed key is added. All other metrics are computed from real market data.</p>
+      </Card>
+    </div>
+  );
+}
+
+function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
+  if (!panel) return <ComingSoonSection section={sec(sectionId)} />;
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={Icon} title={title} blurb={sec(sectionId).blurb} />
+      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Icon className="h-5 w-5 text-sky-400" />
+          <h3 className="font-semibold text-white">{panel.headline}</h3>
+          <DemoBadge />
+          <span className="ml-auto text-[11px] text-slate-500">{panel.source}</span>
+        </div>
+        <div className="space-y-2">
+          {panel.metrics.map((m, i) => (
+            <div key={i} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-sm">
+              <span className="flex-1 text-slate-300">{m.name}</span>
+              <span className="font-mono text-slate-200">{m.value}</span>
+              <span className={`w-16 text-right text-xs font-semibold ${sigColor(m.signal)}`}>{m.signal}</span>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] p-3 text-[11px] text-amber-200/80">
+          <span className="font-semibold">DEMO DATA:</span> the values above are illustrative placeholders shown to demonstrate the panel. They are not live. Provide a {panel.source} to activate real data.
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function SettingsSection({ onManualRun }) {
+  const [pass, setPass] = React.useState('');
+  const [saved, setSaved] = React.useState(false);
+  React.useEffect(() => {
+    if (typeof window !== 'undefined') setPass(window.localStorage.getItem('btciq_admin_passcode') || '');
+  }, []);
+  const save = () => { if (typeof window !== 'undefined') { window.localStorage.setItem('btciq_admin_passcode', pass); setSaved(true); setTimeout(() => setSaved(false), 2000); } };
+  const sources = [
+    ['Market data (BTC OHLCV, live price)', 'ccxt · Kraken/Coinbase', 'Live'],
+    ['Dominance / market cap', 'CoinGecko', 'Live'],
+    ['Cross-market (equities, DXY, gold)', 'Yahoo Finance / Stooq', 'Live'],
+    ['News', 'RSS (CoinDesk, Cointelegraph, Fed…)', 'Live'],
+    ['On-chain / Smart Money', 'Glassnode', 'Needs key — DEMO'],
+    ['ETF flows / Institutional', 'ETF issuers / CME', 'Needs key — DEMO'],
+    ['Derivatives (IV, funding, liquidations)', 'Deribit / CoinGlass', 'Needs key — DEMO'],
+    ['Social sentiment', 'LunarCrush', 'Needs key — DEMO'],
+  ];
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={Cpu} title="Settings" blurb={sec('settings').blurb} />
+      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+        <h3 className="mb-1 flex items-center gap-2 font-semibold text-white"><Lock className="h-4 w-4 text-amber-400" />Admin passcode</h3>
+        <p className="mb-3 text-xs text-slate-500">Required to trigger a manual BitMarkAI forecast run. Stored only in this browser. Manual runs are rate-limited and audit-logged.</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="Enter admin passcode"
+            className="w-64 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-sky-500/50 focus:outline-none" />
+          <Button onClick={save} className="bg-sky-500 hover:bg-sky-400">Save</Button>
+          {saved && <span className="text-xs font-semibold text-emerald-400">Saved ✓</span>}
+        </div>
+      </Card>
+      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+        <h3 className="mb-3 font-semibold text-white">Data sources</h3>
+        <div className="space-y-1.5">
+          {sources.map(([name, prov, status], i) => (
+            <div key={i} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 text-sm">
+              <span className="flex-1 text-slate-300">{name}</span>
+              <span className="text-[11px] text-slate-500">{prov}</span>
+              <span className={`w-32 text-right text-xs font-semibold ${status === 'Live' ? 'text-emerald-400' : 'text-amber-300'}`}>{status}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+        <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
+        <p className="text-xs leading-relaxed text-slate-400">BTCIQ — Bitcoin Market Analysis, powered by BitCentAI, our Bitcoin-Centred Intelligence Engine. BitMarkAI measures the market and produces probability-based forecasts. Albert is BTCIQ’s AI Quant Analyst.</p>
+        <p className="mt-3 text-[11px] leading-relaxed text-slate-500">BTCIQ provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes. Albert is an original fictional BTCIQ AI Quant character and is not Albert Einstein.</p>
+      </Card>
+    </div>
+  );
+}
+
+function MarketIntelligenceSection({ d }) {
+  return (
+    <div className="space-y-8">
+      <ChartSection d={d} />
+      <CycleSection d={d} />
+      <AnalysisSection d={d} />
+    </div>
+  );
+}
+
+function PerformanceHubSection({ d }) {
+  return (
+    <div className="space-y-8">
+      <ScorecardSection d={d} />
+      <PerformanceSection d={d} />
+      <DataTrustSection d={d} />
+    </div>
+  );
+}
+
+function ForecastsHubSection({ d }) {
+  return (
+    <div className="space-y-8">
+      <BitMarkSection d={d} />
+      <ForecastsSection d={d} />
+    </div>
+  );
+}
+
 
 /* ----------------------------- page ---------------------------------- */
 // Module-level caches survive a Fast-Refresh / remount so the dashboard never
@@ -1780,23 +2042,22 @@ export default function DashboardPage() {
   }
 
   const d = data;
-  const activeSection = SECTIONS.find((s) => s.id === active);
+  const activeSection = sec(active);
   const renderSection = () => {
     if (active === 'overview') return <OverviewSection d={d} ticker={ticker} />;
-    if (active === 'bitmark') return <BitMarkSection d={d} />;
-    if (active === 'forecasts') return <ForecastsSection d={d} />;
-    if (active === 'chart') return <ChartSection d={d} />;
+    if (active === 'forecasts') return <ForecastsHubSection d={d} />;
+    if (active === 'market-intel') return <MarketIntelligenceSection d={d} />;
+    if (active === 'smartmoney') return <DemoMetricsCard title="Smart Money" icon={Waves} panel={d.smart_money} sectionId="smartmoney" />;
+    if (active === 'institutional') return <DemoMetricsCard title="Institutional" icon={Landmark} panel={d.institutional} sectionId="institutional" />;
+    if (active === 'macro') return <PolicySection d={d} />;
     if (active === 'news') return <NewsSection news={news} status={newsStatus} onRefresh={handleNewsRefresh} refreshing={newsRefreshing} />;
-    if (active === 'cycle') return <CycleSection d={d} />;
-    if (active === 'policy') return <PolicySection d={d} />;
-    if (active === 'analysis') return <AnalysisSection d={d} />;
-    if (active === 'performance') return <PerformanceSection d={d} />;
-    if (active === 'scorecard') return <ScorecardSection d={d} />;
-    if (active === 'trust') return <DataTrustSection d={d} />;
+    if (active === 'risk') return <RiskSection d={d} />;
     if (active === 'events') return <EventsSection d={d} />;
+    if (active === 'performance') return <PerformanceHubSection d={d} />;
     if (active === 'timemachine') return <TimeMachineSection />;
-    if (active === 'alerts') return <AlertsSection d={d} alertsData={alertsData} onAck={ackAlerts} />;
     if (active === 'ask') return <AskQuantSection d={d} />;
+    if (active === 'alerts') return <AlertsSection d={d} alertsData={alertsData} onAck={ackAlerts} />;
+    if (active === 'settings') return <SettingsSection />;
     return <ComingSoonSection section={activeSection} />;
   };
 
@@ -1865,7 +2126,12 @@ export default function DashboardPage() {
           </div>
 
           <main className="mx-auto max-w-6xl px-4 py-6 md:px-8">{renderSection()}</main>
-          <footer className="pb-8 text-center text-xs text-slate-600">BTCIQ · powered by BitCentAI · educational research tool, not financial advice · real data via {d.data_source}</footer>
+          <footer className="space-y-2 px-4 pb-8 text-center md:px-8">
+            <p className="mx-auto max-w-3xl rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-2.5 text-[11px] leading-relaxed text-slate-500">
+              BTCIQ provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes.
+            </p>
+            <p className="text-xs text-slate-600">BTCIQ — Bitcoin Market Analysis · powered by BitCentAI · BitMarkAI forecast engine · real data via {d.data_source}</p>
+          </footer>
         </div>
       </div>
     </div>

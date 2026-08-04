@@ -1,755 +1,772 @@
 #!/usr/bin/env python3
 """
-Backend Test Suite for BTCIQ Dashboard - Three New Engines
-Tests via external base URL + /api/v1/... (real browser path)
+BTCIQ Backend Testing Script - Phase 2 Features
+Tests via Next.js proxy at external base URL with /api/v1/... prefix
+Data is REAL (ccxt Kraken) except clearly-flagged DEMO panels
 """
-import requests
+import os
 import sys
+import time
+import json
+import requests
 from datetime import datetime
 
-# External base URL from .env
-BASE_URL = "https://quant-features.preview.emergentagent.com"
+# Load base URL from .env
+BASE_URL = os.environ.get('NEXT_PUBLIC_BASE_URL', 'https://quant-features.preview.emergentagent.com')
+API_BASE = f"{BASE_URL}/api/v1"
 
-def test_engine_1_data_trust_layer():
-    """ENGINE 1: Data Trust Layer (GET /api/v1/dashboard)"""
-    print("\n" + "="*80)
-    print("ENGINE 1 - DATA TRUST LAYER")
-    print("="*80)
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+
+def test_open_forecast_confidence():
+    """A) P0 — Open Forecast confidence: GET /api/v1/scorecard and GET /api/v1/dashboard"""
+    log("=" * 80)
+    log("TEST A: Open Forecast Confidence (P0)")
+    log("=" * 80)
     
     try:
-        url = f"{BASE_URL}/api/v1/dashboard"
-        print(f"Testing: GET {url}")
-        resp = requests.get(url, timeout=30)
+        # Test GET /api/v1/scorecard
+        log("Testing GET /api/v1/scorecard...")
+        r = requests.get(f"{API_BASE}/scorecard", timeout=30)
+        log(f"Status: {r.status_code}")
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}"
         
-        if resp.status_code != 200:
-            print(f"❌ FAILED: HTTP {resp.status_code}")
-            return False
+        data = r.json()
+        log(f"Response keys: {list(data.keys())}")
+        assert data.get('status') == 'ready', f"Expected status='ready', got {data.get('status')}"
         
-        data = resp.json()
+        # Check pending forecasts
+        pending = data.get('pending', [])
+        log(f"Pending forecasts: {len(pending)}")
+        assert len(pending) > 0, "Expected at least one pending forecast"
         
-        # Validate data_health object
-        if 'data_health' not in data:
-            print("❌ FAILED: Missing 'data_health' field")
-            return False
-        
-        dh = data['data_health']
-        print(f"\n✓ data_health object present")
-        
-        # Validate top-level fields
-        required_fields = ['score', 'level', 'live', 'degraded', 'stale', 'faded', 'note', 'checked_at', 'feeds']
-        for field in required_fields:
-            if field not in dh:
-                print(f"❌ FAILED: Missing data_health.{field}")
-                return False
-        print(f"✓ All required top-level fields present")
-        
-        # Validate score
-        score = dh['score']
-        if not isinstance(score, int) or not (0 <= score <= 100):
-            print(f"❌ FAILED: score={score} not int 0-100")
-            return False
-        print(f"✓ score={score} (valid int 0-100)")
-        
-        # Validate level
-        level = dh['level']
-        if level not in ['High', 'Good', 'Degraded', 'Low']:
-            print(f"❌ FAILED: level='{level}' not in [High,Good,Degraded,Low]")
-            return False
-        print(f"✓ level='{level}' (valid enum)")
-        
-        # Validate counts
-        live = dh['live']
-        degraded = dh['degraded']
-        stale = dh['stale']
-        if not all(isinstance(x, int) and x >= 0 for x in [live, degraded, stale]):
-            print(f"❌ FAILED: Invalid counts: live={live}, degraded={degraded}, stale={stale}")
-            return False
-        print(f"✓ Counts: live={live}, degraded={degraded}, stale={stale}")
-        
-        # Validate faded
-        faded = dh['faded']
-        if not isinstance(faded, bool):
-            print(f"❌ FAILED: faded={faded} not bool")
-            return False
-        print(f"✓ faded={faded} (bool)")
-        
-        # Validate note
-        note = dh['note']
-        if not isinstance(note, str) or not note:
-            print(f"❌ FAILED: note is empty or not string")
-            return False
-        print(f"✓ note present ({len(note)} chars)")
-        
-        # Validate checked_at
-        checked_at = dh['checked_at']
-        try:
-            datetime.fromisoformat(checked_at.replace('Z', ''))
-            print(f"✓ checked_at='{checked_at}' (valid ISO format)")
-        except Exception:
-            print(f"❌ FAILED: checked_at='{checked_at}' not valid ISO format")
-            return False
-        
-        # Validate feeds (must be exactly 6)
-        feeds = dh['feeds']
-        if not isinstance(feeds, list) or len(feeds) != 6:
-            print(f"❌ FAILED: feeds has {len(feeds)} items, expected exactly 6")
-            return False
-        print(f"✓ feeds list has exactly 6 items")
-        
-        # Validate each feed
-        feed_required = ['id', 'label', 'provider', 'status', 'updated', 'age_min', 'confidence', 'methodology']
-        for i, feed in enumerate(feeds):
-            for field in feed_required:
-                if field not in feed:
-                    print(f"❌ FAILED: feeds[{i}] missing '{field}'")
-                    return False
+        # Validate each pending item has confidence and confidence_pct
+        for i, item in enumerate(pending):
+            log(f"\nPending item {i+1}:")
+            log(f"  horizon: {item.get('horizon')}")
+            log(f"  direction: {item.get('direction')}")
+            log(f"  confidence: {item.get('confidence')}")
+            log(f"  confidence_pct: {item.get('confidence_pct')}")
             
-            # Validate feed fields
-            if not isinstance(feed['id'], str) or not feed['id']:
-                print(f"❌ FAILED: feeds[{i}].id invalid")
-                return False
+            # MUST have both fields
+            assert 'confidence' in item, f"Item {i+1} missing 'confidence' field"
+            assert 'confidence_pct' in item, f"Item {i+1} missing 'confidence_pct' field"
             
-            if not isinstance(feed['label'], str) or not feed['label']:
-                print(f"❌ FAILED: feeds[{i}].label invalid")
-                return False
+            # Validate confidence label
+            conf_label = item['confidence']
+            assert conf_label in ['Low', 'Moderate', 'High'], f"Invalid confidence label: {conf_label}"
             
-            if not isinstance(feed['provider'], str) or not feed['provider']:
-                print(f"❌ FAILED: feeds[{i}].provider invalid")
-                return False
+            # Validate confidence_pct
+            conf_pct = item['confidence_pct']
+            assert isinstance(conf_pct, (int, float)), f"confidence_pct must be int, got {type(conf_pct)}"
+            assert 0 <= conf_pct <= 100, f"confidence_pct must be 0-100, got {conf_pct}"
             
-            if feed['status'] not in ['live', 'degraded', 'stale', 'down']:
-                print(f"❌ FAILED: feeds[{i}].status='{feed['status']}' not in [live,degraded,stale,down]")
-                return False
+            # Check internal consistency (higher pct -> stronger label)
+            prob_higher = item.get('prob_higher', 50)
+            margin = abs(prob_higher - 50)
+            expected_pct = round(margin / 50 * 100)
             
-            if not isinstance(feed['confidence'], int) or not (0 <= feed['confidence'] <= 100):
-                print(f"❌ FAILED: feeds[{i}].confidence={feed['confidence']} not int 0-100")
-                return False
+            # Allow some tolerance for rounding
+            assert abs(conf_pct - expected_pct) <= 5, f"confidence_pct ({conf_pct}) not consistent with prob_higher ({prob_higher}), expected ~{expected_pct}"
             
-            if not isinstance(feed['methodology'], str) or not feed['methodology']:
-                print(f"❌ FAILED: feeds[{i}].methodology invalid")
-                return False
+            # Check label consistency
+            if conf_pct > 45:
+                assert conf_label == 'High', f"High pct ({conf_pct}) should have 'High' label, got {conf_label}"
+            elif conf_pct > 20:
+                assert conf_label == 'Moderate', f"Moderate pct ({conf_pct}) should have 'Moderate' label, got {conf_label}"
+            else:
+                assert conf_label == 'Low', f"Low pct ({conf_pct}) should have 'Low' label, got {conf_label}"
+            
+            # Check existing fields still present
+            assert 'horizon' in item, "Missing 'horizon' field"
+            assert 'direction' in item, "Missing 'direction' field"
+            assert 'prob_higher' in item, "Missing 'prob_higher' field"
+            assert 'target_date' in item, "Missing 'target_date' field"
         
-        print(f"✓ All 6 feeds validated successfully")
+        # Also check dashboard.prediction_ledger
+        log("\nTesting GET /api/v1/dashboard -> prediction_ledger...")
+        r2 = requests.get(f"{API_BASE}/dashboard", timeout=30)
+        assert r2.status_code == 200, f"Dashboard request failed: {r2.status_code}"
         
-        # Expected: normally all feeds 'live' and score ~97
-        live_feeds = sum(1 for f in feeds if f['status'] == 'live')
-        print(f"✓ Live feeds: {live_feeds}/6 (expected: normally all 6)")
-        if score >= 90:
-            print(f"✓ Score {score} is healthy (>=90)")
-        else:
-            print(f"⚠ Minor: Score {score} is below 90 (expected ~97 normally)")
+        dash = r2.json()
+        assert dash.get('status') == 'ready', "Dashboard not ready"
         
-        # Validate decision.data_trust
-        if 'decision' not in data:
-            print("❌ FAILED: Missing 'decision' field")
-            return False
+        pred_ledger = dash.get('prediction_ledger', {})
+        assert pred_ledger, "Missing prediction_ledger in dashboard"
         
-        decision = data['decision']
-        if 'data_trust' not in decision:
-            print("❌ FAILED: Missing 'decision.data_trust' field")
-            return False
+        dash_pending = pred_ledger.get('pending', [])
+        log(f"Dashboard pending forecasts: {len(dash_pending)}")
         
-        dt = decision['data_trust']
-        print(f"\n✓ decision.data_trust object present")
+        # Validate dashboard pending items too
+        for item in dash_pending:
+            assert 'confidence' in item, "Dashboard pending item missing 'confidence'"
+            assert 'confidence_pct' in item, "Dashboard pending item missing 'confidence_pct'"
+            assert item['confidence'] in ['Low', 'Moderate', 'High'], f"Invalid confidence: {item['confidence']}"
+            assert 0 <= item['confidence_pct'] <= 100, f"Invalid confidence_pct: {item['confidence_pct']}"
         
-        # Validate data_trust fields
-        if 'score' not in dt or 'level' not in dt or 'faded' not in dt:
-            print(f"❌ FAILED: decision.data_trust missing required fields")
-            return False
-        
-        if not isinstance(dt['score'], int) or not (0 <= dt['score'] <= 100):
-            print(f"❌ FAILED: decision.data_trust.score={dt['score']} not int 0-100")
-            return False
-        
-        if dt['level'] not in ['High', 'Good', 'Degraded', 'Low']:
-            print(f"❌ FAILED: decision.data_trust.level='{dt['level']}' invalid")
-            return False
-        
-        if not isinstance(dt['faded'], bool):
-            print(f"❌ FAILED: decision.data_trust.faded={dt['faded']} not bool")
-            return False
-        
-        print(f"✓ decision.data_trust: score={dt['score']}, level='{dt['level']}', faded={dt['faded']}")
-        
-        # Validate decision.odds_faded
-        if 'odds_faded' not in decision:
-            print("❌ FAILED: Missing 'decision.odds_faded' field")
-            return False
-        
-        if not isinstance(decision['odds_faded'], bool):
-            print(f"❌ FAILED: decision.odds_faded={decision['odds_faded']} not bool")
-            return False
-        
-        print(f"✓ decision.odds_faded={decision['odds_faded']} (bool)")
-        
-        # When faded=False, outlook items should NOT have 'faded' flag
-        if not faded:
-            outlook = decision.get('outlook', [])
-            faded_items = [o for o in outlook if o.get('faded')]
-            if faded_items:
-                print(f"❌ FAILED: data_health.faded=False but {len(faded_items)} outlook items have 'faded' flag")
-                return False
-            print(f"✓ data_health.faded=False and no outlook items are shrunk (no 'faded' flag)")
-        else:
-            print(f"⚠ data_health.faded=True - odds are faded")
-        
-        print(f"\n✅ ENGINE 1 PASSED - Data Trust Layer validated successfully")
+        log("\n✅ TEST A PASSED: Open Forecast Confidence")
         return True
         
+    except AssertionError as e:
+        log(f"\n❌ TEST A FAILED: {e}")
+        return False
     except Exception as e:
-        print(f"❌ FAILED: Exception: {e}")
+        log(f"\n❌ TEST A ERROR: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
-def test_engine_2_prediction_ledger():
-    """ENGINE 2: Prediction Ledger + Scorecard"""
-    print("\n" + "="*80)
-    print("ENGINE 2 - PREDICTION LEDGER + SCORECARD")
-    print("="*80)
+def test_smart_alerts():
+    """B) Smart Alerts: GET /api/v1/alerts, POST /api/v1/alerts/ack"""
+    log("\n" + "=" * 80)
+    log("TEST B: Smart Alerts")
+    log("=" * 80)
     
     try:
-        # Test 1: GET /api/v1/dashboard -> validate prediction_ledger
-        url = f"{BASE_URL}/api/v1/dashboard"
-        print(f"\nTest 2.1: GET {url}")
-        resp = requests.get(url, timeout=30)
+        # Test GET /api/v1/alerts
+        log("Testing GET /api/v1/alerts...")
+        r = requests.get(f"{API_BASE}/alerts", timeout=30)
+        log(f"Status: {r.status_code}")
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}"
         
-        if resp.status_code != 200:
-            print(f"❌ FAILED: HTTP {resp.status_code}")
-            return False
+        data = r.json()
+        log(f"Response keys: {list(data.keys())}")
+        assert data.get('status') == 'ready', f"Expected status='ready', got {data.get('status')}"
         
-        data = resp.json()
+        # Check required fields
+        assert 'alerts' in data, "Missing 'alerts' field"
+        assert 'unseen' in data, "Missing 'unseen' field"
+        assert 'total' in data, "Missing 'total' field"
         
-        if 'prediction_ledger' not in data:
-            print("❌ FAILED: Missing 'prediction_ledger' field")
-            return False
+        alerts = data['alerts']
+        unseen_count = data['unseen']
+        total_count = data['total']
         
-        pl = data['prediction_ledger']
-        print(f"✓ prediction_ledger object present")
+        log(f"Total alerts: {total_count}")
+        log(f"Unseen alerts: {unseen_count}")
+        log(f"Alerts returned: {len(alerts)}")
         
-        # Validate required fields
-        required_fields = ['overall', 'by_horizon', 'calibration', 'pending', 'recent', 
-                          'total_logged', 'live_logged', 'backtested', 'model_version']
-        for field in required_fields:
-            if field not in pl:
-                print(f"❌ FAILED: Missing prediction_ledger.{field}")
-                return False
-        print(f"✓ All required fields present")
+        assert isinstance(alerts, list), "alerts must be a list"
+        assert isinstance(unseen_count, int), "unseen must be int"
+        assert isinstance(total_count, int), "total must be int"
         
-        # Validate overall
-        overall = pl['overall']
-        if not isinstance(overall, dict):
-            print(f"❌ FAILED: overall is not dict")
-            return False
-        
-        overall_required = ['n', 'accuracy', 'brier', 'mae_pct', 'range_hit_pct']
-        for field in overall_required:
-            if field not in overall:
-                print(f"❌ FAILED: Missing overall.{field}")
-                return False
-        
-        n = overall['n']
-        if not isinstance(n, int) or n < 0:
-            print(f"❌ FAILED: overall.n={n} invalid")
-            return False
-        print(f"✓ overall.n={n} (total resolved predictions)")
-        
-        if n > 0:
-            accuracy = overall['accuracy']
-            if not isinstance(accuracy, (int, float)) or not (0 <= accuracy <= 100):
-                print(f"❌ FAILED: overall.accuracy={accuracy} not in 0-100")
-                return False
-            print(f"✓ overall.accuracy={accuracy}%")
+        # Validate alert structure
+        if len(alerts) > 0:
+            log("\nValidating alert structure (first alert):")
+            alert = alerts[0]
+            log(f"Alert: {json.dumps(alert, indent=2)}")
             
-            brier = overall['brier']
-            if brier is not None and (not isinstance(brier, (int, float)) or not (0 <= brier <= 1)):
-                print(f"❌ FAILED: overall.brier={brier} not in 0-1")
-                return False
-            print(f"✓ overall.brier={brier}")
-            
-            mae_pct = overall['mae_pct']
-            if mae_pct is not None and not isinstance(mae_pct, (int, float)):
-                print(f"❌ FAILED: overall.mae_pct={mae_pct} invalid")
-                return False
-            print(f"✓ overall.mae_pct={mae_pct}")
-            
-            range_hit_pct = overall['range_hit_pct']
-            if range_hit_pct is not None and (not isinstance(range_hit_pct, (int, float)) or not (0 <= range_hit_pct <= 100)):
-                print(f"❌ FAILED: overall.range_hit_pct={range_hit_pct} not in 0-100")
-                return False
-            print(f"✓ overall.range_hit_pct={range_hit_pct}")
-        
-        # Validate by_horizon
-        by_horizon = pl['by_horizon']
-        if not isinstance(by_horizon, dict):
-            print(f"❌ FAILED: by_horizon is not dict")
-            return False
-        print(f"✓ by_horizon: {list(by_horizon.keys())}")
-        
-        for hz, stats in by_horizon.items():
-            if not isinstance(stats, dict):
-                print(f"❌ FAILED: by_horizon[{hz}] is not dict")
-                return False
-            for field in ['n', 'accuracy', 'brier']:
-                if field not in stats:
-                    print(f"❌ FAILED: by_horizon[{hz}] missing '{field}'")
-                    return False
-        
-        # Validate calibration
-        calibration = pl['calibration']
-        if not isinstance(calibration, list):
-            print(f"❌ FAILED: calibration is not list")
-            return False
-        print(f"✓ calibration: {len(calibration)} buckets")
-        
-        for bucket in calibration:
-            if not all(k in bucket for k in ['bucket', 'n', 'avg_pred', 'realised_up']):
-                print(f"❌ FAILED: calibration bucket missing required fields")
-                return False
-        
-        # Validate pending
-        pending = pl['pending']
-        if not isinstance(pending, list):
-            print(f"❌ FAILED: pending is not list")
-            return False
-        print(f"✓ pending: {len(pending)} predictions")
-        
-        for p in pending[:3]:  # Check first 3
-            required = ['horizon', 'direction', 'prob_higher', 'target_date']
-            for field in required:
-                if field not in p:
-                    print(f"❌ FAILED: pending item missing '{field}'")
-                    return False
-            
-            if p['direction'] not in ['UP', 'DOWN']:
-                print(f"❌ FAILED: pending direction='{p['direction']}' not in [UP,DOWN]")
-                return False
-        
-        # Validate recent
-        recent = pl['recent']
-        if not isinstance(recent, list):
-            print(f"❌ FAILED: recent is not list")
-            return False
-        print(f"✓ recent: {len(recent)} predictions")
-        
-        # Validate counts
-        total_logged = pl['total_logged']
-        live_logged = pl['live_logged']
-        backtested = pl['backtested']
-        
-        if not isinstance(total_logged, int) or total_logged <= 0:
-            print(f"❌ FAILED: total_logged={total_logged} invalid")
-            return False
-        print(f"✓ total_logged={total_logged}")
-        
-        if not isinstance(live_logged, int) or live_logged < 0:
-            print(f"❌ FAILED: live_logged={live_logged} invalid")
-            return False
-        print(f"✓ live_logged={live_logged}")
-        
-        if not isinstance(backtested, int) or backtested <= 0:
-            print(f"❌ FAILED: backtested={backtested} invalid (expected ~500)")
-            return False
-        print(f"✓ backtested={backtested} (expected ~500 from walk-forward seed)")
-        
-        if backtested < 400:
-            print(f"⚠ Minor: backtested count {backtested} is lower than expected ~500")
-        
-        # Validate model_version
-        model_version = pl['model_version']
-        if model_version != 'rf-quant-v1':
-            print(f"❌ FAILED: model_version='{model_version}' != 'rf-quant-v1'")
-            return False
-        print(f"✓ model_version='{model_version}'")
-        
-        # Sanity check: overall.n should equal total resolved
-        if n > 0 and n != total_logged:
-            print(f"⚠ Minor: overall.n={n} != total_logged={total_logged} (may include unresolved)")
-        
-        # Test 2: GET /api/v1/scorecard
-        url2 = f"{BASE_URL}/api/v1/scorecard"
-        print(f"\nTest 2.2: GET {url2}")
-        resp2 = requests.get(url2, timeout=30)
-        
-        if resp2.status_code != 200:
-            print(f"❌ FAILED: HTTP {resp2.status_code}")
-            return False
-        
-        scorecard = resp2.json()
-        
-        if scorecard.get('status') != 'ready':
-            print(f"❌ FAILED: scorecard status='{scorecard.get('status')}' != 'ready'")
-            return False
-        print(f"✓ scorecard status='ready'")
-        
-        # Validate scorecard has same structure
-        for field in required_fields:
-            if field not in scorecard:
-                print(f"❌ FAILED: scorecard missing '{field}'")
-                return False
-        print(f"✓ scorecard has all required fields")
-        
-        # Numbers should match dashboard's prediction_ledger
-        if scorecard['total_logged'] != total_logged:
-            print(f"❌ FAILED: scorecard.total_logged={scorecard['total_logged']} != dashboard {total_logged}")
-            return False
-        
-        if scorecard['backtested'] != backtested:
-            print(f"❌ FAILED: scorecard.backtested={scorecard['backtested']} != dashboard {backtested}")
-            return False
-        
-        print(f"✓ scorecard numbers match dashboard prediction_ledger")
-        
-        print(f"\n✅ ENGINE 2 PASSED - Prediction Ledger + Scorecard validated successfully")
-        return True
-        
-    except Exception as e:
-        print(f"❌ FAILED: Exception: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-
-def test_engine_3_event_calendar():
-    """ENGINE 3: Event Intelligence Calendar"""
-    print("\n" + "="*80)
-    print("ENGINE 3 - EVENT INTELLIGENCE CALENDAR")
-    print("="*80)
-    
-    try:
-        url = f"{BASE_URL}/api/v1/dashboard"
-        print(f"Testing: GET {url}")
-        resp = requests.get(url, timeout=30)
-        
-        if resp.status_code != 200:
-            print(f"❌ FAILED: HTTP {resp.status_code}")
-            return False
-        
-        data = resp.json()
-        
-        if 'event_calendar' not in data:
-            print("❌ FAILED: Missing 'event_calendar' field")
-            return False
-        
-        ec = data['event_calendar']
-        print(f"✓ event_calendar object present")
-        
-        # Validate required fields
-        required_fields = ['window_days', 'generated', 'counts', 'events', 'next_high_impact']
-        for field in required_fields:
-            if field not in ec:
-                print(f"❌ FAILED: Missing event_calendar.{field}")
-                return False
-        print(f"✓ All required fields present")
-        
-        # Validate window_days
-        window_days = ec['window_days']
-        if window_days != 120:
-            print(f"❌ FAILED: window_days={window_days} != 120")
-            return False
-        print(f"✓ window_days=120")
-        
-        # Validate generated
-        generated = ec['generated']
-        try:
-            datetime.strptime(generated, '%Y-%m-%d')
-            print(f"✓ generated='{generated}' (valid YYYY-MM-DD)")
-        except Exception:
-            print(f"❌ FAILED: generated='{generated}' not valid YYYY-MM-DD")
-            return False
-        
-        # Validate counts
-        counts = ec['counts']
-        if not isinstance(counts, dict):
-            print(f"❌ FAILED: counts is not dict")
-            return False
-        print(f"✓ counts: {counts}")
-        
-        # Validate events
-        events = ec['events']
-        if not isinstance(events, list) or len(events) == 0:
-            print(f"❌ FAILED: events is not non-empty list")
-            return False
-        print(f"✓ events: {len(events)} items")
-        
-        # Validate each event
-        event_required = ['date', 'days_until', 'category', 'title', 'description', 
-                         'importance', 'expected_volatility']
-        
-        prev_date = None
-        for i, event in enumerate(events[:10]):  # Check first 10
-            for field in event_required:
-                if field not in event:
-                    print(f"❌ FAILED: events[{i}] missing '{field}'")
-                    return False
-            
-            # Validate date format
-            date = event['date']
-            try:
-                event_date = datetime.strptime(date, '%Y-%m-%d')
-            except Exception:
-                print(f"❌ FAILED: events[{i}].date='{date}' not valid YYYY-MM-DD")
-                return False
-            
-            # Check sorting (ascending by date)
-            if prev_date and date < prev_date:
-                print(f"❌ FAILED: events not sorted ascending by date (events[{i}].date={date} < prev={prev_date})")
-                return False
-            prev_date = date
-            
-            # Validate days_until
-            days_until = event['days_until']
-            if not isinstance(days_until, int) or not (0 <= days_until <= 120):
-                print(f"❌ FAILED: events[{i}].days_until={days_until} not int 0-120")
-                return False
+            required_fields = ['id', 'ts', 'as_of', 'category', 'severity', 'title', 'message', 'seen']
+            for field in required_fields:
+                assert field in alert, f"Alert missing required field: {field}"
             
             # Validate category
-            category = event['category']
-            if category not in ['Macro', 'Derivatives', 'On-Chain', 'Regulatory']:
-                print(f"❌ FAILED: events[{i}].category='{category}' not in [Macro,Derivatives,On-Chain,Regulatory]")
-                return False
+            valid_categories = ['Regime', 'Market State', 'Quant Score', 'Data Trust', 'Event Risk', 'Volatility']
+            assert alert['category'] in valid_categories, f"Invalid category: {alert['category']}"
             
-            # Validate title
-            title = event['title']
-            if not isinstance(title, str) or not title:
-                print(f"❌ FAILED: events[{i}].title invalid")
-                return False
+            # Validate severity
+            valid_severities = ['high', 'warning', 'success', 'info']
+            assert alert['severity'] in valid_severities, f"Invalid severity: {alert['severity']}"
             
-            # Validate description
-            description = event['description']
-            if not isinstance(description, str) or not description:
-                print(f"❌ FAILED: events[{i}].description invalid")
-                return False
+            # Validate seen is boolean
+            assert isinstance(alert['seen'], bool), f"seen must be boolean, got {type(alert['seen'])}"
             
-            # Validate importance
-            importance = event['importance']
-            if importance not in ['Low', 'Medium', 'High', 'Very High']:
-                print(f"❌ FAILED: events[{i}].importance='{importance}' not in [Low,Medium,High,Very High]")
-                return False
-            
-            # Validate expected_volatility
-            volatility = event['expected_volatility']
-            if volatility not in ['Low', 'Elevated', 'High', 'Very High']:
-                print(f"❌ FAILED: events[{i}].expected_volatility='{volatility}' not in [Low,Elevated,High,Very High]")
-                return False
+            # Validate ts is ISO format
+            try:
+                datetime.fromisoformat(alert['ts'].replace('Z', '+00:00'))
+            except Exception:
+                raise AssertionError(f"Invalid ISO timestamp: {alert['ts']}")
         
-        print(f"✓ All events validated (checked first 10)")
-        print(f"✓ Events sorted ascending by date")
+        # Test POST /api/v1/alerts/ack with specific ID
+        if len(alerts) > 0 and unseen_count > 0:
+            # Find an unseen alert
+            unseen_alert = next((a for a in alerts if not a['seen']), None)
+            if unseen_alert:
+                log(f"\nTesting POST /api/v1/alerts/ack with specific ID: {unseen_alert['id']}")
+                r2 = requests.post(f"{API_BASE}/alerts/ack", 
+                                  json={"ids": [unseen_alert['id']]}, 
+                                  timeout=30)
+                log(f"Status: {r2.status_code}")
+                assert r2.status_code == 200, f"Expected 200, got {r2.status_code}"
+                
+                ack_data = r2.json()
+                log(f"Response: {ack_data}")
+                assert ack_data.get('status') == 'ok', f"Expected status='ok', got {ack_data.get('status')}"
         
-        # Validate next_high_impact
-        next_high = ec['next_high_impact']
-        if next_high is not None:
-            if not isinstance(next_high, dict):
-                print(f"❌ FAILED: next_high_impact is not dict or null")
-                return False
-            
-            if 'importance' not in next_high:
-                print(f"❌ FAILED: next_high_impact missing 'importance'")
-                return False
-            
-            importance = next_high['importance']
-            if importance not in ['High', 'Very High']:
-                print(f"❌ FAILED: next_high_impact.importance='{importance}' not in [High,Very High]")
-                return False
-            
-            print(f"✓ next_high_impact: '{next_high.get('title')}' (importance={importance})")
-        else:
-            print(f"✓ next_high_impact=null (no high-impact events in window)")
+        # Test POST /api/v1/alerts/ack with empty body (mark all seen)
+        log("\nTesting POST /api/v1/alerts/ack with empty body (mark all seen)...")
+        r3 = requests.post(f"{API_BASE}/alerts/ack", json={}, timeout=30)
+        log(f"Status: {r3.status_code}")
+        assert r3.status_code == 200, f"Expected 200, got {r3.status_code}"
         
-        print(f"\n✅ ENGINE 3 PASSED - Event Intelligence Calendar validated successfully")
+        ack_all_data = r3.json()
+        log(f"Response: {ack_all_data}")
+        assert ack_all_data.get('status') == 'ok', f"Expected status='ok', got {ack_all_data.get('status')}"
+        
+        # Verify unseen count is now 0
+        log("\nVerifying unseen count after ack all...")
+        r4 = requests.get(f"{API_BASE}/alerts", timeout=30)
+        data4 = r4.json()
+        log(f"Unseen count after ack: {data4.get('unseen')}")
+        assert data4.get('unseen') == 0, f"Expected unseen=0 after ack all, got {data4.get('unseen')}"
+        
+        # Test dashboard.smart_alerts
+        log("\nTesting GET /api/v1/dashboard -> smart_alerts...")
+        r5 = requests.get(f"{API_BASE}/dashboard", timeout=30)
+        assert r5.status_code == 200, f"Dashboard request failed: {r5.status_code}"
+        
+        dash = r5.json()
+        assert 'smart_alerts' in dash, "Missing smart_alerts in dashboard"
+        
+        smart_alerts = dash['smart_alerts']
+        log(f"Dashboard smart_alerts keys: {list(smart_alerts.keys())}")
+        assert 'alerts' in smart_alerts, "Missing 'alerts' in smart_alerts"
+        assert 'unseen' in smart_alerts, "Missing 'unseen' in smart_alerts"
+        assert 'total' in smart_alerts, "Missing 'total' in smart_alerts"
+        
+        log("\n✅ TEST B PASSED: Smart Alerts")
         return True
         
+    except AssertionError as e:
+        log(f"\n❌ TEST B FAILED: {e}")
+        return False
     except Exception as e:
-        print(f"❌ FAILED: Exception: {e}")
+        log(f"\n❌ TEST B ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_time_machine():
+    """C) Time Machine: GET /api/v1/replay"""
+    log("\n" + "=" * 80)
+    log("TEST C: Time Machine Historical Replay")
+    log("=" * 80)
+    
+    try:
+        # Test GET /api/v1/replay (no date - defaults to max_date)
+        log("Testing GET /api/v1/replay (no date)...")
+        r = requests.get(f"{API_BASE}/replay", timeout=30)
+        log(f"Status: {r.status_code}")
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}"
+        
+        data = r.json()
+        log(f"Response keys: {list(data.keys())}")
+        assert data.get('status') == 'ready', f"Expected status='ready', got {data.get('status')}"
+        
+        # Validate required fields
+        required_fields = ['pick_date', 'signal', 'confidence', 'close', 'next_close', 
+                          'actual', 'move_pct', 'correct', 'window', 'rolling_accuracy',
+                          'min_date', 'max_date', 'n']
+        for field in required_fields:
+            assert field in data, f"Missing required field: {field}"
+        
+        log(f"\nReplay data:")
+        log(f"  pick_date: {data['pick_date']}")
+        log(f"  signal: {data['signal']}")
+        log(f"  confidence: {data['confidence']}")
+        log(f"  close: {data['close']}")
+        log(f"  next_close: {data['next_close']}")
+        log(f"  actual: {data['actual']}")
+        log(f"  move_pct: {data['move_pct']}")
+        log(f"  correct: {data['correct']}")
+        log(f"  rolling_accuracy: {data['rolling_accuracy']}")
+        log(f"  min_date: {data['min_date']}")
+        log(f"  max_date: {data['max_date']}")
+        log(f"  n: {data['n']}")
+        
+        # Validate signal
+        assert data['signal'] in ['UP', 'DOWN'], f"Invalid signal: {data['signal']}"
+        
+        # Validate confidence is a number
+        assert isinstance(data['confidence'], (int, float)), f"confidence must be number, got {type(data['confidence'])}"
+        
+        # Validate close and next_close > 0
+        assert data['close'] > 0, f"close must be > 0, got {data['close']}"
+        assert data['next_close'] > 0, f"next_close must be > 0, got {data['next_close']}"
+        
+        # Validate actual
+        assert data['actual'] in ['UP', 'DOWN'], f"Invalid actual: {data['actual']}"
+        
+        # Validate correct is boolean
+        assert isinstance(data['correct'], bool), f"correct must be boolean, got {type(data['correct'])}"
+        
+        # Validate logic: correct == (signal == actual)
+        expected_correct = (data['signal'] == data['actual'])
+        assert data['correct'] == expected_correct, f"correct logic error: signal={data['signal']}, actual={data['actual']}, correct={data['correct']}"
+        
+        # Validate logic: actual == 'UP' iff next_close > close
+        expected_actual = 'UP' if data['next_close'] > data['close'] else 'DOWN'
+        assert data['actual'] == expected_actual, f"actual logic error: next_close={data['next_close']}, close={data['close']}, actual={data['actual']}"
+        
+        # Validate window
+        window = data['window']
+        assert isinstance(window, list), "window must be a list"
+        assert len(window) > 0, "window must be non-empty"
+        
+        log(f"\nWindow: {len(window)} items")
+        
+        # Check window structure
+        for i, item in enumerate(window[:3]):  # Check first 3
+            assert 'date' in item, f"Window item {i} missing 'date'"
+            assert 'close' in item, f"Window item {i} missing 'close'"
+            assert 'is_pick' in item, f"Window item {i} missing 'is_pick'"
+        
+        # Exactly one item should have is_pick=True
+        pick_count = sum(1 for item in window if item.get('is_pick'))
+        assert pick_count == 1, f"Expected exactly 1 is_pick=True, got {pick_count}"
+        
+        # Test GET /api/v1/replay?date=2025-11-15&window=20
+        log("\nTesting GET /api/v1/replay?date=2025-11-15&window=20...")
+        r2 = requests.get(f"{API_BASE}/replay?date=2025-11-15&window=20", timeout=30)
+        log(f"Status: {r2.status_code}")
+        assert r2.status_code == 200, f"Expected 200, got {r2.status_code}"
+        
+        data2 = r2.json()
+        assert data2.get('status') == 'ready', f"Expected status='ready', got {data2.get('status')}"
+        
+        log(f"\nReplay for 2025-11-15:")
+        log(f"  pick_date: {data2['pick_date']}")
+        log(f"  signal: {data2['signal']}")
+        log(f"  actual: {data2['actual']}")
+        log(f"  correct: {data2['correct']}")
+        log(f"  window length: {len(data2['window'])}")
+        
+        # pick_date should be ~2025-11-15 (nearest <=)
+        pick_date = data2['pick_date']
+        assert pick_date <= '2025-11-15', f"pick_date {pick_date} should be <= 2025-11-15"
+        
+        # Exactly one window item has is_pick=True
+        pick_count2 = sum(1 for item in data2['window'] if item.get('is_pick'))
+        assert pick_count2 == 1, f"Expected exactly 1 is_pick=True, got {pick_count2}"
+        
+        # The is_pick item should match pick_date
+        pick_item = next((item for item in data2['window'] if item.get('is_pick')), None)
+        assert pick_item is not None, "No is_pick=True item found"
+        assert pick_item['date'] == pick_date, f"is_pick item date {pick_item['date']} != pick_date {pick_date}"
+        
+        log("\n✅ TEST C PASSED: Time Machine")
+        return True
+        
+    except AssertionError as e:
+        log(f"\n❌ TEST C FAILED: {e}")
+        return False
+    except Exception as e:
+        log(f"\n❌ TEST C ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_risk_engine():
+    """D) Risk Engine: GET /api/v1/dashboard -> risk object"""
+    log("\n" + "=" * 80)
+    log("TEST D: Risk Engine")
+    log("=" * 80)
+    
+    try:
+        log("Testing GET /api/v1/dashboard -> risk...")
+        r = requests.get(f"{API_BASE}/dashboard", timeout=30)
+        log(f"Status: {r.status_code}")
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}"
+        
+        data = r.json()
+        assert data.get('status') == 'ready', f"Expected status='ready', got {data.get('status')}"
+        
+        # Check risk object exists
+        assert 'risk' in data, "Missing 'risk' object in dashboard"
+        
+        risk = data['risk']
+        log(f"\nRisk object keys: {list(risk.keys())}")
+        
+        # Validate required fields
+        required_fields = ['level', 'score', 'state_scale', 'expected_move', 
+                          'realised_vol_annual', 'vol_percentile', 'downside_zone',
+                          'upside_zone', 'macro_event_risk', 'data_uncertainty', 
+                          'drivers', 'demo', 'note']
+        for field in required_fields:
+            assert field in risk, f"Missing required field: {field}"
+        
+        # Validate level
+        valid_levels = ['Low', 'Normal', 'Elevated', 'High', 'Extreme']
+        assert risk['level'] in valid_levels, f"Invalid level: {risk['level']}"
+        log(f"  level: {risk['level']}")
+        
+        # Validate score
+        assert isinstance(risk['score'], int), f"score must be int, got {type(risk['score'])}"
+        assert 0 <= risk['score'] <= 100, f"score must be 0-100, got {risk['score']}"
+        log(f"  score: {risk['score']}")
+        
+        # Validate state_scale
+        assert isinstance(risk['state_scale'], list), "state_scale must be list"
+        assert len(risk['state_scale']) == 5, f"state_scale must have 5 items, got {len(risk['state_scale'])}"
+        log(f"  state_scale: {risk['state_scale']}")
+        
+        # Validate expected_move
+        expected_move = risk['expected_move']
+        assert isinstance(expected_move, dict), "expected_move must be dict"
+        for horizon in ['24H', '7D', '30D']:
+            assert horizon in expected_move, f"Missing {horizon} in expected_move"
+            move = expected_move[horizon]
+            assert 'pct' in move, f"Missing 'pct' in {horizon}"
+            assert 'low' in move, f"Missing 'low' in {horizon}"
+            assert 'high' in move, f"Missing 'high' in {horizon}"
+            
+            # Validate ranges: low < close < high
+            close = data.get('last_close', 0)
+            assert move['low'] < close < move['high'], f"{horizon}: low ({move['low']}) < close ({close}) < high ({move['high']}) failed"
+            log(f"  expected_move.{horizon}: {move['pct']}% (${move['low']} - ${move['high']})")
+        
+        # Validate realised_vol_annual
+        assert isinstance(risk['realised_vol_annual'], (int, float)), "realised_vol_annual must be number"
+        log(f"  realised_vol_annual: {risk['realised_vol_annual']}")
+        
+        # Validate vol_percentile
+        assert isinstance(risk['vol_percentile'], int), "vol_percentile must be int"
+        assert 0 <= risk['vol_percentile'] <= 100, f"vol_percentile must be 0-100, got {risk['vol_percentile']}"
+        log(f"  vol_percentile: {risk['vol_percentile']}")
+        
+        # Validate downside_zone and upside_zone (can be null or object)
+        if risk['downside_zone'] is not None:
+            assert isinstance(risk['downside_zone'], dict), "downside_zone must be dict or null"
+            assert 'price' in risk['downside_zone'], "downside_zone missing 'price'"
+            assert 'distance_pct' in risk['downside_zone'], "downside_zone missing 'distance_pct'"
+            log(f"  downside_zone: ${risk['downside_zone']['price']} ({risk['downside_zone']['distance_pct']}%)")
+        
+        if risk['upside_zone'] is not None:
+            assert isinstance(risk['upside_zone'], dict), "upside_zone must be dict or null"
+            assert 'price' in risk['upside_zone'], "upside_zone missing 'price'"
+            assert 'distance_pct' in risk['upside_zone'], "upside_zone missing 'distance_pct'"
+            log(f"  upside_zone: ${risk['upside_zone']['price']} ({risk['upside_zone']['distance_pct']}%)")
+        
+        # Validate macro_event_risk
+        assert isinstance(risk['macro_event_risk'], str), "macro_event_risk must be string"
+        log(f"  macro_event_risk: {risk['macro_event_risk']}")
+        
+        # Validate data_uncertainty
+        assert isinstance(risk['data_uncertainty'], str), "data_uncertainty must be string"
+        log(f"  data_uncertainty: {risk['data_uncertainty']}")
+        
+        # Validate drivers
+        drivers = risk['drivers']
+        assert isinstance(drivers, list), "drivers must be list"
+        assert len(drivers) > 0, "drivers must be non-empty"
+        log(f"  drivers: {len(drivers)} items")
+        
+        for driver in drivers:
+            assert 'name' in driver, "driver missing 'name'"
+            assert 'state' in driver, "driver missing 'state'"
+            assert 'value' in driver, "driver missing 'value'"
+            assert 'demo' in driver, "driver missing 'demo'"
+            assert isinstance(driver['demo'], bool), "driver.demo must be boolean"
+        
+        # Validate demo object
+        demo = risk['demo']
+        assert isinstance(demo, dict), "demo must be dict"
+        log(f"  demo keys: {list(demo.keys())}")
+        
+        # Validate note
+        assert isinstance(risk['note'], str), "note must be string"
+        assert len(risk['note']) > 0, "note must be non-empty"
+        
+        log("\n✅ TEST D PASSED: Risk Engine")
+        return True
+        
+    except AssertionError as e:
+        log(f"\n❌ TEST D FAILED: {e}")
+        return False
+    except Exception as e:
+        log(f"\n❌ TEST D ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_smart_money_institutional():
+    """E) Smart Money & Institutional DEMO: GET /api/v1/dashboard"""
+    log("\n" + "=" * 80)
+    log("TEST E: Smart Money & Institutional DEMO")
+    log("=" * 80)
+    
+    try:
+        log("Testing GET /api/v1/dashboard -> smart_money and institutional...")
+        r = requests.get(f"{API_BASE}/dashboard", timeout=30)
+        log(f"Status: {r.status_code}")
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}"
+        
+        data = r.json()
+        assert data.get('status') == 'ready', f"Expected status='ready', got {data.get('status')}"
+        
+        # Check smart_money object
+        assert 'smart_money' in data, "Missing 'smart_money' object in dashboard"
+        smart_money = data['smart_money']
+        log(f"\nsmart_money keys: {list(smart_money.keys())}")
+        
+        # Validate smart_money
+        assert smart_money.get('demo') == True, f"smart_money.demo must be True, got {smart_money.get('demo')}"
+        assert 'source' in smart_money, "smart_money missing 'source'"
+        assert 'needs key' in smart_money['source'].lower(), f"smart_money.source should mention 'needs key', got: {smart_money['source']}"
+        assert 'headline' in smart_money, "smart_money missing 'headline'"
+        assert isinstance(smart_money['headline'], str), "smart_money.headline must be string"
+        assert len(smart_money['headline']) > 0, "smart_money.headline must be non-empty"
+        
+        # Validate metrics
+        assert 'metrics' in smart_money, "smart_money missing 'metrics'"
+        metrics = smart_money['metrics']
+        assert isinstance(metrics, list), "smart_money.metrics must be list"
+        assert len(metrics) > 0, "smart_money.metrics must be non-empty"
+        
+        log(f"  demo: {smart_money['demo']}")
+        log(f"  source: {smart_money['source']}")
+        log(f"  headline: {smart_money['headline']}")
+        log(f"  metrics: {len(metrics)} items")
+        
+        for metric in metrics:
+            assert 'name' in metric, "metric missing 'name'"
+            assert 'value' in metric, "metric missing 'value'"
+            assert 'signal' in metric, "metric missing 'signal'"
+        
+        # Check institutional object
+        assert 'institutional' in data, "Missing 'institutional' object in dashboard"
+        institutional = data['institutional']
+        log(f"\ninstitutional keys: {list(institutional.keys())}")
+        
+        # Validate institutional
+        assert institutional.get('demo') == True, f"institutional.demo must be True, got {institutional.get('demo')}"
+        assert 'source' in institutional, "institutional missing 'source'"
+        assert 'needs key' in institutional['source'].lower(), f"institutional.source should mention 'needs key', got: {institutional['source']}"
+        assert 'headline' in institutional, "institutional missing 'headline'"
+        assert isinstance(institutional['headline'], str), "institutional.headline must be string"
+        assert len(institutional['headline']) > 0, "institutional.headline must be non-empty"
+        
+        # Validate metrics
+        assert 'metrics' in institutional, "institutional missing 'metrics'"
+        inst_metrics = institutional['metrics']
+        assert isinstance(inst_metrics, list), "institutional.metrics must be list"
+        assert len(inst_metrics) > 0, "institutional.metrics must be non-empty"
+        
+        log(f"  demo: {institutional['demo']}")
+        log(f"  source: {institutional['source']}")
+        log(f"  headline: {institutional['headline']}")
+        log(f"  metrics: {len(inst_metrics)} items")
+        
+        for metric in inst_metrics:
+            assert 'name' in metric, "metric missing 'name'"
+            assert 'value' in metric, "metric missing 'value'"
+            assert 'signal' in metric, "metric missing 'signal'"
+        
+        log("\n✅ TEST E PASSED: Smart Money & Institutional DEMO")
+        return True
+        
+    except AssertionError as e:
+        log(f"\n❌ TEST E FAILED: {e}")
+        return False
+    except Exception as e:
+        log(f"\n❌ TEST E ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_manual_forecast_passcode():
+    """F) Manual forecast passcode gate + audit"""
+    log("\n" + "=" * 80)
+    log("TEST F: Manual Forecast Passcode Gate + Audit")
+    log("=" * 80)
+    
+    try:
+        # Test 1: POST with no passcode
+        log("Test 1: POST /api/v1/bitmark/run with no passcode...")
+        r1 = requests.post(f"{API_BASE}/bitmark/run", json={}, timeout=30)
+        log(f"Status: {r1.status_code}")
+        assert r1.status_code == 200, f"Expected 200, got {r1.status_code}"
+        
+        data1 = r1.json()
+        log(f"Response: {data1}")
+        assert data1.get('status') == 'unauthorized', f"Expected status='unauthorized', got {data1.get('status')}"
+        
+        # Test 2: POST with wrong passcode
+        log("\nTest 2: POST /api/v1/bitmark/run with wrong passcode...")
+        r2 = requests.post(f"{API_BASE}/bitmark/run", json={"passcode": "wrong"}, timeout=30)
+        log(f"Status: {r2.status_code}")
+        assert r2.status_code == 200, f"Expected 200, got {r2.status_code}"
+        
+        data2 = r2.json()
+        log(f"Response: {data2}")
+        assert data2.get('status') == 'unauthorized', f"Expected status='unauthorized', got {data2.get('status')}"
+        
+        # Test 3: POST with correct passcode
+        log("\nTest 3: POST /api/v1/bitmark/run with correct passcode...")
+        r3 = requests.post(f"{API_BASE}/bitmark/run", json={"passcode": "btciq-admin"}, timeout=30)
+        log(f"Status: {r3.status_code}")
+        assert r3.status_code == 200, f"Expected 200, got {r3.status_code}"
+        
+        data3 = r3.json()
+        log(f"Response: {data3}")
+        
+        # Should be 'started', 'rate_limited', or 'busy' - all acceptable (means passcode accepted)
+        valid_statuses = ['started', 'rate_limited', 'busy']
+        assert data3.get('status') in valid_statuses, f"Expected status in {valid_statuses}, got {data3.get('status')}"
+        
+        # Must NOT be 'unauthorized'
+        assert data3.get('status') != 'unauthorized', "Correct passcode should not return 'unauthorized'"
+        
+        log(f"✓ Passcode accepted, status: {data3.get('status')}")
+        
+        # Test 4: GET /api/v1/audit
+        log("\nTest 4: GET /api/v1/audit...")
+        r4 = requests.get(f"{API_BASE}/audit", timeout=30)
+        log(f"Status: {r4.status_code}")
+        assert r4.status_code == 200, f"Expected 200, got {r4.status_code}"
+        
+        data4 = r4.json()
+        log(f"Response keys: {list(data4.keys())}")
+        assert data4.get('status') == 'ready', f"Expected status='ready', got {data4.get('status')}"
+        
+        # Check entries
+        assert 'entries' in data4, "Missing 'entries' field"
+        entries = data4['entries']
+        assert isinstance(entries, list), "entries must be list"
+        assert len(entries) > 0, "Expected at least one audit entry"
+        
+        log(f"Audit entries: {len(entries)}")
+        
+        # Check for denied attempts
+        denied_entries = [e for e in entries if e.get('result') == 'denied']
+        log(f"Denied attempts: {len(denied_entries)}")
+        
+        # We should have at least 2 denied entries from our tests above
+        assert len(denied_entries) >= 2, f"Expected at least 2 denied entries, got {len(denied_entries)}"
+        
+        # Validate entry structure
+        if len(entries) > 0:
+            entry = entries[0]
+            log(f"\nFirst audit entry: {json.dumps(entry, indent=2)}")
+            assert 'ts' in entry, "entry missing 'ts'"
+            assert 'action' in entry, "entry missing 'action'"
+            assert 'result' in entry, "entry missing 'result'"
+        
+        log("\n✅ TEST F PASSED: Manual Forecast Passcode Gate + Audit")
+        return True
+        
+    except AssertionError as e:
+        log(f"\n❌ TEST F FAILED: {e}")
+        return False
+    except Exception as e:
+        log(f"\n❌ TEST F ERROR: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
 def test_regression():
-    """REGRESSION: Ensure all prior fields still present"""
-    print("\n" + "="*80)
-    print("REGRESSION - ALL PRIOR FIELDS PRESENT")
-    print("="*80)
+    """G) REGRESSION: Verify all prior fields still present"""
+    log("\n" + "=" * 80)
+    log("TEST G: REGRESSION - All Prior Fields")
+    log("=" * 80)
     
     try:
         # Test GET /api/v1/dashboard
-        url = f"{BASE_URL}/api/v1/dashboard"
-        print(f"\nTest: GET {url}")
-        resp = requests.get(url, timeout=30)
+        log("Testing GET /api/v1/dashboard...")
+        r = requests.get(f"{API_BASE}/dashboard", timeout=30)
+        log(f"Status: {r.status_code}")
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}"
         
-        if resp.status_code != 200:
-            print(f"❌ FAILED: HTTP {resp.status_code}")
-            return False
+        data = r.json()
+        assert data.get('status') == 'ready', f"Expected status='ready', got {data.get('status')}"
         
-        data = resp.json()
-        
-        if data.get('status') != 'ready':
-            print(f"❌ FAILED: status='{data.get('status')}' != 'ready'")
-            return False
-        print(f"✓ status='ready'")
-        
-        # Check all prior fields
-        prior_fields = [
-            'decision', 'news_forecast_link', 'forecasts', 'long_outlook',
-            'quant_score', 'regime', 'factors', 'scoreboard', 'trades',
-            'policy', 'dominance', 'chart', 'cycle', 'alerts', 'signal',
-            'confidence', 'prob_up', 'prob_down', 'last_close', 'data_source',
-            'overall_accuracy', 'cv_folds', 'importances', 'performance', 'features'
+        # Check all required prior fields
+        required_fields = [
+            'decision', 'forecasts', 'bitmark', 'data_health', 'event_calendar',
+            'prediction_ledger', 'quant_score', 'regime', 'cycle', 'dominance',
+            'policy', 'chart', 'smart_alerts', 'news_forecast_link'
         ]
         
-        missing = []
-        for field in prior_fields:
-            if field not in data:
-                missing.append(field)
-        
-        if missing:
-            print(f"❌ FAILED: Missing prior fields: {missing}")
-            return False
-        
-        print(f"✓ All {len(prior_fields)} prior fields present")
-        
-        # Validate decision has 6 outlook horizons
-        decision = data['decision']
-        outlook = decision.get('outlook', [])
-        if len(outlook) != 6:
-            print(f"❌ FAILED: decision.outlook has {len(outlook)} items, expected 6")
-            return False
-        
-        horizons = [o['horizon'] for o in outlook]
-        expected_horizons = ['24H', '7D', '30D', '3M', '6M', '1Y']
-        if horizons != expected_horizons:
-            print(f"❌ FAILED: decision.outlook horizons={horizons} != {expected_horizons}")
-            return False
-        print(f"✓ decision.outlook has 6 horizons: {horizons}")
-        
-        # Validate forecasts (3 items: 24H, 7D, 30D)
-        forecasts = data['forecasts']
-        if len(forecasts) != 3:
-            print(f"❌ FAILED: forecasts has {len(forecasts)} items, expected 3")
-            return False
-        
-        forecast_horizons = [f['horizon'] for f in forecasts]
-        if forecast_horizons != ['24H', '7D', '30D']:
-            print(f"❌ FAILED: forecast horizons={forecast_horizons} != ['24H','7D','30D']")
-            return False
-        print(f"✓ forecasts has 3 items: {forecast_horizons}")
-        
-        # Validate 24H and 7D have news_link
-        for hz in ['24H', '7D']:
-            f = next((x for x in forecasts if x['horizon'] == hz), None)
-            if not f:
-                print(f"❌ FAILED: Missing {hz} forecast")
-                return False
-            if 'news_link' not in f:
-                print(f"❌ FAILED: {hz} forecast missing 'news_link'")
-                return False
-        print(f"✓ 24H and 7D forecasts have news_link")
-        
-        # Test GET /api/v1/ticker
-        url2 = f"{BASE_URL}/api/v1/ticker"
-        print(f"\nTest: GET {url2}")
-        resp2 = requests.get(url2, timeout=30)
-        
-        if resp2.status_code != 200:
-            print(f"❌ FAILED: HTTP {resp2.status_code}")
-            return False
-        
-        ticker = resp2.json()
-        
-        ticker_fields = ['price', 'price_aud', 'aud_rate', 'change24h', 'source']
-        for field in ticker_fields:
-            if field not in ticker:
-                print(f"❌ FAILED: ticker missing '{field}'")
-                return False
-        print(f"✓ ticker has all required fields: {ticker_fields}")
-        
-        # Test POST /api/v1/chat
-        url3 = f"{BASE_URL}/api/v1/chat"
-        print(f"\nTest: POST {url3}")
-        payload = {"session_id": "test-regression", "message": "What is the current quant score?"}
-        resp3 = requests.post(url3, json=payload, timeout=30)
-        
-        if resp3.status_code != 200:
-            print(f"❌ FAILED: HTTP {resp3.status_code}")
-            return False
-        
-        chat = resp3.json()
-        
-        if 'text' not in chat or 'model' not in chat:
-            print(f"❌ FAILED: chat missing required fields")
-            return False
-        
-        if chat.get('model') != 'gemini-3-flash-preview':
-            print(f"❌ FAILED: chat model='{chat.get('model')}' != 'gemini-3-flash-preview'")
-            return False
-        print(f"✓ chat returns text and model='gemini-3-flash-preview'")
+        log("\nChecking required fields in dashboard:")
+        for field in required_fields:
+            assert field in data, f"Missing required field: {field}"
+            log(f"  ✓ {field}")
         
         # Test GET /api/v1/health
-        url4 = f"{BASE_URL}/api/v1/health"
-        print(f"\nTest: GET {url4}")
-        resp4 = requests.get(url4, timeout=30)
+        log("\nTesting GET /api/v1/health...")
+        r2 = requests.get(f"{API_BASE}/health", timeout=30)
+        log(f"Status: {r2.status_code}")
+        assert r2.status_code == 200, f"Expected 200, got {r2.status_code}"
         
-        if resp4.status_code != 200:
-            print(f"❌ FAILED: HTTP {resp4.status_code}")
-            return False
+        health = r2.json()
+        log(f"Health: {health}")
+        assert health.get('status') == 'ok', f"Expected status='ok', got {health.get('status')}"
         
-        health = resp4.json()
+        # Test POST /api/v1/chat (Albert persona)
+        log("\nTesting POST /api/v1/chat (Albert persona)...")
+        r3 = requests.post(f"{API_BASE}/chat", 
+                          json={"session_id": "albert-test", "message": "Who are you?"}, 
+                          timeout=30)
+        log(f"Status: {r3.status_code}")
+        assert r3.status_code == 200, f"Expected 200, got {r3.status_code}"
         
-        if 'compute_status' not in health or 'runs' not in health:
-            print(f"❌ FAILED: health missing required fields")
-            return False
+        chat = r3.json()
+        log(f"Chat response keys: {list(chat.keys())}")
+        assert 'model' in chat, "Missing 'model' field"
+        assert chat['model'] == 'gemini-3-flash-preview', f"Expected model='gemini-3-flash-preview', got {chat['model']}"
         
-        runs = health['runs']
-        if not isinstance(runs, int) or runs <= 0:
-            print(f"❌ FAILED: health.runs={runs} invalid")
-            return False
-        print(f"✓ health returns compute_status and runs={runs}")
+        # Check if Albert identifies itself
+        text = chat.get('text', '').lower()
+        log(f"Chat text (first 200 chars): {chat.get('text', '')[:200]}")
+        assert 'albert' in text, "Assistant should identify itself as 'Albert'"
         
-        print(f"\n✅ REGRESSION PASSED - All prior fields present and working")
+        log("\n✅ TEST G PASSED: REGRESSION")
         return True
         
+    except AssertionError as e:
+        log(f"\n❌ TEST G FAILED: {e}")
+        return False
     except Exception as e:
-        print(f"❌ FAILED: Exception: {e}")
+        log(f"\n❌ TEST G ERROR: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
 def main():
-    print("\n" + "="*80)
-    print("BTCIQ DASHBOARD - THREE NEW ENGINES BACKEND TEST")
-    print("Testing via external URL: " + BASE_URL)
-    print("="*80)
+    log("=" * 80)
+    log("BTCIQ BACKEND TESTING - PHASE 2 FEATURES")
+    log(f"Base URL: {BASE_URL}")
+    log(f"API Base: {API_BASE}")
+    log("=" * 80)
     
     results = {}
     
     # Run all tests
-    results['engine_1'] = test_engine_1_data_trust_layer()
-    results['engine_2'] = test_engine_2_prediction_ledger()
-    results['engine_3'] = test_engine_3_event_calendar()
-    results['regression'] = test_regression()
+    results['A_open_forecast_confidence'] = test_open_forecast_confidence()
+    results['B_smart_alerts'] = test_smart_alerts()
+    results['C_time_machine'] = test_time_machine()
+    results['D_risk_engine'] = test_risk_engine()
+    results['E_smart_money_institutional'] = test_smart_money_institutional()
+    results['F_manual_forecast_passcode'] = test_manual_forecast_passcode()
+    results['G_regression'] = test_regression()
     
     # Summary
-    print("\n" + "="*80)
-    print("TEST SUMMARY")
-    print("="*80)
+    log("\n" + "=" * 80)
+    log("TEST SUMMARY")
+    log("=" * 80)
     
-    for test_name, passed in results.items():
-        status = "✅ PASSED" if passed else "❌ FAILED"
-        print(f"{test_name}: {status}")
+    passed = sum(1 for v in results.values() if v)
+    total = len(results)
     
-    all_passed = all(results.values())
+    for test_name, result in results.items():
+        status = "✅ PASSED" if result else "❌ FAILED"
+        log(f"{test_name}: {status}")
     
-    print("\n" + "="*80)
-    if all_passed:
-        print("✅ ALL TESTS PASSED")
+    log(f"\nTotal: {passed}/{total} tests passed")
+    
+    if passed == total:
+        log("\n🎉 ALL TESTS PASSED!")
+        return 0
     else:
-        print("❌ SOME TESTS FAILED")
-    print("="*80)
-    
-    return 0 if all_passed else 1
+        log(f"\n⚠️  {total - passed} test(s) failed")
+        return 1
 
 
 if __name__ == '__main__':
