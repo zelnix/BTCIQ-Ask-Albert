@@ -718,45 +718,87 @@ def fetch_news():
         except Exception:  # noqa
             traceback.print_exc()
 
-    seen, uniq = set(), []
+    # --- Cluster near-duplicate stories across sources into one story each ---
+    def _toks(t):
+        stop = {'the', 'a', 'an', 'to', 'of', 'in', 'on', 'for', 'and', 'is', 'as', 'at',
+                'by', 'it', 'be', 'with', 'from', 'that', 'this', 'its', 'are', 'will', 'has'}
+        return set(w for w in re.sub(r'[^a-z0-9 ]', ' ', (t or '').lower()).split()
+                   if len(w) > 2 and w not in stop)
+
+    clusters = []
     for e in entries:
-        k = _norm_title(e['title'])
-        if not k or k in seen:
+        et = _toks(e['title'])
+        if not et:
             continue
-        seen.add(k)
-        uniq.append(e)
-    # per-source cap for diversity, then take top 6
-    per_src, top = {}, []
-    for e in uniq:
-        if per_src.get(e['source'], 0) >= 2:
-            continue
-        per_src[e['source']] = per_src.get(e['source'], 0) + 1
-        top.append(e)
-        if len(top) >= 6:
-            break
+        placed = False
+        for cl in clusters:
+            inter = len(et & cl['tokens'])
+            union = len(et | cl['tokens']) or 1
+            if inter / union >= 0.34 or (inter >= 3 and inter >= 0.6 * min(len(et), len(cl['tokens']))):
+                cl['members'].append(e)
+                cl['tokens'] |= et
+                placed = True
+                break
+        if not placed:
+            clusters.append({'tokens': set(et), 'members': [e]})
+
+    clusters.sort(key=lambda cl: (-len(set(m['source'] for m in cl['members'])),
+                                  -max(m['credibility'] for m in cl['members'])))
+    clusters = clusters[:8]
+
+    SPEC_WORDS = ('rumor', 'rumour', 'reportedly', 'could ', 'may ', 'might', 'proposal',
+                  'proposed', 'unconfirmed', 'alleged', 'speculat', 'plans to', 'considering',
+                  'reports', 'said to', 'expected to')
 
     cards = []
-    for e in top:
+    for cl in clusters:
+        members = cl['members']
+        rep = max(members, key=lambda m: m['credibility'])
+        sources = [{'source': m['source'], 'link': m['link'], 'credibility': m['credibility'],
+                    'published': m['published'], 'title': m['title']} for m in members]
+        n_src = len(set(m['source'] for m in members))
         ai = None
         if EMERGENT_LLM_KEY and _HAS_LLM:
             try:
-                ai = generate_news_summary(e['title'], e['summary'] or e['title'])
+                ai = generate_news_summary(rep['title'], rep['summary'] or rep['title'])
             except Exception:  # noqa
                 traceback.print_exc()
         if not ai:
-            ai = {'summary': (e['summary'] or e['title'])[:220], 'why_it_matters': '',
+            ai = {'summary': (rep['summary'] or rep['title'])[:220], 'why_it_matters': '',
                   'direction': 'neutral', 'bullish_pct': 40, 'bearish_pct': 30, 'neutral_pct': 30,
                   'impact_score': 40, 'confidence': 0.4,
                   'time_horizons': {'immediate': 'neutral', 'seven_day': 'neutral', 'long_term': 'neutral'},
                   'categories': ['general']}
         try:
-            imp = int(round(float(ai.get('impact_score', 40)) * (0.55 + 0.45 * e['credibility'] / 100)))
+            imp = int(round(float(ai.get('impact_score', 40)) * (0.55 + 0.45 * rep['credibility'] / 100)))
         except Exception:  # noqa
             imp = 40
         imp = max(0, min(100, imp))
         imp_label = ('Market Moving' if imp >= 85 else 'High Impact' if imp >= 70 else 'Important'
                      if imp >= 50 else 'Monitor' if imp >= 30 else 'Low Significance')
-        cards.append({**e, 'ai': ai, 'impact': imp, 'impact_label': imp_label})
+        # Confirmed vs unconfirmed
+        blob = (rep['title'] + ' ' + (rep['summary'] or '')).lower()
+        speculative = any(w in blob for w in SPEC_WORDS)
+        max_cred = max(m['credibility'] for m in members)
+        if n_src >= 2 and max_cred >= 65 and not speculative:
+            verification = 'Confirmed'
+        elif speculative or max_cred < 55:
+            verification = 'Unconfirmed'
+        else:
+            verification = 'Single-source'
+        # Per-story forecast impact (model interpretation, honest & bounded)
+        dirn = ai.get('direction', 'neutral')
+        sign = 1 if dirn == 'bullish' else -1 if dirn == 'bearish' else 0
+        nudge = round(sign * imp / 100 * 3.0, 1)
+        forecast_impact = {
+            'direction': dirn, 'nudge_pts': nudge,
+            'horizons': ['24H', '7D'] if imp >= 50 else ['24H'],
+            'note': (f'Nudges near-term higher-odds by {"+" if nudge > 0 else ""}{nudge} pts'
+                     if nudge else 'No material push to the near-term odds') + ' (model interpretation).',
+        }
+        cards.append({**rep, 'ai': ai, 'impact': imp, 'impact_label': imp_label,
+                      'sources': sources, 'n_sources': n_src,
+                      'verification': verification, 'forecast_impact': forecast_impact})
     cards.sort(key=lambda c: -c['impact'])
 
     bull = sum(1 for c in cards if c['ai'].get('direction') == 'bullish')
@@ -2066,6 +2108,117 @@ def replay_for_date(target_date, window=30):
     }
 
 
+# ---------------------------- Bitcoin Time Machine: curated scenarios ----------------------------
+CURATED_SCENARIOS = [
+    {'id': 'covid', 'title': 'COVID Liquidity Shock', 'date': '2020-03-12', 'category': 'Macro shock',
+     'description': 'Global markets crashed as COVID-19 lockdowns began. Bitcoin fell ~50% in a day ("Black Thursday") before a historic liquidity-driven recovery.'},
+    {'id': 'halving2020', 'title': '3rd Bitcoin Halving', 'date': '2020-05-11', 'category': 'Halving',
+     'description': 'The block reward was cut from 12.5 to 6.25 BTC. New supply issuance halved — historically a precursor to major bull phases.'},
+    {'id': 'top2021', 'title': '2021 Cycle Top', 'date': '2021-11-09', 'category': 'Cycle top',
+     'description': 'Bitcoin printed its ~$69k all-time high amid euphoric leverage, just before a prolonged bear market.'},
+    {'id': 'chinaban', 'title': 'China Mining Ban', 'date': '2021-05-21', 'category': 'Regulation',
+     'description': 'China intensified its crackdown on mining and trading, triggering a sharp sell-off and a global hashrate migration.'},
+    {'id': 'ftx', 'title': 'FTX Collapse', 'date': '2022-11-08', 'category': 'Exchange failure',
+     'description': 'The FTX exchange imploded, cascading liquidations and a crisis of confidence across crypto.'},
+    {'id': 'capitulation', 'title': 'Bear-Market Capitulation', 'date': '2022-11-21', 'category': 'Capitulation',
+     'description': 'Post-FTX capitulation drove Bitcoin toward its cycle low near $15.5k — a moment of maximum fear.'},
+    {'id': 'etf', 'title': 'US Spot ETF Approval', 'date': '2024-01-10', 'category': 'Institutional',
+     'description': 'The SEC approved the first US spot Bitcoin ETFs, opening a regulated institutional access channel.'},
+    {'id': 'halving2024', 'title': '4th Bitcoin Halving', 'date': '2024-04-19', 'category': 'Halving',
+     'description': 'The block reward was cut from 6.25 to 3.125 BTC — the fourth halving in Bitcoin history.'},
+]
+_scenario_cache = {}
+
+
+def fetch_yahoo_daily_range(symbol, start_unix, end_unix):
+    """True daily closes for an arbitrary historical window via Yahoo period1/period2."""
+    url = (f'https://query1.finance.yahoo.com/v8/finance/chart/{symbol}'
+           f'?interval=1d&period1={int(start_unix)}&period2={int(end_unix)}')
+    d = _http_json(url)['chart']['result'][0]
+    ts = d['timestamp']
+    cl = d['indicators']['quote'][0]['close']
+    series = []
+    for t, c in zip(ts, cl):
+        if c is None:
+            continue
+        series.append({'date': datetime.datetime.utcfromtimestamp(t).strftime('%Y-%m-%d'),
+                       'close': round(float(c), 2)})
+    return series
+
+
+def _fwd(series, idx, days):
+    j = min(len(series) - 1, idx + days)
+    if j <= idx:
+        return None
+    base = series[idx]['close']
+    return round((series[j]['close'] - base) / base * 100, 1) if base else None
+
+
+def build_scenario(scn, window=60):
+    if scn['id'] in _scenario_cache:
+        return _scenario_cache[scn['id']]
+    try:
+        d0 = datetime.datetime.strptime(scn['date'], '%Y-%m-%d')
+        start = (d0 - datetime.timedelta(days=window + 10)).timestamp()
+        end = (d0 + datetime.timedelta(days=420)).timestamp()
+        series = fetch_yahoo_daily_range('BTC-USD', start, end)
+    except Exception:  # noqa
+        traceback.print_exc()
+        series = None
+    if not series:
+        doc = runs_col.database['scenario_cache'].find_one({'_id': scn['id']})
+        if doc:
+            return doc['payload']
+        return {**scn, 'status': 'unavailable'}
+    idx = 0
+    for i, s in enumerate(series):
+        if s['date'] <= scn['date']:
+            idx = i
+        else:
+            break
+    price = series[idx]['close']
+    lo = max(0, idx - window)
+    hi = min(len(series), idx + window + 1)
+    win = [{'date': s['date'], 'close': s['close'], 'is_pick': s['date'] == series[idx]['date']}
+           for s in series[lo:hi]]
+    outcomes = {'30d': _fwd(series, idx, 30), '90d': _fwd(series, idx, 90), '365d': _fwd(series, idx, 365)}
+    model = None
+    try:
+        rep = replay_for_date(scn['date'], window=15)
+        if rep.get('status') == 'ready' and rep.get('pick_date'):
+            pd0 = datetime.datetime.strptime(rep['pick_date'], '%Y-%m-%d')
+            if abs((pd0 - d0).days) <= 20:      # replay pick genuinely near the event
+                model = {'available': True, 'pick_date': rep['pick_date'], 'signal': rep['signal'],
+                         'confidence': rep['confidence'], 'actual': rep['actual'],
+                         'correct': rep['correct'], 'move_pct': rep['move_pct']}
+    except Exception:  # noqa
+        model = None
+    if model is None:
+        model = {'available': False,
+                 'note': 'This event pre-dates BitMarkAI’s live data window, so no point-in-time model call exists — shown as historical context only.'}
+    payload = {**scn, 'status': 'ready', 'price_at_event': price, 'window': win,
+               'outcomes': outcomes, 'model': model}
+    _scenario_cache[scn['id']] = payload
+    try:
+        runs_col.database['scenario_cache'].update_one(
+            {'_id': scn['id']}, {'$set': {'_id': scn['id'], 'payload': payload}}, upsert=True)
+    except Exception:  # noqa
+        pass
+    return payload
+
+
+def get_scenarios():
+    out = []
+    for scn in CURATED_SCENARIOS:
+        try:
+            out.append(build_scenario(scn))
+        except Exception:  # noqa
+            traceback.print_exc()
+            out.append({**scn, 'status': 'error'})
+    return {'status': 'ready', 'scenarios': out}
+
+
+
 
 def compute():
     df, source = fetch_ohlcv()
@@ -2561,6 +2714,15 @@ def replay(date: str = None, window: int = 30):
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error'}
+
+
+@app.get('/api/v1/scenarios')
+def scenarios():
+    try:
+        return get_scenarios()
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error', 'scenarios': []}
 
 
 @app.post('/api/v1/bitmark/run')

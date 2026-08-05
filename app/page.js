@@ -12,6 +12,7 @@ import {
   Check, X, LayoutDashboard, Target, FlaskConical, Bell, MessageCircle,
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
+  Volume2, VolumeX,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -135,18 +136,42 @@ const InfoBlock = ({ children }) => (
   </div>
 );
 
-const AiReview = ({ text }) => (
-  <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-violet-500/[0.06] p-5 ring-1 ring-sky-500/25">
-    <div className="mb-2 flex items-center gap-2.5">
-      <img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-500/40" />
-      <div className="flex items-center gap-2">
-        <h3 className="text-sm font-semibold text-sky-100">Albert’s Review</h3>
-        <span className="hidden text-[10px] text-slate-500 sm:inline">plain-English read of the live numbers</span>
+function AiReview({ text, voice }) {
+  const [speaking, setSpeaking] = React.useState(false);
+  const speak = () => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) return;
+    const synth = window.speechSynthesis;
+    if (synth.speaking) { synth.cancel(); setSpeaking(false); return; }
+    const u = new SpeechSynthesisUtterance(text);
+    const vs = synth.getVoices();
+    const pick = vs.find((v) => /daniel|google uk english male|arthur|male/i.test(v.name) && /en/i.test(v.lang))
+      || vs.find((v) => /google us english|english/i.test(v.name) && /en/i.test(v.lang))
+      || vs.find((v) => /en/i.test(v.lang));
+    if (pick) u.voice = pick;
+    u.rate = 0.96; u.pitch = 1.05; u.volume = 1;
+    u.onend = () => setSpeaking(false);
+    u.onerror = () => setSpeaking(false);
+    setSpeaking(true);
+    synth.speak(u);
+  };
+  return (
+    <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-violet-500/[0.06] p-5 ring-1 ring-sky-500/25">
+      <div className="mb-2 flex items-center gap-2.5">
+        <img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-500/40" />
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-sky-100">Albert’s Review</h3>
+          <span className="hidden text-[10px] text-slate-500 sm:inline">plain-English read of the live numbers</span>
+        </div>
+        {voice && (
+          <button onClick={speak} className={`ml-auto flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${speaking ? 'border-sky-400 bg-sky-500/20 text-sky-200' : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-sky-500/40 hover:text-sky-300'}`}>
+            {speaking ? <><VolumeX className="h-3.5 w-3.5" />Stop</> : <><Volume2 className="h-3.5 w-3.5" />Listen</>}
+          </button>
+        )}
       </div>
-    </div>
-    <p className="text-sm leading-relaxed text-slate-200">{text}</p>
-  </Card>
-);
+      <p className="text-sm leading-relaxed text-slate-200">{text}</p>
+    </Card>
+  );
+}
 
 const SectionHead = ({ icon: Icon, title, blurb }) => (
   <div className="space-y-3">
@@ -399,7 +424,7 @@ function OverviewSection({ d, ticker }) {
       <MarketStateHero d={d} ticker={ticker} />
       <AlbertIntroCard />
       <DecisionEngineCard d={d} />
-      <AiReview text={reviewOverview(d)} />
+      <AiReview text={reviewOverview(d)} voice />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
@@ -1022,6 +1047,71 @@ function AlertsSection({ d, alertsData, onAck }) {
 }
 
 /* --------------------------- Time Machine ---------------------------- */
+function ScenariosPanel() {
+  const [scn, setScn] = React.useState(null);
+  const [sel, setSel] = React.useState(0);
+  React.useEffect(() => {
+    fetch('/api/v1/scenarios', { cache: 'no-store' })
+      .then((r) => r.json()).then((j) => { if (j.status === 'ready') setScn(j.scenarios.filter((s) => s.status === 'ready')); })
+      .catch(() => {});
+  }, []);
+  if (!scn) return <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-sm text-slate-500">Loading historic scenarios…</p></Card>;
+  if (scn.length === 0) return null;
+  const s = scn[sel] || scn[0];
+  const win = (s.window || []).map((w) => ({ date: w.date, close: w.close, pick: w.is_pick ? w.close : null }));
+  const outCol = (v) => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-red-400';
+  return (
+    <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+      <div className="mb-3 flex items-center gap-2"><Sparkles className="h-4 w-4 text-amber-400" /><h3 className="text-sm font-semibold text-white">Famous Scenarios</h3><span className="text-[11px] text-slate-500">point-in-time · real prices</span></div>
+      <div className="mb-4 flex flex-wrap gap-2">
+        {scn.map((x, i) => (
+          <button key={x.id} onClick={() => setSel(i)} className={`rounded-full border px-3 py-1.5 text-xs font-medium ${i === sel ? 'border-amber-500/40 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:text-slate-200'}`}>{x.title}</button>
+        ))}
+      </div>
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={win} margin={{ top: 10, right: 12, left: 4, bottom: 0 }}>
+                <defs><linearGradient id="scnFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#fbbf24" stopOpacity={0.25} /><stop offset="100%" stopColor="#fbbf24" stopOpacity={0} /></linearGradient></defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} minTickGap={40} />
+                <YAxis tick={{ fill: '#64748b', fontSize: 10 }} domain={['auto', 'auto']} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} width={48} />
+                <Tooltip content={<ChartTooltip />} />
+                <Area type="monotone" dataKey="close" stroke="#fbbf24" strokeWidth={2} fill="url(#scnFill)" name="BTC" />
+                <Scatter dataKey="pick" fill="#f59e0b" name="Event day" />
+                <ReferenceLine x={s.date} stroke="#f59e0b" strokeDasharray="4 4" label={{ value: 'event', fill: '#f59e0b', fontSize: 10, position: 'top' }} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div>
+          <p className="text-[11px] uppercase tracking-wider text-amber-400">{s.category}</p>
+          <h4 className="text-lg font-bold text-white">{s.title}</h4>
+          <p className="text-xs text-slate-500">{s.date} · BTC {fmtUsd(s.price_at_event)}</p>
+          <p className="mt-2 text-sm text-slate-400">{s.description}</p>
+          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+            {['30d', '90d', '365d'].map((k) => (
+              <div key={k} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2">
+                <p className="text-[10px] uppercase text-slate-500">+{k.replace('d', 'd')}</p>
+                <p className={`text-sm font-bold ${outCol(s.outcomes[k])}`}>{s.outcomes[k] == null ? '—' : `${s.outcomes[k] >= 0 ? '+' : ''}${s.outcomes[k]}%`}</p>
+              </div>
+            ))}
+          </div>
+          {s.model?.available ? (
+            <div className={`mt-3 rounded-lg border p-2.5 text-xs ${s.model.correct ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300' : 'border-red-500/20 bg-red-500/5 text-red-300'}`}>
+              Model call: <span className="font-bold">{s.model.signal}</span> ({s.model.confidence}% conf) · actual {s.model.actual} · {s.model.correct ? 'correct' : 'missed'}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 text-[11px] text-slate-500">{s.model?.note}</p>
+          )}
+        </div>
+      </div>
+      <p className="mt-3 text-[11px] text-slate-600">Prices are real (Yahoo/BTC-USD). Forward outcomes reveal what actually happened after the event — shown only after the event date, never leaked into any prediction.</p>
+    </Card>
+  );
+}
+
 function TimeMachineSection() {
   const [rep, setRep] = React.useState(null);
   const [date, setDate] = React.useState('');
@@ -1063,6 +1153,8 @@ function TimeMachineSection() {
   return (
     <div className="space-y-5">
       <SectionHead icon={History} title="Bitcoin Time Machine" blurb={sec('timemachine').blurb} />
+
+      <ScenariosPanel />
 
       <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
         <div className="flex flex-wrap items-end gap-3">
@@ -1155,11 +1247,17 @@ function NewsCard({ c }) {
   const ai = c.ai || {};
   const dir = ai.direction || 'neutral';
   const th = ai.time_horizons || {};
+  const fi = c.forecast_impact || {};
+  const vBadge = c.verification === 'Confirmed' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+    : c.verification === 'Unconfirmed' ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+    : 'border-slate-700 bg-slate-800/60 text-slate-300';
+  const sources = c.sources && c.sources.length ? c.sources : [{ source: c.source, link: c.link, credibility: c.credibility }];
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="rounded bg-slate-800 px-2 py-0.5 font-medium text-slate-300">{c.source}</span>
-        <span className="text-slate-500">credibility {c.credibility}</span>
+        {c.verification && <span className={`rounded border px-2 py-0.5 font-semibold ${vBadge}`}>{c.verification}</span>}
+        {c.n_sources > 1 && <span className="rounded bg-slate-800/60 px-2 py-0.5 text-slate-400">{c.n_sources} sources</span>}
         <span className={`rounded border px-2 py-0.5 font-semibold uppercase ${DIR_COLOR[dir]}`}>{dir}</span>
         <span className="ml-auto rounded-full bg-sky-500/10 px-2 py-0.5 font-bold text-sky-400">Impact {c.impact} · {c.impact_label}</span>
       </div>
@@ -1174,6 +1272,11 @@ function NewsCard({ c }) {
         </div>
       </div>
       <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span className="text-emerald-400">▲ {ai.bullish_pct || 0}%</span><span>neutral {ai.neutral_pct || 0}%</span><span className="text-red-400">▼ {ai.bearish_pct || 0}%</span></div>
+      {fi.note && (
+        <div className={`mt-3 rounded-lg border p-2.5 text-xs ${fi.nudge_pts > 0 ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300' : fi.nudge_pts < 0 ? 'border-red-500/20 bg-red-500/5 text-red-300' : 'border-slate-800 bg-slate-950/40 text-slate-400'}`}>
+          <span className="font-semibold">Effect on BitMarkAI forecast: </span>{fi.note}{fi.horizons?.length ? ` (${fi.horizons.join(', ')})` : ''}
+        </div>
+      )}
       <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
         {th.immediate && <span className="rounded border border-slate-800 px-1.5 py-0.5 text-slate-400">Now: <span className={signalText(th.immediate === 'bullish' ? 'Bullish' : th.immediate === 'bearish' ? 'Bearish' : 'Neutral')}>{th.immediate}</span></span>}
         {th.seven_day && <span className="rounded border border-slate-800 px-1.5 py-0.5 text-slate-400">7d: {th.seven_day}</span>}
@@ -1181,6 +1284,16 @@ function NewsCard({ c }) {
         {(ai.categories || []).slice(0, 3).map((cat, i) => <span key={i} className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-400">{String(cat).replace(/_/g, ' ')}</span>)}
         {ai.confidence != null && <span className="ml-auto text-slate-500">confidence {Math.round((ai.confidence || 0) * 100)}%</span>}
       </div>
+      {sources.length > 1 && (
+        <div className="mt-3 border-t border-slate-800 pt-2">
+          <p className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">Reported by {sources.length} sources</p>
+          <div className="flex flex-wrap gap-2">
+            {sources.map((s, i) => (
+              <a key={i} href={s.link} target="_blank" rel="noreferrer" className="rounded bg-slate-800/60 px-2 py-0.5 text-[11px] text-slate-400 hover:text-sky-300">{s.source} ↗</a>
+            ))}
+          </div>
+        </div>
+      )}
     </Card>
   );
 }

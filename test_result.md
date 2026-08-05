@@ -400,6 +400,34 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive validation via external URL. POST /api/v1/bitmark/run with no passcode -> status='unauthorized' ✅. POST with wrong passcode -> status='unauthorized' ✅. POST with correct passcode ('btciq-admin') -> status='started' (passcode accepted) ✅. Must NOT return 'unauthorized' with correct passcode ✅. GET /api/v1/audit returns {status:'ready', entries:[...]} with at least one entry ✅. Denied attempts have result='denied' ✅. Audit entry structure validated (ts, action, result) ✅. All validations passed. MINOR FIX: Fixed .env file format (EMERGENT_LLM_KEY and ADMIN_PASSCODE were on same line, now separated)."
+  - task: "Stage 3: Curated Time Machine scenarios (GET /api/v1/scenarios) - 8 historic Bitcoin events with price windows and outcomes"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW Stage 3 feature. GET /api/v1/scenarios returns {status:'ready', scenarios:[8 items]}. Each scenario has id, title, date (YYYY-MM-DD), category, description. For status='ready' scenarios: price_at_event (number >0 from Yahoo BTC-USD), window (list of {date, close, is_pick} with exactly one is_pick=true), outcomes {30d, 90d, 365d} (numbers or null), model {available: bool, note if unavailable}. Historic 2020-2024 events have model.available=false with note explaining pre-dates live data. Covers: COVID crash, halvings, cycle top, China ban, FTX, capitulation, ETF approval. Data is REAL from Yahoo Finance."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. GET /api/v1/scenarios returns status='ready' with 8 scenarios ✅. All 8 scenarios validated: (1) Required base fields present (id, title, date, category, description) ✅ (2) Date format YYYY-MM-DD validated ✅ (3) ALL 8 scenarios have status='ready' ✅ (4) All 8 have price_at_event > 0 (range: $4,970.79 to $66,971.83) ✅ (5) All 8 have non-empty window (121 data points each) ✅ (6) Each window has exactly 1 is_pick=true ✅ (7) Window items have required fields (date, close, is_pick) ✅ (8) outcomes has 30d/90d/365d keys (all numeric or null) ✅ (9) model object has 'available' boolean ✅ (10) For 2020-2024 dates, model.available=false with 'note' string explaining pre-dates live data ✅. Scenarios cover: COVID Liquidity Shock (2020-03-12, $4,970.79), 3rd Halving (2020-05-11, $8,601.80), 2021 Cycle Top (2021-11-09, $66,971.83), China Mining Ban (2021-05-21, $37,304.69), FTX Collapse (2022-11-08, $18,541.27), Bear Capitulation (2022-11-21, $15,787.28), US Spot ETF (2024-01-10, $46,627.78), 4th Halving (2024-04-19, $63,843.57). All validations passed. Data is REAL (Yahoo Finance BTC-USD)."
+  - task: "Stage 3: News clustering + verification + per-story forecast impact (POST /api/v1/news/refresh, GET /api/v1/news) - multi-source clustering with verification badges and forecast nudges"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW Stage 3 feature. POST /api/v1/news/refresh triggers background news fetch. GET /api/v1/news returns {status:'ready', cards:[...]}. Each card now has: verification (Confirmed/Unconfirmed/Single-source based on n_sources, credibility, speculative keywords), n_sources (int >=1, count of unique sources clustered), sources (list of {source, link, credibility, published, title}), forecast_impact {direction (bullish/bearish/mixed/neutral), nudge_pts (number, impact-weighted directional nudge), horizons (list, e.g. ['24H','7D']), note (explanation)}. Clustering uses token-based Jaccard similarity (threshold 0.34) to group near-duplicate stories across CoinDesk, Cointelegraph, Bitcoin Magazine, Decrypt, Federal Reserve RSS feeds. Existing fields preserved: title, ai.summary, ai.direction, impact, impact_label. No duplicate titles (clustering dedupes). Data is REAL (RSS feeds + Gemini 2.5 Flash summaries)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. POST /api/v1/news/refresh returns status='started' ✅. GET /api/v1/news polled until status='ready' (1 attempt, immediate) ✅. Validated 8 news cards: (1) verification field present in all cards, values in [Confirmed, Unconfirmed, Single-source] ✅ (2) n_sources: int >=1 in all cards (range: 1-2) ✅ (3) sources: non-empty list in all cards, each source has {source, link, credibility} ✅ (4) forecast_impact object validated in all cards with required fields: direction (bullish/bearish/mixed/neutral) ✅, nudge_pts (number, range: -2.0 to 0.0) ✅, horizons (list, e.g. ['24H','7D']) ✅, note (non-empty string) ✅ (5) EXISTING fields still present: title ✅, impact (int) ✅, impact_label ✅, ai.summary (non-empty) ✅, ai.direction ✅ (6) NO duplicate titles found (8 unique titles out of 8 cards) - clustering working ✅ (7) Clustering grouping multiple sources: max n_sources=2 (at least one card with n_sources>1) ✅. Sample cards: SpaceX revenue (bearish, -2.0 nudge, Single-source), Fed proposal (neutral, Unconfirmed), Jim Cramer quantum fears (mixed, Unconfirmed, n_sources=2). All validations passed. Data is REAL (RSS feeds: CoinDesk, Cointelegraph, Federal Reserve + Gemini 2.5 Flash AI summaries)."
     implemented: true
     working: true
     file: "app/page.js"
@@ -431,12 +459,11 @@ backend:
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 7
+  test_sequence: 8
   run_ui: false
 
 test_plan:
-  current_focus:
-    - "Stage 1+2 UI: 14-item nav, Bitcoin Market State hero, Albert branding, Risk/SmartMoney/Institutional/Settings, filterable Prediction Ledger, Why-forecast-changed panel"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -444,7 +471,24 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      FRONTEND UI TEST — Stage 1+2 BTCIQ. Use the external base URL (NEXT_PUBLIC_BASE_URL). Data is REAL.
+      STAGE 3 BACKEND TEST (via Next.js proxy, external base URL + /api/v1/...). Data is REAL. No WebSockets.
+
+      1) Curated scenarios — GET /api/v1/scenarios -> {status:'ready', scenarios:[8 items]}. Each item:
+         id, title, date, category, description, and (for ready ones) status:'ready', price_at_event (>0),
+         window (non-empty list of {date, close, is_pick} — exactly one is_pick true), outcomes {30d,90d,365d}
+         (numbers or null), and model {available:bool, ...}. For pre-2025 events model.available should be
+         false with a 'note'. Validate at least 6 of 8 are status:'ready' with a non-empty window and a
+         numeric price_at_event. (Prices come from Yahoo BTC-USD daily; if a call is flaky it may cache.)
+
+      2) News clustering — POST /api/v1/news/refresh, then poll GET /api/v1/news until status:'ready'
+         (up to ~60s). Validate cards[] each now has: verification (one of Confirmed/Unconfirmed/Single-source),
+         n_sources (int>=1), sources (list of {source, link, credibility}), and forecast_impact
+         {direction, nudge_pts (number), horizons (list), note (string)}. Confirm existing fields still present
+         (title, ai.summary, impact, impact_label, ai.direction). Confirm clustering can group >1 source
+         (some card may have n_sources>1) and that no two cards are exact-duplicate titles.
+
+      REGRESSION: GET /api/v1/dashboard still status:'ready' with risk/smart_money/institutional/smart_alerts/
+      prediction_ledger present. GET /api/v1/scorecard still returns ledger[] + by_regime. GET /api/v1/health ok.
       IMPORTANT: the headless dev server hydrates slowly and may briefly show a "Building Bitcoin intelligence"
       loader. Always WAIT for the text "BITCOIN MARKET STATE" to appear before asserting (up to ~40s), and
       navigate between sections via the left sidebar labels.
@@ -857,3 +901,71 @@ agent_communication:
       NO CRITICAL ISSUES FOUND. All backend features working as expected with REAL data (ccxt Kraken).
       WebSockets NOT tested (as instructed).
       Data is REAL except clearly-flagged DEMO panels (smart_money, institutional, risk.demo).
+
+    -agent: "testing"
+    -message: |
+      ✅ ALL STAGE 3 BACKEND TESTS PASSED (3/3)
+      
+      Completed comprehensive testing of Stage 3 features via external URL (https://quant-features.preview.emergentagent.com/api/v1/*):
+      
+      TEST 1 - Curated Time Machine Scenarios - ✅ PASSED
+      - GET /api/v1/scenarios returns status='ready' with 8 scenarios ✅
+      - ALL 8 scenarios validated with status='ready' ✅
+      - Required base fields present in all: id, title, date (YYYY-MM-DD format), category, description ✅
+      - All 8 have price_at_event > 0 (range: $4,970.79 to $66,971.83) ✅
+      - All 8 have non-empty window (121 data points each) ✅
+      - Each window has exactly 1 is_pick=true ✅
+      - Window items have required fields: date, close, is_pick (boolean) ✅
+      - outcomes object has 30d/90d/365d keys (all numeric or null) ✅
+      - model object has 'available' boolean ✅
+      - For 2020-2024 dates, model.available=false with 'note' string explaining pre-dates live data ✅
+      - Scenarios cover 8 historic Bitcoin events:
+        * COVID Liquidity Shock (2020-03-12, $4,970.79, outcomes: +38% 30d, +98.6% 90d, +1053.4% 365d)
+        * 3rd Bitcoin Halving (2020-05-11, $8,601.80, outcomes: +14.7% 30d, +35.7% 90d, +559.2% 365d)
+        * 2021 Cycle Top (2021-11-09, $66,971.83, outcomes: -28.8% 30d, -34.5% 90d, -76.3% 365d)
+        * China Mining Ban (2021-05-21, $37,304.69, outcomes: -4.3% 30d, +25.2% 90d, -21.1% 365d)
+        * FTX Collapse (2022-11-08, $18,541.27, outcomes: -7.1% 30d, +22.8% 90d, +92.3% 365d)
+        * Bear-Market Capitulation (2022-11-21, $15,787.28, outcomes: +6.5% 30d, +54.1% 90d, +126.9% 365d)
+        * US Spot ETF Approval (2024-01-10, $46,627.78, outcomes: +1.1% 30d, +48.3% 90d, +98.3% 365d)
+        * 4th Bitcoin Halving (2024-04-19, $63,843.57, outcomes: +3.8% 30d, +0.2% 90d, +33.2% 365d)
+      - Data is REAL (Yahoo Finance BTC-USD historical daily prices) ✅
+      
+      TEST 2 - News Clustering + Verification + Forecast Impact - ✅ PASSED
+      - POST /api/v1/news/refresh returns status='started' ✅
+      - GET /api/v1/news polled until status='ready' (1 attempt, immediate) ✅
+      - Validated 8 news cards with NEW fields:
+        (1) verification: present in all cards, values in [Confirmed, Unconfirmed, Single-source] ✅
+        (2) n_sources: int >=1 in all cards (range: 1-2) ✅
+        (3) sources: non-empty list in all cards, each source has {source, link, credibility} ✅
+        (4) forecast_impact object validated in all cards:
+            * direction: bullish/bearish/mixed/neutral ✅
+            * nudge_pts: number (range: -2.0 to 0.0) ✅
+            * horizons: list (e.g. ['24H','7D']) ✅
+            * note: non-empty string explaining impact ✅
+        (5) EXISTING fields still present in all cards:
+            * title: non-empty string ✅
+            * impact: int (range: 5-66) ✅
+            * impact_label: string ✅
+            * ai.summary: non-empty string ✅
+            * ai.direction: bullish/bearish/mixed/neutral ✅
+        (6) NO duplicate titles found (8 unique titles out of 8 cards) - clustering working ✅
+        (7) Clustering grouping multiple sources: max n_sources=2 (at least one card with n_sources>1) ✅
+      - Sample cards validated:
+        * SpaceX revenue (bearish, -2.0 nudge, Single-source, 1 source, impact=66)
+        * Fed proposal (neutral, 0.0 nudge, Unconfirmed, 1 source, impact=39)
+        * Jim Cramer quantum fears (mixed, 0.0 nudge, Unconfirmed, 2 sources, impact=30)
+      - Data is REAL (RSS feeds: CoinDesk, Cointelegraph, Bitcoin Magazine, Decrypt, Federal Reserve + Gemini 2.5 Flash AI summaries) ✅
+      
+      TEST 3 - REGRESSION - ✅ PASSED
+      - GET /api/v1/dashboard: status='ready' with all required fields (risk, smart_money, institutional, smart_alerts, prediction_ledger) ✅
+      - GET /api/v1/scorecard: status='ready' with ledger and by_regime ✅
+      - GET /api/v1/health: status='ok', compute_status='idle', runs=18 ✅
+      
+      TEST SUMMARY: 3/3 tests passed
+      - 1_curated_scenarios: ✅ PASSED
+      - 2_news_clustering: ✅ PASSED
+      - 3_regression: ✅ PASSED
+      
+      NO CRITICAL ISSUES FOUND. All Stage 3 backend features working as expected with REAL data.
+      Data is REAL (Yahoo Finance for scenarios, RSS feeds + Gemini 2.5 Flash for news).
+      WebSockets NOT tested (as instructed).
