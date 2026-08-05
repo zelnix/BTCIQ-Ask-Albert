@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  ResponsiveContainer, ComposedChart, Line, Area, Bar, BarChart,
+  ResponsiveContainer, ComposedChart, Line, LineChart, Area, Bar, BarChart,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell,
   ScatterChart, Scatter, ReferenceLine, ZAxis,
 } from 'recharts';
@@ -12,7 +12,7 @@ import {
   Check, X, LayoutDashboard, Target, FlaskConical, Bell, MessageCircle,
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
-  Volume2, VolumeX,
+  Volume2, VolumeX, Maximize2, Minimize2,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -417,11 +417,60 @@ function AlbertIntroCard() {
   );
 }
 
+function TradingViewChart({ height = 460 }) {
+  const [fs, setFs] = React.useState(false);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.innerHTML = '';
+    const widget = document.createElement('div');
+    widget.className = 'tradingview-widget-container__widget';
+    widget.style.height = '100%';
+    widget.style.width = '100%';
+    el.appendChild(widget);
+    const s = document.createElement('script');
+    s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+    s.type = 'text/javascript';
+    s.async = true;
+    s.innerHTML = JSON.stringify({
+      autosize: true, symbol: 'COINBASE:BTCUSD', interval: 'D', timezone: 'Etc/UTC',
+      theme: 'dark', style: '1', locale: 'en', allow_symbol_change: true,
+      hide_side_toolbar: false, withdateranges: true, details: false, hotlist: false,
+      calendar: false, studies: ['STD;RSI'], support_host: 'https://www.tradingview.com',
+    });
+    el.appendChild(s);
+  }, []);
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') setFs(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+  return (
+    <Card className={`flex flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800 ${fs ? 'fixed inset-0 z-[100] rounded-none' : ''}`}>
+      <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
+        <div className="flex items-center gap-2">
+          <CandlestickChart className="h-4 w-4 text-amber-400" />
+          <span className="text-sm font-semibold text-white">BTC/USD · Live Chart</span>
+          <span className="hidden text-[10px] text-slate-500 sm:inline">TradingView · drawing tools, indicators & ranges</span>
+        </div>
+        <button onClick={() => setFs(!fs)} className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white">
+          {fs ? <><Minimize2 className="h-3.5 w-3.5" />Exit</> : <><Maximize2 className="h-3.5 w-3.5" />Full screen</>}
+        </button>
+      </div>
+      <div ref={ref} className="tradingview-widget-container w-full flex-1" style={{ height: fs ? 'calc(100vh - 42px)' : height }} />
+    </Card>
+  );
+}
+
 function OverviewSection({ d, ticker }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={LayoutDashboard} title="Overview" blurb={SECTIONS[0].blurb} />
-      <MarketStateHero d={d} ticker={ticker} />
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <MarketStateHero d={d} ticker={ticker} />
+        <TradingViewChart />
+      </div>
       <AlbertIntroCard />
       <DecisionEngineCard d={d} />
       <AiReview text={reviewOverview(d)} voice />
@@ -987,7 +1036,8 @@ function AlertsSection({ d, alertsData, onAck }) {
     'Quant Score': 'text-emerald-300 bg-emerald-500/10 border-emerald-500/25',
     'Data Trust': 'text-amber-300 bg-amber-500/10 border-amber-500/25',
     'Event Risk': 'text-orange-300 bg-orange-500/10 border-orange-500/25',
-    Volatility: 'text-red-300 bg-red-500/10 border-red-500/25' }[c] || 'text-slate-300 bg-slate-800/40 border-slate-700');
+    Volatility: 'text-red-300 bg-red-500/10 border-red-500/25',
+    News: 'text-violet-300 bg-violet-500/10 border-violet-500/25' }[c] || 'text-slate-300 bg-slate-800/40 border-slate-700');
   const styleFor = (lvl) => lvl === 'danger' ? 'border-red-500/30 bg-red-500/5' : lvl === 'warning' ? 'border-amber-500/30 bg-amber-500/5' : lvl === 'success' ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800 bg-slate-950/40';
   const dot = (lvl) => lvl === 'danger' ? 'bg-red-400' : lvl === 'warning' ? 'bg-amber-400' : lvl === 'success' ? 'bg-emerald-400' : 'bg-sky-400';
   const fmtTs = (iso) => { try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return iso; } };
@@ -1019,6 +1069,7 @@ function AlertsSection({ d, alertsData, onAck }) {
                     <span className="ml-auto text-[11px] text-slate-500">{fmtTs(a.ts)}</span>
                   </div>
                   <p className="mt-1 text-sm text-slate-400">{a.message}</p>
+                  {a.link && <a href={a.link} target="_blank" rel="noreferrer" className="mt-1 inline-block text-xs font-semibold text-sky-400 hover:text-sky-300">Read source ↗</a>}
                 </div>
               </div>
             ))}
@@ -1050,6 +1101,8 @@ function AlertsSection({ d, alertsData, onAck }) {
 function ScenariosPanel() {
   const [scn, setScn] = React.useState(null);
   const [sel, setSel] = React.useState(0);
+  const [selB, setSelB] = React.useState(1);
+  const [compare, setCompare] = React.useState(false);
   React.useEffect(() => {
     fetch('/api/v1/scenarios', { cache: 'no-store' })
       .then((r) => r.json()).then((j) => { if (j.status === 'ready') setScn(j.scenarios.filter((s) => s.status === 'ready')); })
@@ -1060,54 +1113,135 @@ function ScenariosPanel() {
   const s = scn[sel] || scn[0];
   const win = (s.window || []).map((w) => ({ date: w.date, close: w.close, pick: w.is_pick ? w.close : null }));
   const outCol = (v) => v == null ? 'text-slate-400' : v >= 0 ? 'text-emerald-400' : 'text-red-400';
+  const outTxt = (v) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v}%`;
+
+  // Rebase a scenario window to 100 at its event day, keyed by day-offset from the event
+  const rebased = (scx) => {
+    const w = scx.window || [];
+    const pi = w.findIndex((p) => p.is_pick);
+    const base = scx.price_at_event || (pi >= 0 ? w[pi].close : (w[0] && w[0].close)) || 1;
+    const m = {};
+    w.forEach((p, i) => { m[i - (pi < 0 ? 0 : pi)] = Math.round((p.close / base) * 1000) / 10; });
+    return m;
+  };
+  const sB = scn[selB] || scn[(sel + 1) % scn.length];
+  let overlay = [];
+  if (compare) {
+    const ma = rebased(s); const mb = rebased(sB);
+    const offs = new Set([...Object.keys(ma), ...Object.keys(mb)].map(Number));
+    overlay = Array.from(offs).filter((o) => o >= -60 && o <= 90).sort((x, y) => x - y)
+      .map((o) => ({ off: o, a: ma[o] ?? null, b: mb[o] ?? null }));
+  }
+
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-      <div className="mb-3 flex items-center gap-2"><Sparkles className="h-4 w-4 text-amber-400" /><h3 className="text-sm font-semibold text-white">Famous Scenarios</h3><span className="text-[11px] text-slate-500">point-in-time · real prices</span></div>
-      <div className="mb-4 flex flex-wrap gap-2">
-        {scn.map((x, i) => (
-          <button key={x.id} onClick={() => setSel(i)} className={`rounded-full border px-3 py-1.5 text-xs font-medium ${i === sel ? 'border-amber-500/40 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:text-slate-200'}`}>{x.title}</button>
-        ))}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Sparkles className="h-4 w-4 text-amber-400" />
+        <h3 className="text-sm font-semibold text-white">Famous Scenarios</h3>
+        <span className="text-[11px] text-slate-500">point-in-time · real prices</span>
+        <button onClick={() => setCompare(!compare)} className={`ml-auto rounded-full border px-3 py-1 text-xs font-semibold ${compare ? 'border-sky-400 bg-sky-500/15 text-sky-200' : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:text-sky-300'}`}>{compare ? 'Comparing 2 ✓' : 'Compare two'}</button>
       </div>
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={win} margin={{ top: 10, right: 12, left: 4, bottom: 0 }}>
-                <defs><linearGradient id="scnFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#fbbf24" stopOpacity={0.25} /><stop offset="100%" stopColor="#fbbf24" stopOpacity={0} /></linearGradient></defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} minTickGap={40} />
-                <YAxis tick={{ fill: '#64748b', fontSize: 10 }} domain={['auto', 'auto']} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} width={48} />
-                <Tooltip content={<ChartTooltip />} />
-                <Area type="monotone" dataKey="close" stroke="#fbbf24" strokeWidth={2} fill="url(#scnFill)" name="BTC" />
-                <Scatter dataKey="pick" fill="#f59e0b" name="Event day" />
-                <ReferenceLine x={s.date} stroke="#f59e0b" strokeDasharray="4 4" label={{ value: 'event', fill: '#f59e0b', fontSize: 10, position: 'top' }} />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-        <div>
-          <p className="text-[11px] uppercase tracking-wider text-amber-400">{s.category}</p>
-          <h4 className="text-lg font-bold text-white">{s.title}</h4>
-          <p className="text-xs text-slate-500">{s.date} · BTC {fmtUsd(s.price_at_event)}</p>
-          <p className="mt-2 text-sm text-slate-400">{s.description}</p>
-          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-            {['30d', '90d', '365d'].map((k) => (
-              <div key={k} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2">
-                <p className="text-[10px] uppercase text-slate-500">+{k.replace('d', 'd')}</p>
-                <p className={`text-sm font-bold ${outCol(s.outcomes[k])}`}>{s.outcomes[k] == null ? '—' : `${s.outcomes[k] >= 0 ? '+' : ''}${s.outcomes[k]}%`}</p>
-              </div>
+
+      {!compare ? (
+        <>
+          <div className="mb-4 flex flex-wrap gap-2">
+            {scn.map((x, i) => (
+              <button key={x.id} onClick={() => setSel(i)} className={`rounded-full border px-3 py-1.5 text-xs font-medium ${i === sel ? 'border-amber-500/40 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-800/50 text-slate-400 hover:text-slate-200'}`}>{x.title}</button>
             ))}
           </div>
-          {s.model?.available ? (
-            <div className={`mt-3 rounded-lg border p-2.5 text-xs ${s.model.correct ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300' : 'border-red-500/20 bg-red-500/5 text-red-300'}`}>
-              Model call: <span className="font-bold">{s.model.signal}</span> ({s.model.confidence}% conf) · actual {s.model.actual} · {s.model.correct ? 'correct' : 'missed'}
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+            <div className="lg:col-span-2">
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={win} margin={{ top: 10, right: 12, left: 4, bottom: 0 }}>
+                    <defs><linearGradient id="scnFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#fbbf24" stopOpacity={0.25} /><stop offset="100%" stopColor="#fbbf24" stopOpacity={0} /></linearGradient></defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                    <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 10 }} minTickGap={40} />
+                    <YAxis tick={{ fill: '#64748b', fontSize: 10 }} domain={['auto', 'auto']} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} width={48} />
+                    <Tooltip content={<ChartTooltip />} />
+                    <Area type="monotone" dataKey="close" stroke="#fbbf24" strokeWidth={2} fill="url(#scnFill)" name="BTC" />
+                    <Scatter dataKey="pick" fill="#f59e0b" name="Event day" />
+                    <ReferenceLine x={s.date} stroke="#f59e0b" strokeDasharray="4 4" label={{ value: 'event', fill: '#f59e0b', fontSize: 10, position: 'top' }} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
             </div>
-          ) : (
-            <p className="mt-3 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 text-[11px] text-slate-500">{s.model?.note}</p>
-          )}
-        </div>
-      </div>
-      <p className="mt-3 text-[11px] text-slate-600">Prices are real (Yahoo/BTC-USD). Forward outcomes reveal what actually happened after the event — shown only after the event date, never leaked into any prediction.</p>
+            <div>
+              <p className="text-[11px] uppercase tracking-wider text-amber-400">{s.category}</p>
+              <h4 className="text-lg font-bold text-white">{s.title}</h4>
+              <p className="text-xs text-slate-500">{s.date} · BTC {fmtUsd(s.price_at_event)}</p>
+              <p className="mt-2 text-sm text-slate-400">{s.description}</p>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+                {['30d', '90d', '365d'].map((k) => (
+                  <div key={k} className="rounded-lg border border-slate-800 bg-slate-950/40 p-2">
+                    <p className="text-[10px] uppercase text-slate-500">+{k}</p>
+                    <p className={`text-sm font-bold ${outCol(s.outcomes[k])}`}>{outTxt(s.outcomes[k])}</p>
+                  </div>
+                ))}
+              </div>
+              {s.model?.available ? (
+                <div className={`mt-3 rounded-lg border p-2.5 text-xs ${s.model.correct ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300' : 'border-red-500/20 bg-red-500/5 text-red-300'}`}>
+                  Model call: <span className="font-bold">{s.model.signal}</span> ({s.model.confidence}% conf) · actual {s.model.actual} · {s.model.correct ? 'correct' : 'missed'}
+                </div>
+              ) : (
+                <p className="mt-3 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 text-[11px] text-slate-500">{s.model?.note}</p>
+              )}
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <p className="mb-1 text-[10px] uppercase tracking-wider text-amber-400">Scenario A</p>
+              <select value={sel} onChange={(e) => setSel(Number(e.target.value))} className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-200 focus:border-amber-500/50 focus:outline-none">
+                {scn.map((x, i) => <option key={x.id} value={i}>{x.title} ({x.date})</option>)}
+              </select>
+            </div>
+            <div>
+              <p className="mb-1 text-[10px] uppercase tracking-wider text-sky-400">Scenario B</p>
+              <select value={selB} onChange={(e) => setSelB(Number(e.target.value))} className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-2 py-1.5 text-xs text-slate-200 focus:border-sky-500/50 focus:outline-none">
+                {scn.map((x, i) => <option key={x.id} value={i}>{x.title} ({x.date})</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="h-72 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={overlay} margin={{ top: 10, right: 12, left: 4, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                <XAxis dataKey="off" tick={{ fill: '#64748b', fontSize: 10 }} tickFormatter={(v) => `${v > 0 ? '+' : ''}${v}d`} />
+                <YAxis tick={{ fill: '#64748b', fontSize: 10 }} domain={['auto', 'auto']} tickFormatter={(v) => `${v}`} width={40} />
+                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [`${v} (=100 at event)`, n === 'a' ? s.title : sB.title]} labelFormatter={(l) => `${l > 0 ? '+' : ''}${l} days from event`} />
+                <ReferenceLine x={0} stroke="#64748b" strokeDasharray="4 4" label={{ value: 'event', fill: '#94a3b8', fontSize: 10 }} />
+                <ReferenceLine y={100} stroke="#334155" />
+                <Line type="monotone" dataKey="a" stroke="#fbbf24" strokeWidth={2} dot={false} name="a" connectNulls />
+                <Line type="monotone" dataKey="b" stroke="#38bdf8" strokeWidth={2} dot={false} name="b" connectNulls />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="mt-2 flex items-center justify-center gap-5 text-xs">
+            <span className="flex items-center gap-1.5 text-amber-300"><span className="h-2 w-4 rounded bg-amber-400" />{s.title}</span>
+            <span className="flex items-center gap-1.5 text-sky-300"><span className="h-2 w-4 rounded bg-sky-400" />{sB.title}</span>
+          </div>
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-[11px] uppercase tracking-wider text-slate-500"><th className="pb-2">Metric</th><th className="pb-2 text-amber-300">{s.title}</th><th className="pb-2 text-sky-300">{sB.title}</th></tr></thead>
+              <tbody>
+                <tr className="border-t border-slate-800"><td className="py-2 text-slate-400">Event date</td><td className="py-2 text-slate-300">{s.date}</td><td className="py-2 text-slate-300">{sB.date}</td></tr>
+                <tr className="border-t border-slate-800"><td className="py-2 text-slate-400">BTC at event</td><td className="py-2 text-slate-300">{fmtUsd(s.price_at_event)}</td><td className="py-2 text-slate-300">{fmtUsd(sB.price_at_event)}</td></tr>
+                {['30d', '90d', '365d'].map((k) => (
+                  <tr key={k} className="border-t border-slate-800">
+                    <td className="py-2 text-slate-400">+{k} after</td>
+                    <td className={`py-2 font-semibold ${outCol(s.outcomes[k])}`}>{outTxt(s.outcomes[k])}</td>
+                    <td className={`py-2 font-semibold ${outCol(sB.outcomes[k])}`}>{outTxt(sB.outcomes[k])}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+      <p className="mt-3 text-[11px] text-slate-600">Prices are real (Yahoo/BTC-USD). In compare mode both paths are rebased to 100 at their event day so you can see how Bitcoin behaved relative to each event. Forward outcomes are revealed only after the event — never leaked into a prediction.</p>
     </Card>
   );
 }

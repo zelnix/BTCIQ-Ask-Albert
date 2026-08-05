@@ -831,7 +831,9 @@ def fire_news_alerts(cards):
     as_of = datetime.date.today().isoformat()
     now_iso = datetime.datetime.utcnow().isoformat()
     for c in cards:
-        if c.get('verification') != 'Confirmed' or int(c.get('impact', 0) or 0) < 70:
+        # Fire for corroborated OR single-source stories (skip clearly speculative/unconfirmed),
+        # with a slightly looser impact bar so meaningful news reliably surfaces as an alert.
+        if c.get('verification') == 'Unconfirmed' or int(c.get('impact', 0) or 0) < 60:
             continue
         key = 'news_' + _norm_title(c.get('title', ''))
         if not key or key == 'news_':
