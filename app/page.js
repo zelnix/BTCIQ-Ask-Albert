@@ -12,7 +12,7 @@ import {
   Check, X, LayoutDashboard, Target, FlaskConical, Bell, MessageCircle,
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
-  Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal,
+  Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -2407,6 +2407,7 @@ function DrawableChart({ ohlc }) {
   const [hover, setHover] = React.useState(null);
   const [measure, setMeasure] = React.useState(null);
   const [fs, setFs] = React.useState(false);
+  const [snap, setSnap] = React.useState(true);
   const svgRef = React.useRef(null);
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -2433,14 +2434,30 @@ function DrawableChart({ ohlc }) {
   const idxOf = (t) => data.findIndex((c) => c.t === t);
   const fUsd = (v) => '$' + Math.round(v).toLocaleString();
   const FIBS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+  const SNAP_PX = 12;
+
+  const snapAt = (i, rawY) => {
+    const c = data[i];
+    if (!c) return null;
+    const cand = [['O', c.o], ['H', c.h], ['L', c.l], ['C', c.c]];
+    let best = null, bd = 1e9;
+    cand.forEach(([label, val]) => { const d = Math.abs(yAt(val) - rawY); if (d < bd) { bd = d; best = { label, val }; } });
+    return best && bd <= SNAP_PX ? best : null;
+  };
 
   const toLocal = (e) => {
     const svg = svgRef.current; const pt = svg.createSVGPoint();
     pt.x = e.clientX; pt.y = e.clientY;
     const l = pt.matrixTransform(svg.getScreenCTM().inverse());
     let i = Math.round((l.x - pL) / plotW * (n - 1)); i = Math.max(0, Math.min(n - 1, i));
-    const price = lo + (1 - (l.y - pT) / plotH) * (hi - lo);
-    return { i, t: data[i].t, price: Math.round(price), x: xAt(i), y: l.y };
+    let price = lo + (1 - (l.y - pT) / plotH) * (hi - lo);
+    let snapLabel = null;
+    if (snap && tool !== 'cursor') {
+      const s = snapAt(i, l.y);
+      if (s) { price = s.val; snapLabel = s.label; }
+    }
+    price = Math.round(price);
+    return { i, t: data[i].t, price, x: xAt(i), y: snapLabel ? yAt(price) : l.y, snap: snapLabel };
   };
   const TWO_PT = ['trend', 'fib', 'measure'];
   const onClick = (e) => {
@@ -2514,6 +2531,7 @@ function DrawableChart({ ohlc }) {
             <button key={id} onClick={() => { setTool(id); setPending(null); }} className={`rounded-md px-2.5 py-1 text-xs font-medium ${tool === id ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/40' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}>{l}</button>
           ))}
           <button onClick={() => { save([]); setMeasure(null); }} className="rounded-md bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-300 hover:bg-red-500/20">Clear all</button>
+          <button onClick={() => setSnap(!snap)} className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium ${snap ? 'bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-500/40' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`} title="Snap drawing points to candle Open/High/Low/Close">{snap ? <><Magnet className="h-3.5 w-3.5" />Snap: On</> : <><Magnet className="h-3.5 w-3.5" />Snap: Off</>}</button>
           <button onClick={() => setFs(!fs)} className="flex items-center gap-1 rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800">{fs ? <><Minimize2 className="h-3.5 w-3.5" />Exit</> : <><Maximize2 className="h-3.5 w-3.5" />Full</>}</button>
         </div>
       </div>
@@ -2545,10 +2563,11 @@ function DrawableChart({ ohlc }) {
             <line x1={pL} y1={hover.y} x2={W - pR} y2={hover.y} stroke="#475569" strokeDasharray="3 3" />
             <rect x={W - pR} y={hover.y - 9} width={pR} height="18" fill="#1e293b" /><text x={W - pR + 4} y={hover.y + 4} fontSize="10" fill="#e2e8f0">{fUsd(hover.price)}</text>
             <rect x={hover.x - 22} y={pT + plotH} width="44" height="16" fill="#1e293b" /><text x={hover.x} y={pT + plotH + 12} textAnchor="middle" fontSize="10" fill="#e2e8f0">{hover.t}</text>
+            {hover.snap && (<g><circle cx={hover.x} cy={hover.y} r="6" fill="none" stroke="#34d399" strokeWidth="1.8" /><circle cx={hover.x} cy={hover.y} r="2.5" fill="#34d399" /><rect x={hover.x + 8} y={hover.y - 9} width="20" height="16" rx="3" fill="#064e3b" stroke="#34d399" strokeWidth="0.75" /><text x={hover.x + 18} y={hover.y + 3} textAnchor="middle" fontSize="10" fill="#6ee7b7">{hover.snap}</text></g>)}
           </g>)}
         </svg>
       </div>
-      <p className="mt-2 text-[11px] text-slate-600">{hint} Drawings ({draw.length}) auto-save to this browser and reload every visit. Measurements are temporary.</p>
+      <p className="mt-2 text-[11px] text-slate-600">{hint} {snap ? 'Snap is ON — points lock to the nearest candle O/H/L/C (green ring).' : 'Snap is OFF — points follow the cursor freely.'} Drawings ({draw.length}) auto-save to this browser and reload every visit. Measurements are temporary.</p>
     </Card>
   );
 }
