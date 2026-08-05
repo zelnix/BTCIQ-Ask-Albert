@@ -12,7 +12,7 @@ import {
   Check, X, LayoutDashboard, Target, FlaskConical, Bell, MessageCircle,
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
-  Volume2, VolumeX, Maximize2, Minimize2,
+  Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -417,9 +417,39 @@ function AlbertIntroCard() {
   );
 }
 
+const TV_STUDIES = [
+  { id: 'RSI@tv-basicstudies', label: 'RSI' },
+  { id: 'MACD@tv-basicstudies', label: 'MACD' },
+  { id: 'BB@tv-basicstudies', label: 'Bollinger Bands' },
+  { id: 'MASimple@tv-basicstudies', label: 'SMA' },
+  { id: 'MAExp@tv-basicstudies', label: 'EMA' },
+  { id: 'Stochastic@tv-basicstudies', label: 'Stochastic' },
+  { id: 'Volume@tv-basicstudies', label: 'Volume' },
+];
+const TV_INTERVALS = [['15', '15m'], ['60', '1h'], ['240', '4h'], ['D', '1D'], ['W', '1W']];
+const TV_STYLES = [['1', 'Candles'], ['3', 'Line'], ['4', 'Area'], ['8', 'Heikin Ashi']];
+const TV_SYMBOLS = ['COINBASE:BTCUSD', 'BINANCE:BTCUSDT', 'BITSTAMP:BTCUSD', 'KRAKEN:XBTUSD'];
+const DEFAULT_PRESET = { symbol: 'COINBASE:BTCUSD', interval: 'D', style: '1', studies: ['RSI@tv-basicstudies'] };
+
+function loadPreset() {
+  if (typeof window === 'undefined') return DEFAULT_PRESET;
+  try {
+    const p = JSON.parse(window.localStorage.getItem('btciq_chart_preset'));
+    if (p && p.symbol) return { ...DEFAULT_PRESET, ...p };
+  } catch (e) { /* noop */ }
+  return DEFAULT_PRESET;
+}
+
 function TradingViewChart({ height = 460 }) {
   const [fs, setFs] = React.useState(false);
+  const [cfg, setCfg] = React.useState(false);
+  const [preset, setPreset] = React.useState(DEFAULT_PRESET);
+  const [draft, setDraft] = React.useState(DEFAULT_PRESET);
+  const [saved, setSaved] = React.useState(false);
   const ref = React.useRef(null);
+
+  React.useEffect(() => { const p = loadPreset(); setPreset(p); setDraft(p); }, []);
+
   React.useEffect(() => {
     const el = ref.current;
     if (!el) return;
@@ -434,30 +464,88 @@ function TradingViewChart({ height = 460 }) {
     s.type = 'text/javascript';
     s.async = true;
     s.innerHTML = JSON.stringify({
-      autosize: true, symbol: 'COINBASE:BTCUSD', interval: 'D', timezone: 'Etc/UTC',
-      theme: 'dark', style: '1', locale: 'en', allow_symbol_change: true,
+      autosize: true, symbol: preset.symbol, interval: preset.interval, timezone: 'Etc/UTC',
+      theme: 'dark', style: preset.style, locale: 'en', allow_symbol_change: true,
       hide_side_toolbar: false, withdateranges: true, details: false, hotlist: false,
-      calendar: false, studies: ['STD;RSI'], support_host: 'https://www.tradingview.com',
+      calendar: false, studies: preset.studies || [], support_host: 'https://www.tradingview.com',
     });
     el.appendChild(s);
-  }, []);
+  }, [preset]);
+
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') setFs(false); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  const toggleStudy = (id) => setDraft((d) => ({
+    ...d, studies: d.studies.includes(id) ? d.studies.filter((x) => x !== id) : [...d.studies, id],
+  }));
+  const savePreset = () => {
+    setPreset(draft);
+    if (typeof window !== 'undefined') window.localStorage.setItem('btciq_chart_preset', JSON.stringify(draft));
+    setSaved(true); setTimeout(() => setSaved(false), 1800); setCfg(false);
+  };
+  const resetPreset = () => {
+    setDraft(DEFAULT_PRESET); setPreset(DEFAULT_PRESET);
+    if (typeof window !== 'undefined') window.localStorage.removeItem('btciq_chart_preset');
+  };
+
   return (
     <Card className={`flex flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800 ${fs ? 'fixed inset-0 z-[100] rounded-none' : ''}`}>
       <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
         <div className="flex items-center gap-2">
           <CandlestickChart className="h-4 w-4 text-amber-400" />
-          <span className="text-sm font-semibold text-white">BTC/USD · Live Chart</span>
-          <span className="hidden text-[10px] text-slate-500 sm:inline">TradingView · drawing tools, indicators & ranges</span>
+          <span className="text-sm font-semibold text-white">{preset.symbol.split(':')[1] || 'BTC/USD'} · Live Chart</span>
+          <span className="hidden text-[10px] text-slate-500 sm:inline">TradingView · your saved preset</span>
         </div>
-        <button onClick={() => setFs(!fs)} className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white">
-          {fs ? <><Minimize2 className="h-3.5 w-3.5" />Exit</> : <><Maximize2 className="h-3.5 w-3.5" />Full screen</>}
-        </button>
+        <div className="flex items-center gap-1.5">
+          {saved && <span className="text-[11px] font-semibold text-emerald-400">Preset saved ✓</span>}
+          <button onClick={() => { setDraft(preset); setCfg(!cfg); }} className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium ${cfg ? 'border-sky-400 bg-sky-500/15 text-sky-200' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}><SlidersHorizontal className="h-3.5 w-3.5" />Preset</button>
+          <button onClick={() => setFs(!fs)} className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white">
+            {fs ? <><Minimize2 className="h-3.5 w-3.5" />Exit</> : <><Maximize2 className="h-3.5 w-3.5" />Full screen</>}
+          </button>
+        </div>
       </div>
+
+      {cfg && (
+        <div className="border-b border-slate-800 bg-slate-950/60 p-4 text-sm">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div>
+              <p className="mb-1 text-[10px] uppercase tracking-wider text-slate-400">Symbol</p>
+              <select value={draft.symbol} onChange={(e) => setDraft({ ...draft, symbol: e.target.value })} className="w-full rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-200 focus:border-sky-500/50 focus:outline-none">
+                {TV_SYMBOLS.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+            <div>
+              <p className="mb-1 text-[10px] uppercase tracking-wider text-slate-400">Timeframe</p>
+              <div className="flex flex-wrap gap-1">
+                {TV_INTERVALS.map(([v, l]) => <button key={v} onClick={() => setDraft({ ...draft, interval: v })} className={`rounded px-2 py-1 text-xs ${draft.interval === v ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/40' : 'bg-slate-800 text-slate-400'}`}>{l}</button>)}
+              </div>
+            </div>
+            <div>
+              <p className="mb-1 text-[10px] uppercase tracking-wider text-slate-400">Style</p>
+              <div className="flex flex-wrap gap-1">
+                {TV_STYLES.map(([v, l]) => <button key={v} onClick={() => setDraft({ ...draft, style: v })} className={`rounded px-2 py-1 text-xs ${draft.style === v ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/40' : 'bg-slate-800 text-slate-400'}`}>{l}</button>)}
+              </div>
+            </div>
+          </div>
+          <div className="mt-3">
+            <p className="mb-1 text-[10px] uppercase tracking-wider text-slate-400">Indicators</p>
+            <div className="flex flex-wrap gap-1.5">
+              {TV_STUDIES.map((st) => (
+                <button key={st.id} onClick={() => toggleStudy(st.id)} className={`rounded-full border px-2.5 py-1 text-xs ${draft.studies.includes(st.id) ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-200' : 'border-slate-700 bg-slate-800/60 text-slate-400'}`}>{draft.studies.includes(st.id) ? '✓ ' : ''}{st.label}</button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-3 flex items-center gap-2">
+            <Button size="sm" onClick={savePreset} className="bg-sky-500 hover:bg-sky-400">Save preset</Button>
+            <Button size="sm" variant="outline" onClick={resetPreset} className="border-slate-700 text-slate-300 hover:bg-slate-800">Reset</Button>
+            <span className="text-[11px] text-slate-500">Saved to this browser · reloads automatically each visit. (Freehand drawings aren’t saved by the free widget.)</span>
+          </div>
+        </div>
+      )}
+
       <div ref={ref} className="tradingview-widget-container w-full flex-1" style={{ height: fs ? 'calc(100vh - 42px)' : height }} />
     </Card>
   );
