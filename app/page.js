@@ -551,13 +551,26 @@ function TradingViewChart({ height = 460 }) {
   );
 }
 
+function OverviewChart({ d }) {
+  const [mode, setMode] = React.useState('tv');
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center gap-1 self-start rounded-lg border border-slate-800 bg-slate-900 p-0.5 text-xs">
+        <button onClick={() => setMode('tv')} className={`rounded-md px-3 py-1 font-medium ${mode === 'tv' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200'}`}>TradingView</button>
+        <button onClick={() => setMode('draw')} className={`rounded-md px-3 py-1 font-medium ${mode === 'draw' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200'}`}>Draw Board</button>
+      </div>
+      {mode === 'tv' ? <TradingViewChart /> : <DrawableChart ohlc={d.chart?.ohlc} />}
+    </div>
+  );
+}
+
 function OverviewSection({ d, ticker }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={LayoutDashboard} title="Overview" blurb={SECTIONS[0].blurb} />
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <MarketStateHero d={d} ticker={ticker} />
-        <TradingViewChart />
+        <OverviewChart d={d} />
       </div>
       <AlbertIntroCard />
       <DecisionEngineCard d={d} />
@@ -2392,10 +2405,16 @@ function DrawableChart({ ohlc }) {
   const [draw, setDraw] = React.useState([]);
   const [pending, setPending] = React.useState(null);
   const [hover, setHover] = React.useState(null);
+  const [fs, setFs] = React.useState(false);
   const svgRef = React.useRef(null);
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     try { const s = JSON.parse(window.localStorage.getItem('btciq_drawings')); if (Array.isArray(s)) setDraw(s); } catch (e) { /* noop */ }
+  }, []);
+  React.useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') setFs(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, []);
   const save = (next) => { setDraw(next); if (typeof window !== 'undefined') window.localStorage.setItem('btciq_drawings', JSON.stringify(next)); };
 
@@ -2445,7 +2464,7 @@ function DrawableChart({ ohlc }) {
   };
   const TOOLS = [['cursor', 'Cursor'], ['trend', 'Trendline'], ['hline', 'Horizontal'], ['note', 'Note'], ['erase', 'Erase']];
   return (
-    <Card className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800">
+    <Card className={`flex flex-col border-0 bg-slate-900 p-4 ring-1 ring-slate-800 ${fs ? 'fixed inset-0 z-[100] overflow-auto rounded-none' : ''}`}>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <CandlestickChart className="h-4 w-4 text-amber-400" />
         <h3 className="text-sm font-semibold text-white">Draw Board · BTC {data.length}-day</h3>
@@ -2454,6 +2473,7 @@ function DrawableChart({ ohlc }) {
             <button key={id} onClick={() => { setTool(id); setPending(null); }} className={`rounded-md px-2.5 py-1 text-xs font-medium ${tool === id ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/40' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}>{l}</button>
           ))}
           <button onClick={() => save([])} className="rounded-md bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-300 hover:bg-red-500/20">Clear all</button>
+          <button onClick={() => setFs(!fs)} className="flex items-center gap-1 rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800">{fs ? <><Minimize2 className="h-3.5 w-3.5" />Exit</> : <><Maximize2 className="h-3.5 w-3.5" />Full</>}</button>
         </div>
       </div>
       <div className="w-full overflow-hidden rounded-lg border border-slate-800 bg-slate-950/40">
