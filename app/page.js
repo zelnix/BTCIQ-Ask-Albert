@@ -136,15 +136,45 @@ const InfoBlock = ({ children }) => (
   </div>
 );
 
-// Reusable instant hover tooltip (explainer icon). Renders above by default, or below when `below`.
-const InfoTip = ({ text, below, className = '' }) => (
-  <span className={`group/info relative inline-flex cursor-help align-middle text-slate-500 hover:text-sky-400 ${className}`}>
-    <Info className="h-3 w-3" />
-    <span className={`pointer-events-none absolute left-1/2 z-[60] w-52 -translate-x-1/2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-[11px] font-normal normal-case leading-snug tracking-normal text-slate-200 opacity-0 shadow-xl transition-opacity duration-150 group-hover/info:opacity-100 ${below ? 'top-full mt-1.5' : 'bottom-full mb-1.5'}`}>
-      {text}
+// Reusable explainer tooltip. Shows on hover AND on tap/click (mobile-friendly). Bigger, readable popup.
+function InfoTip({ text, below, className = '' }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <span
+      className={`group/info relative inline-flex cursor-help align-middle text-slate-500 hover:text-sky-400 ${className}`}
+      onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <Info className="h-3.5 w-3.5" />
+      <span className={`absolute left-1/2 z-[70] w-72 max-w-[80vw] -translate-x-1/2 rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-[13px] font-normal normal-case leading-relaxed tracking-normal text-slate-100 shadow-2xl transition-opacity duration-150 ${below ? 'top-full mt-2' : 'bottom-full mb-2'} ${open ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
+        {text}
+      </span>
     </span>
-  </span>
-);
+  );
+}
+
+// Whole-card explainer: the entire wrapped area is a hover/tap target that reveals a big popup.
+function TapInfo({ text, className = '', below = true, children }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div
+      className={`group/info relative cursor-help ${className}`}
+      onClick={() => setOpen((o) => !o)}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      {text && <span className="absolute right-2 top-2 z-10 text-slate-500 transition-colors group-hover/info:text-sky-400"><Info className="h-3.5 w-3.5" /></span>}
+      {children}
+      {text && (
+        <div className={`absolute left-1/2 z-[70] w-72 max-w-[80vw] -translate-x-1/2 rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-[13px] leading-relaxed text-slate-100 shadow-2xl transition-opacity duration-150 ${below ? 'top-full mt-2' : 'bottom-full mb-2'} ${open ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
+          {text}
+        </div>
+      )}
+    </div>
+  );
+}
+
 
 
 function AiReview({ text, voice }) {
@@ -262,24 +292,24 @@ function DecisionEngineCard({ d }) {
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400">Overall Score<InfoTip below text="The single 0–100 conviction score blending every signal group. Above 55 leans bullish, below 45 bearish, near 50 is undecided." /></p>
+        <TapInfo below text="The single 0–100 conviction score blending every signal group. Above 55 leans bullish, below 45 bearish, near 50 is undecided." className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+          <p className="pr-4 text-[11px] uppercase tracking-wider text-slate-400">Overall Score</p>
           <p className="mt-1 text-4xl font-black" style={{ color: scoreColor(dec.overall_score) }}>{dec.overall_score}</p>
           <p className="text-sm font-semibold" style={{ color: scoreColor(dec.overall_score) }}>{dec.label}</p>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400">Market Regime<InfoTip below text="The market character the engine has classified BTC into right now (e.g. trend, range, or volatile) — it sets the playbook for reading every other signal." /></p>
+        </TapInfo>
+        <TapInfo below text="The market character the engine has classified BTC into right now (e.g. trend, range, or volatile) — it sets the playbook for reading every other signal." className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+          <p className="pr-4 text-[11px] uppercase tracking-wider text-slate-400">Market Regime</p>
           <p className="mt-1 text-lg font-bold leading-tight text-white">{dec.regime}</p>
-        </div>
-        <div className={`rounded-xl border border-slate-800 bg-slate-950/50 p-4 ring-1 ${riskRing(dec.risk_level)}`}>
-          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400"><ShieldAlert className="h-3 w-3" />Risk Level<InfoTip below text="How turbulent conditions are now (0–100 risk index). It's about the size of the swings, not their direction — you can lean up and still be high-risk." /></p>
+        </TapInfo>
+        <TapInfo below text="How turbulent conditions are now (0–100 risk index). It's about the size of the swings, not their direction — you can lean up and still be high-risk." className={`rounded-xl border border-slate-800 bg-slate-950/50 p-4 ring-1 ${riskRing(dec.risk_level)}`}>
+          <p className="flex items-center gap-1 pr-4 text-[11px] uppercase tracking-wider text-slate-400"><ShieldAlert className="h-3 w-3" />Risk Level</p>
           <p className={`mt-1 text-2xl font-black ${riskColor(dec.risk_level)}`}>{dec.risk_level}</p>
           <p className="text-[11px] text-slate-500">risk index {dec.risk_score}/100</p>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400"><Scale className="h-3 w-3" />Signal Alignment<InfoTip below text="Whether the signal groups agree. 'Mixed' means they disagree so conviction is lower; strong alignment means they point the same way." /></p>
+        </TapInfo>
+        <TapInfo below text="Whether the signal groups agree. 'Mixed' means they disagree so conviction is lower; strong alignment means they point the same way." className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+          <p className="flex items-center gap-1 pr-4 text-[11px] uppercase tracking-wider text-slate-400"><Scale className="h-3 w-3" />Signal Alignment</p>
           <p className={`mt-1 text-sm font-bold leading-tight ${alignColor(dec.alignment)}`}>{dec.alignment}</p>
-        </div>
+        </TapInfo>
       </div>
 
       {/* component contributions */}
@@ -344,14 +374,13 @@ const RISK_TXT = {
 
 function StateItem({ label, value, sub, color, big, hint }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-      <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">
+    <TapInfo text={hint} className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+      <p className="flex items-center gap-1 pr-4 text-[10px] font-medium uppercase tracking-wider text-slate-500">
         {label}
-        {hint && <InfoTip text={hint} />}
       </p>
       <p className={`mt-1 font-black ${big ? 'text-2xl' : 'text-lg'}`} style={color ? { color } : undefined}>{value}</p>
       {sub && <p className="text-[11px] text-slate-500">{sub}</p>}
-    </div>
+    </TapInfo>
   );
 }
 
@@ -955,14 +984,14 @@ function ChartSection({ d }) {
       <AiReview text={reviewChart(d)} />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="font-semibold text-slate-100">Daily Candles · Auto S/R</h3>
+          <h3 className="flex items-center gap-1 font-semibold text-slate-100">Daily Candles · Auto S/R<InfoTip below text="The last 90 daily candles with automatically detected support (green) and resistance (red) — price levels where BTC has repeatedly reacted." /></h3>
           <span className="text-xs text-slate-500">last 90 days · <span className="text-emerald-400">support</span> / <span className="text-red-400">resistance</span></span>
         </div>
         <CandleChart ohlc={c.ohlc} sr={c.sr_levels} />
       </Card>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800 lg:col-span-1">
-          <h3 className="mb-3 font-semibold text-slate-100">Predictive Setup</h3>
+          <h3 className="mb-3 flex items-center gap-1 font-semibold text-slate-100">Predictive Setup<InfoTip below text="The model's read on the most likely next chart move, with the odds of a breakout up, a breakdown, or continued consolidation." /></h3>
           <p className="mb-3 text-sm text-slate-400">{p.primary_setup}</p>
           <div className="space-y-2">
             {[['Breakout up', p.breakout_up, 'bg-emerald-400'], ['Breakdown', p.breakdown, 'bg-red-400'], ['Consolidation', p.consolidation, 'bg-slate-500']].map(([lbl, v, cls]) => (
@@ -974,7 +1003,7 @@ function ChartSection({ d }) {
           </div>
         </Card>
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800 lg:col-span-2">
-          <h3 className="mb-3 font-semibold text-slate-100">Detected Signals</h3>
+          <h3 className="mb-3 flex items-center gap-1 font-semibold text-slate-100">Detected Signals<InfoTip below text="Chart patterns and technical triggers the engine has spotted right now (e.g. crossovers, breakouts, divergences) and what each one implies." /></h3>
           <div className="space-y-2">
             {c.signals.map((s, i) => (
               <div key={i} className="flex items-start gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
@@ -998,7 +1027,7 @@ function CycleSection({ d }) {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {c && (
           <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-            <div className="mb-3 flex items-center gap-2"><Layers className="h-5 w-5 text-amber-400" /><h3 className="font-semibold text-slate-100">Halving Cycle</h3><Badge variant="outline" className="ml-auto border-slate-700 text-amber-400">{c.phase}</Badge></div>
+            <div className="mb-3 flex items-center gap-2"><Layers className="h-5 w-5 text-amber-400" /><h3 className="font-semibold text-slate-100">Halving Cycle</h3><InfoTip below text="Where we are in Bitcoin's ~4-year halving cycle — days since the last halving, the current block reward, and how this phase has historically shaped returns." /><Badge variant="outline" className="ml-auto border-slate-700 text-amber-400">{c.phase}</Badge></div>
             <div className="mb-4">
               <div className="flex justify-between text-xs text-slate-500"><span>Last halving {c.last_halving_date}</span><span>{c.cycle_progress_pct}% through cycle</span></div>
               <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500" style={{ width: `${c.cycle_progress_pct}%` }} /></div>
@@ -1012,7 +1041,7 @@ function CycleSection({ d }) {
         )}
         {dom && (
           <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-            <div className="mb-3 flex items-center gap-2"><Compass className="h-5 w-5 text-sky-400" /><h3 className="font-semibold text-slate-100">BTC Dominance</h3><Badge variant="outline" className="ml-auto border-slate-700 text-sky-400">{dom.direction}</Badge></div>
+            <div className="mb-3 flex items-center gap-2"><Compass className="h-5 w-5 text-sky-400" /><h3 className="font-semibold text-slate-100">BTC Dominance</h3><InfoTip below text="Bitcoin's share of the total crypto market cap. Rising dominance often means money favours BTC over altcoins; falling can signal 'alt season'." /><Badge variant="outline" className="ml-auto border-slate-700 text-sky-400">{dom.direction}</Badge></div>
             <div className="flex items-end gap-2"><span className="text-4xl font-black text-white">{dom.dominance}%</span><span className="mb-1 text-sm text-slate-400">of crypto market cap</span></div>
             <div className="mt-3 grid grid-cols-3 gap-3 text-center text-sm">
               <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">Total mcap</p><p className="mt-0.5 font-bold text-white">${dom.total_mcap_t}T</p></div>
@@ -1065,7 +1094,7 @@ function PolicySection({ d }) {
       </div>
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <h3 className="mb-3 font-semibold text-slate-100">Cross-Market Correlations <span className="text-sm font-normal text-slate-500">(rolling, vs BTC)</span></h3>
+        <h3 className="mb-3 flex flex-wrap items-center gap-1 font-semibold text-slate-100">Cross-Market Correlations <span className="text-sm font-normal text-slate-500">(rolling, vs BTC)</span><InfoTip below text="How closely BTC has moved with other markets (stocks, gold, the dollar) recently. A high correlation means that market's swings tend to drag BTC along." /></h3>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="text-left text-xs uppercase tracking-wider text-slate-500"><tr><th className="py-2">Asset</th><th className="py-2 text-right">Price</th><th className="py-2 text-right">7d</th><th className="py-2 text-right">30d</th><th className="py-2 text-right">90d</th><th className="py-2 text-right">β 30d</th><th className="py-2 text-right">Relationship</th></tr></thead>
@@ -1088,7 +1117,7 @@ function PolicySection({ d }) {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-          <h3 className="mb-3 font-semibold text-slate-100">Central-Bank Policy Rates</h3>
+          <h3 className="mb-3 flex items-center gap-1 font-semibold text-slate-100">Central-Bank Policy Rates<InfoTip below text="Key interest rates set by major central banks. Higher rates tend to pull money out of risk assets like Bitcoin; cuts tend to add fuel." /></h3>
           <div className="space-y-1.5">
             {p.central_banks.map((b) => (
               <div key={b.bank} className="flex items-center justify-between border-b border-slate-800/50 py-1.5 text-sm">
@@ -1099,7 +1128,7 @@ function PolicySection({ d }) {
           </div>
         </Card>
         <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-          <h3 className="mb-3 font-semibold text-slate-100">Policy Event Calendar</h3>
+          <h3 className="mb-3 flex items-center gap-1 font-semibold text-slate-100">Policy Event Calendar<InfoTip below text="Upcoming macro events (rate decisions, inflation prints, jobs data) that can move markets — and Bitcoin along with them." /></h3>
           <div className="space-y-2">
             {p.calendar.map((e, i) => (
               <div key={i} className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950/40 p-3">
@@ -1112,7 +1141,7 @@ function PolicySection({ d }) {
       </div>
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <h3 className="mb-1 font-semibold text-slate-100">Regulation Tracker</h3>
+        <h3 className="mb-1 flex items-center gap-1 font-semibold text-slate-100">Regulation Tracker<InfoTip below text="A running list of notable crypto regulatory and policy developments, with a read on whether each is supportive or a headwind for BTC." /></h3>
         <p className="mb-3 text-xs text-slate-500">Proposal vs enacted vs implemented — 13-stage legal-status taxonomy (curated).</p>
         <div className="space-y-2">
           {p.regulation.map((r, i) => (
@@ -1160,7 +1189,7 @@ function AlertsSection({ d, alertsData, onAck }) {
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-4 flex items-center gap-2">
           <ShieldAlert className="h-5 w-5 text-violet-400" />
-          <h3 className="font-semibold text-slate-100">What Just Changed</h3>
+          <h3 className="flex items-center gap-1 font-semibold text-slate-100">What Just Changed<InfoTip below text="The most recent shifts the engine flagged — new signals, regime changes or notable moves — so you can catch what's different since you last looked." /></h3>
           {unseen > 0 && <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-bold text-red-300 ring-1 ring-red-500/30">{unseen} new</span>}
           <span className="ml-auto text-xs text-slate-500">{smart.length} logged</span>
           {unseen > 0 && <Button size="sm" variant="outline" onClick={() => onAck && onAck()} className="h-7 gap-1.5 border-slate-700 text-xs text-slate-300 hover:bg-slate-800">Mark all read</Button>}
@@ -1564,7 +1593,7 @@ function NewsSection({ news, status, onRefresh, refreshing }) {
     <div className="space-y-5">
       <SectionHead icon={Newspaper} title="BTC News" blurb={sec('news').blurb} />
       <Card className="border-0 bg-gradient-to-br from-violet-500/10 to-slate-900 p-6 ring-1 ring-violet-500/25">
-        <div className="mb-3 flex items-center gap-2"><Sparkles className="h-5 w-5 text-violet-400" /><h3 className="font-semibold text-slate-100">Daily AI Briefing</h3><span className="ml-auto text-[11px] text-slate-500">{news.model}</span></div>
+        <div className="mb-3 flex items-center gap-2"><Sparkles className="h-5 w-5 text-violet-400" /><h3 className="flex items-center gap-1 font-semibold text-slate-100">Daily AI Briefing<InfoTip below text="A plain-English summary of the day's most important Bitcoin news, written by the AI, with the likely market impact of each story." /></h3><span className="ml-auto text-[11px] text-slate-500">{news.model}</span></div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <div className="rounded-lg bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">Market News Bias</p><p className={`text-lg font-bold ${biasColor}`}>{b.bias}</p></div>
           <div className="rounded-lg bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">Stories</p><p className="text-lg font-bold text-white">{b.total}</p></div>
@@ -1924,7 +1953,7 @@ function ScorecardSection({ d }) {
 
       {Object.keys(byRegime).length > 0 && (
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <h3 className="mb-3 text-sm font-semibold text-white">Results by Market Regime</h3>
+          <h3 className="mb-3 flex items-center gap-1 text-sm font-semibold text-white">Results by Market Regime<InfoTip below text="How the model's accuracy breaks down by market regime (trending, ranging, volatile) — so you can see the conditions where it's strongest or weakest." /></h3>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead><tr className="text-left text-[11px] uppercase tracking-wider text-slate-500">
@@ -1947,7 +1976,7 @@ function ScorecardSection({ d }) {
 
       {Object.keys(pl.by_horizon).length > 0 && (
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <h3 className="mb-3 text-sm font-semibold text-white">Results by Forecast Horizon</h3>
+          <h3 className="mb-3 flex items-center gap-1 text-sm font-semibold text-white">Results by Forecast Horizon<InfoTip below text="Accuracy split by how far ahead the call looked (24h, 7d, 30d…). Shorter horizons and longer ones can behave very differently." /></h3>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead><tr className="text-left text-[11px] uppercase tracking-wider text-slate-500">
@@ -1974,7 +2003,7 @@ function ScorecardSection({ d }) {
 
       {pl.calibration?.length > 0 && (
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <h3 className="mb-1 text-sm font-semibold text-white">Probability Calibration</h3>
+          <h3 className="mb-1 flex items-center gap-1 text-sm font-semibold text-white">Probability Calibration<InfoTip below text="Checks whether the model's stated odds match reality — e.g. of all the times it said '70% up', did BTC actually rise about 70% of the time?" /></h3>
           <p className="mb-3 text-xs text-slate-500">Each dot is a bucket of forecasts: X = what the model predicted, Y = how often price actually rose. The closer to the dashed line, the better calibrated. Bubble size = number of forecasts.</p>
           <ResponsiveContainer width="100%" height={300}>
             <ScatterChart margin={{ top: 10, right: 20, bottom: 24, left: 0 }}>
@@ -2056,7 +2085,7 @@ function DataTrustSection({ d }) {
       <Card className={`border-0 bg-gradient-to-br from-slate-900 to-slate-950 p-6 ring-1 ${h.faded ? 'ring-orange-500/40' : 'ring-emerald-500/25'}`}>
         <div className="flex flex-wrap items-center gap-6">
           <div>
-            <p className="text-[11px] uppercase tracking-wider text-slate-400">Overall Data Trust</p>
+            <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400">Overall Data Trust<InfoTip below text="A 0–100 score for how fresh and reliable the underlying data feeds are. When trust drops, the model automatically tones down its odds." /></p>
             <p className="text-5xl font-black" style={{ color: col }}>{h.score}</p>
             <p className="text-sm font-semibold" style={{ color: col }}>{h.level}</p>
           </div>
