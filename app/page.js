@@ -2387,9 +2387,113 @@ function SettingsSection({ onManualRun }) {
   );
 }
 
+function DrawableChart({ ohlc }) {
+  const [tool, setTool] = React.useState('cursor');
+  const [draw, setDraw] = React.useState([]);
+  const [pending, setPending] = React.useState(null);
+  const [hover, setHover] = React.useState(null);
+  const svgRef = React.useRef(null);
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try { const s = JSON.parse(window.localStorage.getItem('btciq_drawings')); if (Array.isArray(s)) setDraw(s); } catch (e) { /* noop */ }
+  }, []);
+  const save = (next) => { setDraw(next); if (typeof window !== 'undefined') window.localStorage.setItem('btciq_drawings', JSON.stringify(next)); };
+
+  const data = ohlc || [];
+  const W = 1000, H = 430, pL = 58, pR = 16, pT = 16, pB = 30;
+  const plotW = W - pL - pR, plotH = H - pT - pB;
+  const n = data.length;
+  if (n < 2) return <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-sm text-slate-500">Chart data loading…</p></Card>;
+  const vals = data.flatMap((c) => [c.h, c.l]);
+  const mn = Math.min(...vals), mx = Math.max(...vals), pad = (mx - mn) * 0.06 || 1;
+  const lo = mn - pad, hi = mx + pad;
+  const xAt = (i) => pL + (i / (n - 1)) * plotW;
+  const yAt = (p) => pT + (1 - (p - lo) / (hi - lo)) * plotH;
+  const idxOf = (t) => data.findIndex((c) => c.t === t);
+  const linePath = data.map((c, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(1)},${yAt(c.c).toFixed(1)}`).join(' ');
+  const areaPath = `${linePath} L${xAt(n - 1).toFixed(1)},${(pT + plotH).toFixed(1)} L${pL},${(pT + plotH).toFixed(1)} Z`;
+
+  const toLocal = (e) => {
+    const svg = svgRef.current; const pt = svg.createSVGPoint();
+    pt.x = e.clientX; pt.y = e.clientY;
+    const l = pt.matrixTransform(svg.getScreenCTM().inverse());
+    let i = Math.round((l.x - pL) / plotW * (n - 1)); i = Math.max(0, Math.min(n - 1, i));
+    const price = lo + (1 - (l.y - pT) / plotH) * (hi - lo);
+    return { i, t: data[i].t, price: Math.round(price) };
+  };
+  const onClick = (e) => {
+    if (tool === 'cursor') return;
+    const p = toLocal(e);
+    if (tool === 'hline') { save([...draw, { type: 'hline', price: p.price }]); }
+    else if (tool === 'note') { const text = window.prompt('Note text:'); if (text) save([...draw, { type: 'note', t: p.t, price: p.price, text: text.slice(0, 60) }]); }
+    else if (tool === 'trend') {
+      if (!pending) setPending({ t: p.t, price: p.price });
+      else { save([...draw, { type: 'trend', a: pending, b: { t: p.t, price: p.price } }]); setPending(null); }
+    } else if (tool === 'erase') {
+      // remove nearest drawing by pixel distance
+      const px = xAt(p.i), py = yAt(p.price);
+      let best = -1, bd = 1e9;
+      draw.forEach((dr, k) => {
+        let dist = 1e9;
+        if (dr.type === 'hline') dist = Math.abs(yAt(dr.price) - py);
+        else if (dr.type === 'note') dist = Math.hypot(xAt(Math.max(0, idxOf(dr.t))) - px, yAt(dr.price) - py);
+        else if (dr.type === 'trend') { const ax = xAt(Math.max(0, idxOf(dr.a.t))), ay = yAt(dr.a.price), bx = xAt(Math.max(0, idxOf(dr.b.t))), by = yAt(dr.b.price); dist = Math.min(Math.hypot(ax - px, ay - py), Math.hypot(bx - px, by - py)); }
+        if (dist < bd) { bd = dist; best = k; }
+      });
+      if (best >= 0 && bd < 40) save(draw.filter((_, k) => k !== best));
+    }
+  };
+  const TOOLS = [['cursor', 'Cursor'], ['trend', 'Trendline'], ['hline', 'Horizontal'], ['note', 'Note'], ['erase', 'Erase']];
+  return (
+    <Card className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <CandlestickChart className="h-4 w-4 text-amber-400" />
+        <h3 className="text-sm font-semibold text-white">Draw Board · BTC {data.length}-day</h3>
+        <div className="ml-auto flex flex-wrap gap-1">
+          {TOOLS.map(([id, l]) => (
+            <button key={id} onClick={() => { setTool(id); setPending(null); }} className={`rounded-md px-2.5 py-1 text-xs font-medium ${tool === id ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/40' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}>{l}</button>
+          ))}
+          <button onClick={() => save([])} className="rounded-md bg-red-500/10 px-2.5 py-1 text-xs font-medium text-red-300 hover:bg-red-500/20">Clear all</button>
+        </div>
+      </div>
+      <div className="w-full overflow-hidden rounded-lg border border-slate-800 bg-slate-950/40">
+        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} className={`w-full ${tool === 'cursor' ? '' : 'cursor-crosshair'}`} style={{ height: 'auto' }}
+          onClick={onClick} onMouseMove={(e) => { if (tool === 'trend' && pending) setHover(toLocal(e)); }}>
+          <defs><linearGradient id="dbFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#38bdf8" stopOpacity={0.22} /><stop offset="100%" stopColor="#38bdf8" stopOpacity={0} /></linearGradient></defs>
+          {[0, 0.25, 0.5, 0.75, 1].map((f, k) => { const p = hi - f * (hi - lo); return (<g key={k}><line x1={pL} y1={yAt(p)} x2={W - pR} y2={yAt(p)} stroke="#1e293b" /><text x={pL - 6} y={yAt(p) + 3} textAnchor="end" fontSize="11" fill="#64748b">${(p / 1000).toFixed(1)}k</text></g>); })}
+          <path d={areaPath} fill="url(#dbFill)" />
+          <path d={linePath} fill="none" stroke="#38bdf8" strokeWidth="2" />
+          {data.filter((_, i) => i % Math.ceil(n / 8) === 0).map((c, k) => { const i = data.indexOf(c); return <text key={k} x={xAt(i)} y={H - 10} textAnchor="middle" fontSize="10" fill="#64748b">{c.t}</text>; })}
+          {/* saved drawings */}
+          {draw.map((dr, k) => {
+            if (dr.type === 'hline') return (<g key={k}><line x1={pL} y1={yAt(dr.price)} x2={W - pR} y2={yAt(dr.price)} stroke="#fbbf24" strokeWidth="1.5" strokeDasharray="6 4" /><text x={W - pR - 2} y={yAt(dr.price) - 4} textAnchor="end" fontSize="11" fill="#fbbf24">${dr.price.toLocaleString()}</text></g>);
+            if (dr.type === 'trend') { const ai = idxOf(dr.a.t), bi = idxOf(dr.b.t); if (ai < 0 || bi < 0) return null; return <line key={k} x1={xAt(ai)} y1={yAt(dr.a.price)} x2={xAt(bi)} y2={yAt(dr.b.price)} stroke="#34d399" strokeWidth="2" />; }
+            if (dr.type === 'note') { const i = idxOf(dr.t); if (i < 0) return null; return (<g key={k}><circle cx={xAt(i)} cy={yAt(dr.price)} r="4" fill="#a78bfa" /><text x={xAt(i) + 7} y={yAt(dr.price) + 3} fontSize="11" fill="#c4b5fd">{dr.text}</text></g>); }
+            return null;
+          })}
+          {/* pending trendline preview */}
+          {tool === 'trend' && pending && (<><circle cx={xAt(idxOf(pending.t))} cy={yAt(pending.price)} r="4" fill="#34d399" />{hover && <line x1={xAt(idxOf(pending.t))} y1={yAt(pending.price)} x2={xAt(hover.i)} y2={yAt(hover.price)} stroke="#34d399" strokeWidth="1.5" strokeDasharray="4 4" />}</>)}
+        </svg>
+      </div>
+      <p className="mt-2 text-[11px] text-slate-600">
+        {tool === 'trend' ? (pending ? 'Click a second point to finish the trendline.' : 'Click two points to draw a trendline.')
+          : tool === 'hline' ? 'Click at a price to drop a horizontal level.'
+          : tool === 'note' ? 'Click to place a note, then type its text.'
+          : tool === 'erase' ? 'Click near a drawing to remove it.'
+          : 'Pick a tool to annotate. '}
+        Your drawings ({draw.length}) auto-save to this browser and reload every visit.
+      </p>
+    </Card>
+  );
+}
+
 function MarketIntelligenceSection({ d }) {
   return (
     <div className="space-y-8">
+      <div>
+        <SectionHead icon={CandlestickChart} title="Draw & Annotate" blurb="Your own lightweight BTC chart with trendlines, horizontal levels and notes — everything you draw is saved in this browser and reloads automatically. No account needed." />
+        <DrawableChart ohlc={d.chart?.ohlc} />
+      </div>
       <ChartSection d={d} />
       <CycleSection d={d} />
       <AnalysisSection d={d} />
