@@ -136,6 +136,17 @@ const InfoBlock = ({ children }) => (
   </div>
 );
 
+// Reusable instant hover tooltip (explainer icon). Renders above by default, or below when `below`.
+const InfoTip = ({ text, below, className = '' }) => (
+  <span className={`group/info relative inline-flex cursor-help align-middle text-slate-500 hover:text-sky-400 ${className}`}>
+    <Info className="h-3 w-3" />
+    <span className={`pointer-events-none absolute left-1/2 z-[60] w-52 -translate-x-1/2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-[11px] font-normal normal-case leading-snug tracking-normal text-slate-200 opacity-0 shadow-xl transition-opacity duration-150 group-hover/info:opacity-100 ${below ? 'top-full mt-1.5' : 'bottom-full mb-1.5'}`}>
+      {text}
+    </span>
+  </span>
+);
+
+
 function AiReview({ text, voice }) {
   const [speaking, setSpeaking] = React.useState(false);
   const speak = () => {
@@ -252,21 +263,21 @@ function DecisionEngineCard({ d }) {
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-          <p className="text-[11px] uppercase tracking-wider text-slate-400">Overall Score</p>
+          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400">Overall Score<InfoTip below text="The single 0–100 conviction score blending every signal group. Above 55 leans bullish, below 45 bearish, near 50 is undecided." /></p>
           <p className="mt-1 text-4xl font-black" style={{ color: scoreColor(dec.overall_score) }}>{dec.overall_score}</p>
           <p className="text-sm font-semibold" style={{ color: scoreColor(dec.overall_score) }}>{dec.label}</p>
         </div>
         <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-          <p className="text-[11px] uppercase tracking-wider text-slate-400">Market Regime</p>
+          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400">Market Regime<InfoTip below text="The market character the engine has classified BTC into right now (e.g. trend, range, or volatile) — it sets the playbook for reading every other signal." /></p>
           <p className="mt-1 text-lg font-bold leading-tight text-white">{dec.regime}</p>
         </div>
         <div className={`rounded-xl border border-slate-800 bg-slate-950/50 p-4 ring-1 ${riskRing(dec.risk_level)}`}>
-          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400"><ShieldAlert className="h-3 w-3" />Risk Level</p>
+          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400"><ShieldAlert className="h-3 w-3" />Risk Level<InfoTip below text="How turbulent conditions are now (0–100 risk index). It's about the size of the swings, not their direction — you can lean up and still be high-risk." /></p>
           <p className={`mt-1 text-2xl font-black ${riskColor(dec.risk_level)}`}>{dec.risk_level}</p>
           <p className="text-[11px] text-slate-500">risk index {dec.risk_score}/100</p>
         </div>
         <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
-          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400"><Scale className="h-3 w-3" />Signal Alignment</p>
+          <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400"><Scale className="h-3 w-3" />Signal Alignment<InfoTip below text="Whether the signal groups agree. 'Mixed' means they disagree so conviction is lower; strong alignment means they point the same way." /></p>
           <p className={`mt-1 text-sm font-bold leading-tight ${alignColor(dec.alignment)}`}>{dec.alignment}</p>
         </div>
       </div>
@@ -276,7 +287,7 @@ function DecisionEngineCard({ d }) {
         {dec.components.map((c) => (
           <div key={c.name} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-slate-400">{c.name}</span>
+              <span className="flex items-center gap-1 text-slate-400">{c.name}<InfoTip text={`${c.name} scores 0–100 and carries ${c.weight}% of the overall decision. Higher = more supportive of upside.`} /></span>
               <span className="font-mono font-bold" style={{ color: scoreColor(c.score) }}>{c.score}</span>
             </div>
             <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
@@ -289,7 +300,7 @@ function DecisionEngineCard({ d }) {
 
       {/* multi-horizon outlook 24H → 1Y */}
       <div className="mt-5">
-        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Directional Outlook · 24 hours to 1 year</p>
+        <p className="mb-2 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Directional Outlook · 24 hours to 1 year<InfoTip text="The model's estimated odds that BTC is higher or lower over each horizon. 'news-adj.' means recent headlines nudged the number. Odds, not promises." /></p>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           {dec.outlook.map((o) => {
             const up = o.lean === 'UP';
@@ -336,14 +347,7 @@ function StateItem({ label, value, sub, color, big, hint }) {
     <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
       <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">
         {label}
-        {hint && (
-          <span className="group/info relative inline-flex cursor-help text-slate-600 hover:text-sky-400">
-            <Info className="h-3 w-3" />
-            <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 w-52 -translate-x-1/2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-[11px] font-normal normal-case leading-snug tracking-normal text-slate-200 opacity-0 shadow-xl transition-opacity duration-150 group-hover/info:opacity-100">
-              {hint}
-            </span>
-          </span>
-        )}
+        {hint && <InfoTip text={hint} />}
       </p>
       <p className={`mt-1 font-black ${big ? 'text-2xl' : 'text-lg'}`} style={color ? { color } : undefined}>{value}</p>
       {sub && <p className="text-[11px] text-slate-500">{sub}</p>}
@@ -634,7 +638,7 @@ function ForecastCard({ f }) {
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-bold text-white">{f.horizon} Forecast</h3>
+        <h3 className="flex items-center gap-1 text-lg font-bold text-white">{f.horizon} Forecast<InfoTip text="The model's probability that BTC is higher vs lower at the end of this window, plus bull/base/bear price scenarios. Odds, not a promise." /></h3>
         <Badge variant="outline" className={`border-slate-700 ${bullish ? 'text-emerald-400' : 'text-red-400'}`}>{bullish ? 'Leans Up' : 'Leans Down'}</Badge>
       </div>
       <div className="mt-3">
@@ -651,10 +655,10 @@ function ForecastCard({ f }) {
         <div className="rounded-lg bg-red-500/10 p-2"><p className="text-[10px] text-slate-400">Bear</p><p className="text-sm font-bold text-red-400">{fmtUsd(f.bear)}</p></div>
       </div>
       <div className="mt-4 space-y-1.5 text-xs">
-        <div className="flex justify-between"><span className="text-slate-400">Expected range</span><span className="font-mono text-slate-200">{fmtUsd(f.expected_low)} – {fmtUsd(f.expected_high)}</span></div>
-        <div className="flex justify-between"><span className="text-slate-400">Confidence</span><span className="font-semibold text-sky-400">{f.confidence} ({f.confidence_pct}%)</span></div>
-        <div className="flex justify-between"><span className="text-slate-400">Backtest accuracy</span><span className="text-slate-200">{f.accuracy}%</span></div>
-        <div className="flex justify-between"><span className="text-slate-400">Invalidated {f.invalidation_dir}</span><span className="font-mono text-amber-400">{fmtUsd(f.invalidation)}</span></div>
+        <div className="flex justify-between"><span className="flex items-center gap-1 text-slate-400">Expected range<InfoTip text="The likely high–low price band for this window based on recent volatility. Price can still move outside it." /></span><span className="font-mono text-slate-200">{fmtUsd(f.expected_low)} – {fmtUsd(f.expected_high)}</span></div>
+        <div className="flex justify-between"><span className="flex items-center gap-1 text-slate-400">Confidence<InfoTip text="How strong the model's conviction is on this call, shown as a label and a 0–100%. Higher means the signal setup has been clearer historically." /></span><span className="font-semibold text-sky-400">{f.confidence} ({f.confidence_pct}%)</span></div>
+        <div className="flex justify-between"><span className="flex items-center gap-1 text-slate-400">Backtest accuracy<InfoTip text="How often this type of call was correct in historical testing. A track-record hint, not a guarantee of the current call." /></span><span className="text-slate-200">{f.accuracy}%</span></div>
+        <div className="flex justify-between"><span className="flex items-center gap-1 text-slate-400">Invalidated {f.invalidation_dir}<InfoTip text="The price level where this thesis is considered wrong. A move past it means the setup has broken and the forecast should be discarded." /></span><span className="font-mono text-amber-400">{fmtUsd(f.invalidation)}</span></div>
         <div className="flex justify-between"><span className="text-slate-400">Expires</span><span className="font-mono text-slate-400">{f.expiry}</span></div>
       </div>
       {f.contributions && f.contributions.length > 0 && (
@@ -799,7 +803,7 @@ function PerformanceSection({ d }) {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-slate-900 p-6 ring-1 ring-slate-800">
-          <div className="mb-2 flex items-center gap-2"><Trophy className="h-5 w-5 text-amber-400" /><h3 className="font-semibold text-slate-100">AI Scoreboard</h3></div>
+          <div className="mb-2 flex items-center gap-2"><Trophy className="h-5 w-5 text-amber-400" /><h3 className="flex items-center gap-1 font-semibold text-slate-100">AI Scoreboard<InfoTip below text="The model's real out-of-sample track record: win rate, wins vs losses, and current streak across all graded past predictions." /></h3></div>
           <p className="text-xs text-slate-400">Real out-of-sample record · {sb.total} predictions graded</p>
           <div className="mt-3 flex items-end gap-2"><span className="text-5xl font-black text-sky-400">{sb.winRate}%</span><span className="mb-1 text-sm text-slate-400">win rate</span></div>
           <div className="mt-4 grid grid-cols-3 gap-2 text-center">
@@ -814,7 +818,7 @@ function PerformanceSection({ d }) {
         </Card>
 
         <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800 lg:col-span-2">
-          <div className="mb-3 flex items-center gap-2"><History className="h-5 w-5 text-slate-400" /><h3 className="font-semibold text-slate-100">Trade Log</h3><span className="text-sm text-slate-500">last {d.trades.length} graded predictions</span></div>
+          <div className="mb-3 flex items-center gap-2"><History className="h-5 w-5 text-slate-400" /><h3 className="flex items-center gap-1 font-semibold text-slate-100">Trade Log<InfoTip below text="Every recent prediction the model made, graded against what actually happened on the next candle — its date, signal, confidence and win/loss." /></h3><span className="text-sm text-slate-500">last {d.trades.length} graded predictions</span></div>
           <div className="max-h-[300px] overflow-y-auto pr-1">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-slate-900 text-left text-xs uppercase tracking-wider text-slate-500">
@@ -837,7 +841,7 @@ function PerformanceSection({ d }) {
       </div>
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <div className="mb-4"><h3 className="font-semibold text-slate-100">AI Accuracy vs BTC Price</h3><p className="text-sm text-slate-400">30-day rolling accuracy against spot price · {d.first_date} → {d.as_of}</p></div>
+        <div className="mb-4"><h3 className="flex items-center gap-1 font-semibold text-slate-100">AI Accuracy vs BTC Price<InfoTip below text="The model's 30-day rolling hit-rate (right axis) plotted against BTC spot price (left axis), so you can see how accuracy held up through different market conditions." /></h3><p className="text-sm text-slate-400">30-day rolling accuracy against spot price · {d.first_date} → {d.as_of}</p></div>
         <div className="h-[380px] w-full">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={d.performance} margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
@@ -2264,7 +2268,7 @@ function RiskSection({ d }) {
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="flex flex-wrap items-center gap-6">
           <div>
-            <p className="text-[11px] uppercase tracking-wider text-slate-400">Overall Risk Level</p>
+            <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400">Overall Risk Level<InfoTip below text="How turbulent BTC is right now on a 0–100 scale. It measures the size of the swings, not the direction — high risk can happen in both up and down markets." /></p>
             <p className={`text-4xl font-black ${lvlColor}`}>{r.level}</p>
             <p className="text-xs text-slate-500">score {r.score}/100 · direction-independent</p>
           </div>
@@ -2281,7 +2285,7 @@ function RiskSection({ d }) {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <p className="mb-3 text-sm font-semibold text-white">Expected Move</p>
+          <p className="mb-3 flex items-center gap-1 text-sm font-semibold text-white">Expected Move<InfoTip below text="A statistical range of where price could sit over each window, based on recent volatility. It's a likely band, not a target — price can still break out of it." /></p>
           {['24H', '7D', '30D'].map((h) => {
             const e = r.expected_move[h];
             return (
@@ -2294,13 +2298,13 @@ function RiskSection({ d }) {
           <p className="mt-2 text-[11px] text-slate-500">Realised vol ≈ {r.realised_vol_annual}% annualised ({r.vol_percentile}th pct)</p>
         </Card>
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <p className="mb-3 text-sm font-semibold text-white">Key Zones</p>
+          <p className="mb-3 flex items-center gap-1 text-sm font-semibold text-white">Key Zones<InfoTip below text="The nearest notable price levels above and below where reactions are more likely (support/resistance) and the % distance to each from spot." /></p>
           {r.upside_zone && <div className="mb-2 rounded-lg border border-red-500/20 bg-red-500/5 p-2.5 text-sm"><p className="text-[11px] text-slate-400">{r.upside_zone.label}</p><p className="font-mono font-bold text-red-300">{fmtUsd(r.upside_zone.price)} <span className="text-[11px] font-normal text-slate-500">+{r.upside_zone.distance_pct}%</span></p></div>}
           {r.downside_zone && <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2.5 text-sm"><p className="text-[11px] text-slate-400">{r.downside_zone.label}</p><p className="font-mono font-bold text-emerald-300">{fmtUsd(r.downside_zone.price)} <span className="text-[11px] font-normal text-slate-500">-{r.downside_zone.distance_pct}%</span></p></div>}
           {!r.upside_zone && !r.downside_zone && <p className="text-sm text-slate-500">No clear zones detected right now.</p>}
         </Card>
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <p className="mb-3 text-sm font-semibold text-white">Environment</p>
+          <p className="mb-3 flex items-center gap-1 text-sm font-semibold text-white">Environment<InfoTip below text="Background conditions that can amplify risk: how much big scheduled macro events loom, and how uncertain/stale the underlying data feeds are." /></p>
           <div className="space-y-2 text-sm">
             <div className="flex justify-between"><span className="text-slate-400">Macro-event risk</span><span className={riskStateColor(r.macro_event_risk)}>{r.macro_event_risk}</span></div>
             <div className="flex justify-between"><span className="text-slate-400">Data uncertainty</span><span className={riskStateColor(r.data_uncertainty)}>{r.data_uncertainty}</span></div>
@@ -2310,7 +2314,7 @@ function RiskSection({ d }) {
       </div>
 
       <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-        <div className="mb-3 flex items-center gap-2"><h3 className="text-sm font-semibold text-white">Risk Drivers</h3><span className="text-[11px] text-slate-500">real + illustrative</span></div>
+        <div className="mb-3 flex items-center gap-2"><h3 className="flex items-center gap-1 text-sm font-semibold text-white">Risk Drivers<InfoTip below text="The individual factors feeding the risk score (volatility, leverage, liquidity, macro). Each shows its current state; items tagged DEMO are placeholders until a paid feed is added." /></h3><span className="text-[11px] text-slate-500">real + illustrative</span></div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {r.drivers.map((dr, i) => (
             <div key={i} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 text-sm">
@@ -2335,7 +2339,7 @@ function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <Icon className="h-5 w-5 text-sky-400" />
-          <h3 className="font-semibold text-white">{panel.headline}</h3>
+          <h3 className="flex items-center gap-1 font-semibold text-white">{panel.headline}<InfoTip below text="A snapshot of what this data category is signalling. Each row shows a metric, its current value, and whether it reads bullish, bearish or neutral for BTC." /></h3>
           <DemoBadge />
           <span className="ml-auto text-[11px] text-slate-500">{panel.source}</span>
         </div>
