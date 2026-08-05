@@ -54,6 +54,7 @@ predictions_col = db['predictions']
 bitmark_col = db['bitmark_snapshots']
 smart_alerts_col = db['smart_alerts']
 audit_col = db['forecast_audit']
+insights_col = db['albert_insights']  # cache for AI-generated section insights
 # Admin passcode gate for manual forecast runs (Stage-1: passcode instead of full auth)
 ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', 'btciq-admin')
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
@@ -2823,3 +2824,79 @@ def chat_endpoint(payload: dict = Body(...)):
         traceback.print_exc()
         return {'error': 'chat_failed',
                 'text': 'Sorry — I could not answer that just now. Please try again in a moment.'}
+
+
+# =====================================================================
+# ALBERT SECTION INSIGHTS  (AI-generated, cached per compute-run)
+# =====================================================================
+ALBERT_INSIGHT_SYSTEM = (
+    "You are 'Albert', the friendly AI quant analyst in the BTCIQ Bitcoin dashboard. You are explaining "
+    "this section to a curious NON-TRADER who does not know market jargon. Your goal is to be genuinely "
+    "INSIGHTFUL — do NOT simply restate the numbers already on screen. Instead:\n"
+    "1) Explain in plain English WHAT is actually driving Bitcoin right now / WHY it is where it is (lean on "
+    "the news drivers, factors, macro and regime).\n"
+    "2) Explain what that could mean going forward.\n"
+    "3) Give ONE or TWO concrete 'if this happens, then this is the likely outcome' scenarios using the real "
+    "price levels, invalidation points and odds in the data (e.g. 'if BTC holds $X, the model's Y% up case "
+    "strengthens; if it loses $X, expect ...').\n"
+    "Rules: use ONLY the live dashboard data below — never invent numbers, prices or events. Any term a "
+    "beginner might not know, explain in 3-4 words. Always frame the future as probabilities/odds, never "
+    "certainties, and never give direct buy/sell financial advice. Warm, clear, professor-like. "
+    "Write 80-130 words, at most two short paragraphs. Do not use markdown headers or bullet symbols.\n\n"
+    "THIS SECTION'S FOCUS: {focus}\n\n"
+    "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
+)
+
+SECTION_FOCUS = {
+    'overview': "The big-picture read on Bitcoin: what is pushing the price now and what it likely means over the next day to week.",
+    'forecasts': "The short and medium-term forecasts: what the odds imply, and what price action would confirm or break each call.",
+    'analysis': "The Quant Score breakdown: which forces (trend, momentum, macro, etc.) are pushing Bitcoin and what their balance means.",
+    'performance': "The model's real track record: how much a beginner should trust the current calls, and why.",
+    'chart': "The chart structure and key support/resistance levels: what a break above or below them would likely lead to.",
+    'cycle': "The 4-year halving cycle and BTC dominance: what this stage has historically meant for the months ahead.",
+    'policy': "Macro and liquidity: how interest rates, the US dollar and global liquidity are pushing or pulling Bitcoin.",
+    'news': "The day's Bitcoin news: which stories actually matter for price and why.",
+    'risk': "The current risk level: how big the swings could be and what could trigger a sharp move either way.",
+}
+
+
+def _latest_run_version():
+    run = runs_col.find_one(sort=[('created_at', -1)], projection={'created_at': 1, 'as_of': 1})
+    if not run:
+        return None
+    return str(run.get('created_at') or run.get('as_of') or '')
+
+
+@app.get('/api/v1/albert/insight')
+def albert_insight(section: str = 'overview'):
+    section = (section or 'overview').strip().lower()[:40]
+    version = _latest_run_version()
+    if not version:
+        return {'status': 'fallback', 'reason': 'no_data'}
+    cache_id = f"{section}:{version}"
+    cached = insights_col.find_one({'_id': cache_id}, {'_id': 0})
+    if cached and cached.get('text'):
+        return {'status': 'ready', 'section': section, 'text': cached['text'], 'model': cached.get('model'), 'cached': True}
+    if not (EMERGENT_LLM_KEY and _HAS_LLM):
+        return {'status': 'fallback', 'reason': 'llm_unconfigured'}
+    try:
+        ctx = build_chat_context()
+        focus = SECTION_FOCUS.get(section, "Explain what this section means for Bitcoin's price and outlook in plain English.")
+        chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'insight-{section}-{abs(hash(version)) % 99999}',
+                        system_message=ALBERT_INSIGHT_SYSTEM.format(focus=focus, ctx=ctx))
+                .with_model('gemini', CHAT_MODEL)
+                .with_params(temperature=0.35, max_tokens=420))
+        reply = asyncio.run(chat.send_message(UserMessage(
+            text=f"Write Albert's insight for the '{section}' section now, following all the rules.")))
+        text = (getattr(reply, 'text', None) or str(reply)).strip()
+        if not text:
+            return {'status': 'fallback', 'reason': 'empty'}
+        insights_col.update_one(
+            {'_id': cache_id},
+            {'$set': {'_id': cache_id, 'section': section, 'version': version, 'text': text,
+                      'model': CHAT_MODEL, 'created_at': datetime.datetime.utcnow().isoformat()}},
+            upsert=True)
+        return {'status': 'ready', 'section': section, 'text': text, 'model': CHAT_MODEL, 'cached': False}
+    except Exception as ex:  # noqa
+        traceback.print_exc()
+        return {'status': 'fallback', 'reason': 'error'}

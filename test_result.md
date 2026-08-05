@@ -114,6 +114,21 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Albert AI section insight endpoint GET /api/v1/albert/insight?section=X (Gemini, cached per run)"
+    implemented: true
+    working: false
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW endpoint. Generates a plain-English, insightful (cause->effect + if-then) narrative per section using Gemini (CHAT_MODEL) grounded in build_chat_context(). Caches result in albert_insights collection keyed by section:latest_run_version. Returns {status:'ready', text, model, cached} on success, or {status:'fallback', reason} when LLM unconfigured/empty/errors (frontend then shows template). Test: GET /api/v1/albert/insight?section=overview should return status ready with non-empty text (may take a few seconds first call, then cached=true on second call). Also test sections forecasts, analysis, performance, chart, cycle, policy. Verify a second identical call returns cached=true quickly. Verify an unknown section still returns ready (generic focus) or fallback gracefully (no 500)."
+        -working: false
+        -agent: "testing"
+        -comment: "❌ CRITICAL BUG: LLM responses are truncated to ~50-70 characters instead of expected 80-130 words (~400-800 chars). Tested via external URL (https://quant-features.preview.emergentagent.com/api/v1/albert/insight). API STRUCTURE WORKS CORRECTLY: ✅ All 5 tests passed for API behavior: (1) GET /api/v1/albert/insight?section=overview returns HTTP 200, status='ready', section='overview', model='gemini-3-flash-preview', cached=false, latency=5.12s ✅ (2) Second call returns cached=true with improved latency (0.19s) - caching works ✅ (3) All 6 sections (forecasts, analysis, performance, chart, cycle, policy) return status='ready' without 500 errors ✅ (4) Bogus section (section=bogus123) returns HTTP 200 status='ready' gracefully ✅ (5) No section param defaults to overview and returns HTTP 200 ✅. HOWEVER, TEXT CONTENT IS BROKEN: All responses return truncated text (7-12 words instead of 80-130 words). Examples: overview='Hello! I'm Albert. Right now, Bitcoin is in a \"Weak Bear' (56 chars, 11 words), risk='Hello! I'm Albert. Right now, Bitcoin is in a \"' (54 chars). Root cause: emergentintegrations LlmChat library returns truncated string responses. Tested directly: LlmChat.send_message() returns only ~50-70 chars regardless of max_tokens=420 setting. This is NOT a backend code bug - the code correctly stores whatever the LLM returns. The LLM integration itself is broken. IMPACT: Feature is non-functional - users will see incomplete, meaningless text snippets instead of insightful narratives. Requires investigation of emergentintegrations library or switching to direct Gemini API calls."
+
   - task: "FastAPI ML engine - real BTC data fetch (ccxt Kraken primary, Coinbase fallback)"
     implemented: true
     working: true

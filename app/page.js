@@ -177,13 +177,29 @@ function TapInfo({ text, className = '', below = true, children }) {
 
 
 
-function AiReview({ text, voice }) {
+function AiReview({ text, voice, section }) {
   const [speaking, setSpeaking] = React.useState(false);
+  const [aiText, setAiText] = React.useState(null);
+  const [loading, setLoading] = React.useState(!!section);
+  const shown = aiText || text;
+
+  React.useEffect(() => {
+    if (!section) return;
+    let on = true;
+    setLoading(true);
+    fetch(`/api/v1/albert/insight?section=${encodeURIComponent(section)}`)
+      .then((r) => r.json())
+      .then((j) => { if (on && j && j.status === 'ready' && j.text) setAiText(j.text); })
+      .catch(() => { /* keep template */ })
+      .finally(() => { if (on) setLoading(false); });
+    return () => { on = false; };
+  }, [section]);
+
   const speak = () => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
     const synth = window.speechSynthesis;
     if (synth.speaking) { synth.cancel(); setSpeaking(false); return; }
-    const u = new SpeechSynthesisUtterance(text);
+    const u = new SpeechSynthesisUtterance(shown);
     const vs = synth.getVoices();
     const pick = vs.find((v) => /daniel|google uk english male|arthur|male/i.test(v.name) && /en/i.test(v.lang))
       || vs.find((v) => /google us english|english/i.test(v.name) && /en/i.test(v.lang))
@@ -199,9 +215,15 @@ function AiReview({ text, voice }) {
     <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-violet-500/[0.06] p-5 ring-1 ring-sky-500/25">
       <div className="mb-2 flex items-center gap-2.5">
         <img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-500/40" />
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-semibold text-sky-100">Albert’s Review</h3>
-          <span className="hidden text-[10px] text-slate-500 sm:inline">plain-English read of the live numbers</span>
+          {aiText ? (
+            <span className="flex items-center gap-1 rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-semibold text-violet-200 ring-1 ring-violet-500/40"><Sparkles className="h-3 w-3" />AI insight</span>
+          ) : loading ? (
+            <span className="flex items-center gap-1.5 text-[10px] text-slate-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />Albert is thinking…</span>
+          ) : (
+            <span className="hidden text-[10px] text-slate-500 sm:inline">plain-English read of the live numbers</span>
+          )}
         </div>
         {voice && (
           <button onClick={speak} className={`ml-auto flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${speaking ? 'border-sky-400 bg-sky-500/20 text-sky-200' : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-sky-500/40 hover:text-sky-300'}`}>
@@ -209,7 +231,7 @@ function AiReview({ text, voice }) {
           </button>
         )}
       </div>
-      <p className="text-sm leading-relaxed text-slate-200">{text}</p>
+      <p className={`whitespace-pre-line text-sm leading-relaxed text-slate-200 transition-opacity duration-300 ${loading && !aiText ? 'opacity-70' : 'opacity-100'}`}>{shown}</p>
     </Card>
   );
 }
@@ -614,7 +636,7 @@ function OverviewSection({ d, ticker }) {
       <MarketStateHero d={d} ticker={ticker} />
       <OverviewChart d={d} />
       <DecisionEngineCard d={d} />
-      <AiReview text={reviewOverview(d)} voice />
+      <AiReview text={reviewOverview(d)} voice section="overview" />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
@@ -715,7 +737,7 @@ function ForecastsSection({ d }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={Target} title="Forecasts" blurb={SECTIONS[1].blurb} />
-      <AiReview text={reviewForecasts(d)} />
+      <AiReview text={reviewForecasts(d)} section="forecasts" />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {(d.forecasts || []).map((f) => <ForecastCard key={f.horizon} f={f} />)}
       </div>
@@ -738,7 +760,7 @@ function AnalysisSection({ d }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={BarChart3} title="Quant Analysis" blurb={SECTIONS[2].blurb} />
-      <AiReview text={reviewAnalysis(d)} />
+      <AiReview text={reviewAnalysis(d)} section="analysis" />
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-4 font-semibold text-slate-100">Quant Score Breakdown</h3>
@@ -828,7 +850,7 @@ function PerformanceSection({ d }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={Trophy} title="Performance" blurb={SECTIONS[3].blurb} />
-      <AiReview text={reviewPerformance(d)} />
+      <AiReview text={reviewPerformance(d)} section="performance" />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-slate-900 p-6 ring-1 ring-slate-800">
@@ -981,7 +1003,7 @@ function ChartSection({ d }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={CandlestickChart} title="Chart Intelligence" blurb={sec('chart').blurb} />
-      <AiReview text={reviewChart(d)} />
+      <AiReview text={reviewChart(d)} section="chart" />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="flex items-center gap-1 font-semibold text-slate-100">Daily Candles · Auto S/R<InfoTip below text="The last 90 daily candles with automatically detected support (green) and resistance (red) — price levels where BTC has repeatedly reacted." /></h3>
@@ -1023,7 +1045,7 @@ function CycleSection({ d }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={Globe} title="Cycle & Macro" blurb={sec('cycle').blurb} />
-      <AiReview text={reviewCycle(d)} />
+      <AiReview text={reviewCycle(d)} section="cycle" />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {c && (
           <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
@@ -1074,7 +1096,7 @@ function PolicySection({ d }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={Landmark} title="Policy & Liquidity" blurb={sec('policy').blurb} />
-      <AiReview text={reviewPolicy(d)} />
+      <AiReview text={reviewPolicy(d)} section="policy" />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-slate-900 p-6 ring-1 ring-slate-800">
