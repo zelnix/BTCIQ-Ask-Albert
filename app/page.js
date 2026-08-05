@@ -62,7 +62,7 @@ const SECTIONS = [
   { id: 'timemachine', label: 'Bitcoin Time Machine', icon: History,
     blurb: 'Replay any day in Bitcoin’s history: see exactly what the model would have predicted then, what actually happened next, and the price path around it — using only the information available at the time.' },
   { id: 'ask', label: 'Ask Albert', icon: MessageCircle,
-    blurb: 'Chat with Albert, BTCIQ’s AI Quant Analyst, in plain English — "Why did the score fall?", "What could move Bitcoin next?" — grounded strictly in the live dashboard numbers. He never invents data.' },
+    blurb: 'Chat with Albert, BTCIQ’s HuCentAI Quant Analyst, in plain English — "Why did the score fall?", "What could move Bitcoin next?" — grounded strictly in the live dashboard numbers. He never invents data.' },
   { id: 'alerts', label: 'Alerts', icon: Bell,
     blurb: 'A running feed of what just changed and what is coming: regime shifts, decision changes, data-trust drops and upcoming high-impact events.' },
   { id: 'settings', label: 'Settings', icon: Cpu,
@@ -128,11 +128,15 @@ function QuantGauge({ score }) {
 }
 
 const InfoBlock = ({ children }) => (
-  <div className="rounded-lg border border-sky-500/20 bg-sky-500/[0.04] p-4 text-sm text-slate-400">
-    <div className="mb-1 flex items-center gap-2 text-sky-200">
-      <Info className="h-4 w-4" /><span className="font-semibold">In plain English</span>
+  <div className="flex gap-3 rounded-lg border border-sky-500/20 bg-sky-500/[0.04] p-4 text-sm text-slate-400">
+    <img src="/albert.png" alt="Albert" className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-sky-500/40" />
+    <div>
+      <div className="mb-0.5 flex items-center gap-2">
+        <span className="font-semibold text-sky-200">Albert</span>
+        <span className="text-[11px] font-normal text-slate-500">· in plain English</span>
+      </div>
+      <div>{children}</div>
     </div>
-    {children}
   </div>
 );
 
@@ -300,6 +304,92 @@ const alignColor = (a) => (a || '').includes('Bullish') ? 'text-emerald-400'
   : (a || '').includes('Bearish') ? 'text-red-400'
   : (a || '').includes('Conflict') ? 'text-amber-400' : 'text-slate-300';
 
+function DecisionBottomLine({ d, dec }) {
+  const [open, setOpen] = React.useState(false);
+  const fc = d.forecasts || [];
+  return (
+    <div className="mt-4 rounded-lg border border-sky-500/20 bg-sky-500/[0.05] p-4">
+      <div className="flex gap-3">
+        <img src="/albert.png" alt="Albert" className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-sky-500/40" />
+        <div className="min-w-0">
+          <div className="mb-0.5 flex items-center gap-2"><span className="text-sm font-semibold text-sky-200">Albert</span><span className="text-[11px] text-slate-500">· the bottom line</span></div>
+          <p className="text-sm leading-relaxed text-slate-300">{dec.summary}</p>
+          <button onClick={() => setOpen(true)} className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-sky-400 underline decoration-sky-500/40 underline-offset-2 transition-colors hover:text-sky-300">
+            <Brain className="h-3.5 w-3.5" />Want the more technical summary? Open the breakdown
+          </button>
+        </div>
+      </div>
+
+      {open && (
+        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm" onClick={() => setOpen(false)}>
+          <div className="max-h-[86vh] w-full max-w-2xl overflow-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-center gap-3">
+              <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-white">Technical Breakdown</h3>
+                <p className="text-[11px] text-slate-500">The numbers behind Albert’s bottom line · probability, not certainty</p>
+              </div>
+              <button onClick={() => setOpen(false)} className="rounded-lg border border-slate-700 p-1.5 text-slate-400 hover:bg-slate-800 hover:text-white"><X className="h-4 w-4" /></button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+              <div className="rounded-lg bg-slate-950/60 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-500">Overall</p><p className="text-xl font-black" style={{ color: scoreColor(dec.overall_score) }}>{dec.overall_score}<span className="text-xs font-medium text-slate-500">/100</span></p><p className="text-[11px] text-slate-400">{dec.label}</p></div>
+              <div className="rounded-lg bg-slate-950/60 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-500">Regime</p><p className="text-sm font-bold leading-tight text-white">{dec.regime}</p></div>
+              <div className="rounded-lg bg-slate-950/60 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-500">Risk</p><p className={`text-xl font-black ${riskColor(dec.risk_level)}`}>{dec.risk_level}</p><p className="text-[11px] text-slate-500">index {dec.risk_score}/100</p></div>
+              <div className="rounded-lg bg-slate-950/60 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-500">Alignment</p><p className={`text-sm font-bold leading-tight ${alignColor(dec.alignment)}`}>{dec.alignment}</p></div>
+            </div>
+
+            <p className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wider text-slate-500">Signal composition</p>
+            <div className="overflow-hidden rounded-lg border border-slate-800">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-950/60 text-[11px] uppercase tracking-wider text-slate-500"><tr><th className="px-3 py-2 text-left font-medium">Signal group</th><th className="px-3 py-2 text-right font-medium">Score /100</th><th className="px-3 py-2 text-right font-medium">Weight</th></tr></thead>
+                <tbody>
+                  {(dec.components || []).map((c) => (
+                    <tr key={c.name} className="border-t border-slate-800/70">
+                      <td className="px-3 py-2 text-slate-300">{c.name}</td>
+                      <td className="px-3 py-2 text-right font-mono font-bold" style={{ color: scoreColor(c.score) }}>{c.score}</td>
+                      <td className="px-3 py-2 text-right text-slate-400">{c.weight}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {fc.length > 0 && (<>
+              <p className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wider text-slate-500">Directional odds & invalidation</p>
+              <div className="overflow-hidden rounded-lg border border-slate-800">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-950/60 text-[11px] uppercase tracking-wider text-slate-500"><tr><th className="px-3 py-2 text-left font-medium">Horizon</th><th className="px-3 py-2 text-right font-medium">Higher</th><th className="px-3 py-2 text-right font-medium">Confidence</th><th className="px-3 py-2 text-right font-medium">Backtest</th><th className="px-3 py-2 text-right font-medium">Invalidated</th></tr></thead>
+                  <tbody>
+                    {fc.map((f) => (
+                      <tr key={f.horizon} className="border-t border-slate-800/70">
+                        <td className="px-3 py-2 font-semibold text-slate-200">{f.horizon}</td>
+                        <td className="px-3 py-2 text-right font-mono" style={{ color: scoreColor(f.higher) }}>{f.higher}%</td>
+                        <td className="px-3 py-2 text-right text-slate-300">{f.confidence} ({f.confidence_pct}%)</td>
+                        <td className="px-3 py-2 text-right text-slate-400">{f.accuracy}%</td>
+                        <td className="px-3 py-2 text-right font-mono text-amber-400">{f.invalidation_dir} {fmtUsd(f.invalidation)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>)}
+
+            <p className="mb-2 mt-5 text-xs font-semibold uppercase tracking-wider text-slate-500">Model & data</p>
+            <div className="flex flex-wrap gap-2 text-[11px]">
+              {d.cv_mean != null && <span className="rounded-full bg-slate-800/70 px-2.5 py-1 text-slate-300">Cross-val accuracy {d.cv_mean}% · {d.n_samples} days</span>}
+              {d.scoreboard && <span className="rounded-full bg-slate-800/70 px-2.5 py-1 text-slate-300">Live win rate {d.scoreboard.winRate}% ({d.scoreboard.total} graded)</span>}
+              {dec.data_trust && <span className="rounded-full bg-slate-800/70 px-2.5 py-1 text-slate-300">Data trust {dec.data_trust.score}/100{dec.odds_faded ? ' · odds faded' : ''}</span>}
+              <span className="rounded-full bg-slate-800/70 px-2.5 py-1 text-slate-300">Quant Score {d.quant_score}/100</span>
+            </div>
+            <p className="mt-5 text-[11px] leading-relaxed text-slate-500">Every figure is derived from real market data and historical base rates. These are probabilities and research signals — not financial advice or a guarantee of future outcomes.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DecisionEngineCard({ d }) {
   const dec = d.decision;
   if (!dec) return null;
@@ -370,10 +460,7 @@ function DecisionEngineCard({ d }) {
         </div>
       </div>
 
-      <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/50 p-4">
-        <div className="mb-1 flex items-center gap-2 text-slate-300"><Sparkles className="h-4 w-4 text-sky-400" /><span className="text-sm font-semibold">The Bottom Line</span></div>
-        <p className="text-sm leading-relaxed text-slate-300">{dec.summary}</p>
-      </div>
+      <DecisionBottomLine d={d} dec={dec} />
     </Card>
   );
 }
@@ -470,10 +557,10 @@ function AlbertIntroCard() {
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-base font-bold text-white">Albert</h3>
-          <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-300">BTCIQ’s AI Quant Analyst</span>
+          <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-300">BTCIQ’s HuCentAI Quant Analyst</span>
         </div>
         <p className="mt-1 text-sm text-slate-300">Albert interprets BitMarkAI’s numbers, explains the probabilities in plain language, and helps you understand what may move Bitcoin next. “Let us examine the evidence — probability is not certainty.”</p>
-        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Albert is an original fictional BTCIQ AI Quant character inspired by the spirit of scientific curiosity. He is not Albert Einstein and does not represent Einstein’s real opinions.</p>
+        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Albert is an original fictional BTCIQ HuCentAI Quant character inspired by the spirit of scientific curiosity. He is not Albert Einstein and does not represent Einstein’s real opinions.</p>
       </div>
     </Card>
   );
@@ -2246,7 +2333,7 @@ function AskQuantSection({ d }) {
       <Card className="flex h-[560px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
         <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3">
           <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
-          <div><p className="text-sm font-semibold text-white">Albert · BTCIQ AI Quant</p><p className="text-[10px] text-slate-500">Grounded in live dashboard data · Gemini 3 Flash</p></div>
+          <div><p className="text-sm font-semibold text-white">Albert · BTCIQ HuCentAI Quant</p><p className="text-[10px] text-slate-500">Grounded in live dashboard data · Gemini 3 Flash</p></div>
           <span className="ml-auto flex items-center gap-1 text-[10px] font-bold text-emerald-400"><span className="h-2 w-2 rounded-full bg-emerald-400" />LIVE</span>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
@@ -2455,8 +2542,8 @@ function SettingsSection({ onManualRun }) {
       </Card>
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
-        <p className="text-xs leading-relaxed text-slate-400">BTCIQ — Bitcoin Market Analysis, powered by BitCentAI, our Bitcoin-Centred Intelligence Engine. BitMarkAI measures the market and produces probability-based forecasts. Albert is BTCIQ’s AI Quant Analyst.</p>
-        <p className="mt-3 text-[11px] leading-relaxed text-slate-500">BTCIQ provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes. Albert is an original fictional BTCIQ AI Quant character and is not Albert Einstein.</p>
+        <p className="text-xs leading-relaxed text-slate-400">BTCIQ — Bitcoin Market Analysis, powered by BitCentAI, our Bitcoin-Centred Intelligence Engine. BitMarkAI measures the market and produces probability-based forecasts. Albert is BTCIQ’s HuCentAI Quant Analyst.</p>
+        <p className="mt-3 text-[11px] leading-relaxed text-slate-500">BTCIQ provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes. Albert is an original fictional BTCIQ HuCentAI Quant character and is not Albert Einstein.</p>
       </Card>
     </div>
   );

@@ -1441,11 +1441,11 @@ def compute_institutional_demo(last_close):
 
 
 CHAT_SYSTEM = (
-    "You are 'Albert', the friendly AI quant analyst built into the BTCIQ Bitcoin dashboard "
+    "You are 'Albert', the friendly HuCentAI Quant analyst built into the BTCIQ Bitcoin dashboard "
     "(powered by BitCentAI, a Bitcoin-Centred Intelligence Engine). You have a warm, witty, "
     "professor-like personality — think a sharp, approachable Einstein of Bitcoin markets — but you "
     "stay rigorous and never over-promise. If someone asks who you are, say you are Albert, the BTCIQ "
-    "AI quant. Answer the user's question using ONLY the LIVE DASHBOARD DATA provided below. If the "
+    "HuCentAI Quant. Answer the user's question using ONLY the LIVE DASHBOARD DATA provided below. If the "
     "data does not contain the answer, say you don't have that data rather than guessing — never invent "
     "numbers, prices or events. Speak in clear, plain English and be concise (usually under 130 words). "
     "Always frame predictions as probabilities/odds, not certainties, and never give definitive buy/sell "
@@ -2830,7 +2830,7 @@ def chat_endpoint(payload: dict = Body(...)):
 # ALBERT SECTION INSIGHTS  (AI-generated, cached per compute-run)
 # =====================================================================
 ALBERT_INSIGHT_SYSTEM = (
-    "You are 'Albert', the friendly AI quant analyst in the BTCIQ Bitcoin dashboard. You are explaining "
+    "You are 'Albert', the friendly HuCentAI Quant analyst in the BTCIQ Bitcoin dashboard. You are explaining "
     "this section to a curious NON-TRADER who does not know market jargon. Your goal is to be genuinely "
     "INSIGHTFUL — do NOT simply restate the numbers already on screen. Instead:\n"
     "1) Explain in plain English WHAT is actually driving Bitcoin right now / WHY it is where it is (lean on "
@@ -2868,7 +2868,7 @@ def _latest_run_version():
 
 
 @app.get('/api/v1/albert/insight')
-def albert_insight(section: str = 'overview'):
+async def albert_insight(section: str = 'overview'):
     section = (section or 'overview').strip().lower()[:40]
     version = _latest_run_version()
     if not version:
@@ -2882,20 +2882,36 @@ def albert_insight(section: str = 'overview'):
     try:
         ctx = build_chat_context()
         focus = SECTION_FOCUS.get(section, "Explain what this section means for Bitcoin's price and outlook in plain English.")
-        chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'insight-{section}-{abs(hash(version)) % 99999}',
-                        system_message=ALBERT_INSIGHT_SYSTEM.format(focus=focus, ctx=ctx))
-                .with_model('gemini', CHAT_MODEL)
-                .with_params(temperature=0.35, max_tokens=420))
-        reply = asyncio.run(chat.send_message(UserMessage(
-            text=f"Write Albert's insight for the '{section}' section now, following all the rules.")))
-        text = (getattr(reply, 'text', None) or str(reply)).strip()
+        umsg = f"Write Albert's insight for the '{section}' section now, following all the rules."
+
+        def _complete(t):
+            return len(t.split()) >= 50 and t.rstrip()[-1:] in '.!?"\u201d)'
+
+        # emergentintegrations streaming can occasionally return a truncated partial response,
+        # so retry a few times and keep the first complete-looking (or longest) answer.
+        best = ''
+        for _ in range(3):
+            chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'insight-{section}-{uuid.uuid4().hex[:10]}',
+                            system_message=ALBERT_INSIGHT_SYSTEM.format(focus=focus, ctx=ctx))
+                    .with_model('gemini', CHAT_MODEL)
+                    .with_params(temperature=0.4, max_tokens=8000))
+            reply = await chat.send_message(UserMessage(text=umsg))
+            text = (getattr(reply, 'text', None) or str(reply)).strip()
+            if len(text) > len(best):
+                best = text
+            if _complete(text):
+                best = text
+                break
+        text = best
         if not text:
             return {'status': 'fallback', 'reason': 'empty'}
-        insights_col.update_one(
-            {'_id': cache_id},
-            {'$set': {'_id': cache_id, 'section': section, 'version': version, 'text': text,
-                      'model': CHAT_MODEL, 'created_at': datetime.datetime.utcnow().isoformat()}},
-            upsert=True)
+        # Only cache complete responses so an occasional partial regenerates on the next load.
+        if _complete(text):
+            insights_col.update_one(
+                {'_id': cache_id},
+                {'$set': {'_id': cache_id, 'section': section, 'version': version, 'text': text,
+                          'model': CHAT_MODEL, 'created_at': datetime.datetime.utcnow().isoformat()}},
+                upsert=True)
         return {'status': 'ready', 'section': section, 'text': text, 'model': CHAT_MODEL, 'cached': False}
     except Exception as ex:  # noqa
         traceback.print_exc()
