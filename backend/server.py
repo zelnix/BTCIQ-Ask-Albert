@@ -55,6 +55,7 @@ bitmark_col = db['bitmark_snapshots']
 smart_alerts_col = db['smart_alerts']
 audit_col = db['forecast_audit']
 insights_col = db['albert_insights']  # cache for AI-generated section insights
+compare_col = db['compare_coins']  # cache for per-coin comparison summaries
 # Admin passcode gate for manual forecast runs (Stage-1: passcode instead of full auth)
 ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', 'btciq-admin')
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
@@ -2842,10 +2843,29 @@ ALBERT_INSIGHT_SYSTEM = (
     "Rules: use ONLY the live dashboard data below — never invent numbers, prices or events. Any term a "
     "beginner might not know, explain in 3-4 words. Always frame the future as probabilities/odds, never "
     "certainties, and never give direct buy/sell financial advice. Warm, clear, professor-like. "
+    "Do NOT open with a greeting or salutation (no 'Hello', 'Hi', 'Hey', 'Hello there', and do not address "
+    "the reader) — start immediately with the substance. "
     "Write 80-130 words, at most two short paragraphs. Do not use markdown headers or bullet symbols.\n\n"
     "THIS SECTION'S FOCUS: {focus}\n\n"
     "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
 )
+
+ALBERT_TECH_SYSTEM = (
+    "You are 'Albert', the HuCentAI Quant analyst in the BTCIQ Bitcoin dashboard, now giving a MORE TECHNICAL "
+    "briefing for a reader who understands markets. Be precise and quantitative:\n"
+    "1) Reference the concrete numbers — scores, probabilities, confidence, backtest hit-rates, key price levels, "
+    "invalidation points, regime/volatility read, and any relevant macro/liquidity or on-chain style signals.\n"
+    "2) Explain the mechanism / what is driving the read, and how the signal groups reconcile (agreement vs conflict).\n"
+    "3) State the actionable levels and the specific 'if BTC does X vs level Y, then Z' conditions the model watches.\n"
+    "Rules: use ONLY the live dashboard data below — never invent numbers, prices or events. You may use standard "
+    "trading terms without dumbing them down, but stay rigorous. Always frame outcomes as probabilities, never "
+    "certainties, and never give direct buy/sell financial advice. Do NOT open with a greeting or salutation "
+    "(no 'Hello', 'Hi', 'Hey') — start immediately with the analysis. Write 90-150 words, tight and information-dense, "
+    "no markdown headers or bullet symbols.\n\n"
+    "THIS SECTION'S FOCUS: {focus}\n\n"
+    "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
+)
+
 
 SECTION_FOCUS = {
     'overview': "The big-picture read on Bitcoin: what is pushing the price now and what it likely means over the next day to week.",
@@ -2868,21 +2888,25 @@ def _latest_run_version():
 
 
 @app.get('/api/v1/albert/insight')
-async def albert_insight(section: str = 'overview'):
+async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh: int = 0):
     section = (section or 'overview').strip().lower()[:40]
+    mode = 'technical' if str(mode).lower().startswith('tech') else 'plain'
     version = _latest_run_version()
     if not version:
         return {'status': 'fallback', 'reason': 'no_data'}
-    cache_id = f"{section}:{version}"
-    cached = insights_col.find_one({'_id': cache_id}, {'_id': 0})
-    if cached and cached.get('text'):
-        return {'status': 'ready', 'section': section, 'text': cached['text'], 'model': cached.get('model'), 'cached': True}
+    cache_id = f"{section}:{mode}:{version}"
+    if not refresh:
+        cached = insights_col.find_one({'_id': cache_id}, {'_id': 0})
+        if cached and cached.get('text'):
+            return {'status': 'ready', 'section': section, 'mode': mode, 'text': cached['text'], 'model': cached.get('model'), 'cached': True}
     if not (EMERGENT_LLM_KEY and _HAS_LLM):
         return {'status': 'fallback', 'reason': 'llm_unconfigured'}
     try:
         ctx = build_chat_context()
         focus = SECTION_FOCUS.get(section, "Explain what this section means for Bitcoin's price and outlook in plain English.")
-        umsg = f"Write Albert's insight for the '{section}' section now, following all the rules."
+        sys_tmpl = ALBERT_TECH_SYSTEM if mode == 'technical' else ALBERT_INSIGHT_SYSTEM
+        kind = 'technical briefing' if mode == 'technical' else 'insight'
+        umsg = f"Write Albert's {kind} for the '{section}' section now, following all the rules."
 
         def _complete(t):
             return len(t.split()) >= 50 and t.rstrip()[-1:] in '.!?"\u201d)'
@@ -2891,12 +2915,13 @@ async def albert_insight(section: str = 'overview'):
         # so retry a few times and keep the first complete-looking (or longest) answer.
         best = ''
         for _ in range(3):
-            chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'insight-{section}-{uuid.uuid4().hex[:10]}',
-                            system_message=ALBERT_INSIGHT_SYSTEM.format(focus=focus, ctx=ctx))
+            chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'insight-{section}-{mode}-{uuid.uuid4().hex[:10]}',
+                            system_message=sys_tmpl.format(focus=focus, ctx=ctx))
                     .with_model('gemini', CHAT_MODEL)
                     .with_params(temperature=0.4, max_tokens=8000))
             reply = await chat.send_message(UserMessage(text=umsg))
             text = (getattr(reply, 'text', None) or str(reply)).strip()
+            text = re.sub(r'^\s*(hello|hi|hey|greetings|good (?:morning|afternoon|evening))\b[^.!?\n]*[.!?,]?\s+', '', text, flags=re.I).lstrip()
             if len(text) > len(best):
                 best = text
             if _complete(text):
@@ -2909,10 +2934,108 @@ async def albert_insight(section: str = 'overview'):
         if _complete(text):
             insights_col.update_one(
                 {'_id': cache_id},
-                {'$set': {'_id': cache_id, 'section': section, 'version': version, 'text': text,
+                {'$set': {'_id': cache_id, 'section': section, 'mode': mode, 'version': version, 'text': text,
                           'model': CHAT_MODEL, 'created_at': datetime.datetime.utcnow().isoformat()}},
                 upsert=True)
-        return {'status': 'ready', 'section': section, 'text': text, 'model': CHAT_MODEL, 'cached': False}
+        return {'status': 'ready', 'section': section, 'mode': mode, 'text': text, 'model': CHAT_MODEL, 'cached': False}
     except Exception as ex:  # noqa
         traceback.print_exc()
         return {'status': 'fallback', 'reason': 'error'}
+
+
+
+# =====================================================================
+# COMPARE COINS  (per-coin quant summary via the same pipeline, cached)
+# =====================================================================
+COMPARE_COINS = {
+    'BTC': {'name': 'Bitcoin', 'pairs': [('kraken', 'BTC/USD'), ('coinbase', 'BTC/USD')]},
+    'ETH': {'name': 'Ethereum', 'pairs': [('kraken', 'ETH/USD'), ('coinbase', 'ETH/USD')]},
+    'SOL': {'name': 'Solana', 'pairs': [('kraken', 'SOL/USD'), ('coinbase', 'SOL/USD')]},
+}
+
+
+def _fetch_ohlcv_pairs(pairs):
+    errors = []
+    for name, sym in pairs:
+        try:
+            ex = getattr(ccxt, name)({'enableRateLimit': True})
+            bars = ex.fetch_ohlcv(sym, timeframe='1d', limit=720)
+            if bars and len(bars) > 250:
+                df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                return df.sort_values('timestamp').reset_index(drop=True), name
+        except Exception as e:  # noqa
+            errors.append(f'{name}: {e}')
+    raise RuntimeError('All sources failed: ' + ' | '.join(errors))
+
+
+def compute_coin_summary(symbol):
+    cfg = COMPARE_COINS[symbol]
+    df, source = _fetch_ohlcv_pairs(cfg['pairs'])
+    df = build_features(df).dropna().reset_index(drop=True)
+    feats = df.iloc[-1]
+    last_close = float(df['close'].iloc[-1])
+    prev_close = float(df['close'].iloc[-2])
+    day_change = round((last_close - prev_close) / prev_close * 100, 2)
+    ts = df['timestamp'].iloc[-1]
+    quant = compute_quant_analysis(df, feats, last_close, ts)
+    fc = quant.get('forecasts', []) or []
+
+    def _find(h):
+        for f in fc:
+            if f.get('horizon') == h:
+                return f
+        return {}
+    f24 = _find('24H') or (fc[0] if fc else {})
+    f7 = _find('7D')
+    regime = quant.get('regime') or {}
+    regime_name = regime.get('regime') if isinstance(regime, dict) else str(regime)
+    support = resistance = None
+    try:
+        chart = compute_chart_intelligence(df)
+        for lv in (chart.get('sr_levels') or []):
+            if lv['type'] == 'support' and (support is None or lv['price'] > support):
+                support = lv['price']  # nearest support below is highest support under price
+            if lv['type'] == 'resistance' and (resistance is None or lv['price'] < resistance):
+                resistance = lv['price']
+    except Exception:  # noqa
+        pass
+    spark = [round(float(c), 4) for c in df['close'].tail(60).tolist()]
+    return {
+        'symbol': symbol, 'name': cfg['name'], 'source': source, 'as_of': ts.strftime('%Y-%m-%d'),
+        'price': round(last_close, 2), 'day_change_pct': day_change,
+        'quant_score': quant['quant_score'], 'quant_label': quant['quant_label'],
+        'regime': regime_name,
+        'forecast_24h': {'higher': f24.get('higher'), 'confidence': f24.get('confidence'), 'confidence_pct': f24.get('confidence_pct')},
+        'forecast_7d': {'higher': f7.get('higher'), 'confidence': f7.get('confidence'), 'confidence_pct': f7.get('confidence_pct')},
+        'bullish': (quant['factors']['bullish'] or [])[:2],
+        'risk': (quant['factors']['risk'] or [])[:2],
+        'support': support, 'resistance': resistance, 'spark': spark,
+    }
+
+
+@app.get('/api/v1/compare/coins')
+def compare_coins_list():
+    return {'coins': [{'symbol': k, 'name': v['name']} for k, v in COMPARE_COINS.items()]}
+
+
+@app.get('/api/v1/compare/coin')
+def compare_coin(symbol: str = 'BTC', refresh: int = 0):
+    symbol = (symbol or 'BTC').strip().upper()[:6]
+    if symbol not in COMPARE_COINS:
+        return {'status': 'error', 'reason': 'unsupported_symbol'}
+    today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+    cache_id = f"{symbol}:{today}"
+    if not refresh:
+        cached = compare_col.find_one({'_id': cache_id}, {'_id': 0})
+        if cached and cached.get('data'):
+            return {'status': 'ready', 'cached': True, 'data': cached['data']}
+    try:
+        data = compute_coin_summary(symbol)
+        compare_col.update_one({'_id': cache_id},
+                               {'$set': {'_id': cache_id, 'symbol': symbol, 'day': today, 'data': data,
+                                         'created_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+        return {'status': 'ready', 'cached': False, 'data': data}
+    except Exception as ex:  # noqa
+        traceback.print_exc()
+        return {'status': 'error', 'reason': str(ex)[:200]}

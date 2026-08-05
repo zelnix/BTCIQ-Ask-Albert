@@ -43,6 +43,8 @@ const SECTIONS = [
     blurb: 'Your 10-second snapshot of Bitcoin right now: the price, the market "mood", one simple score, the near-term odds, how risky things are and how sure the model is. Start here.' },
   { id: 'forecasts', label: 'Forecasts', icon: Target,
     blurb: 'BitMarkAI’s probability-based price forecasts from 1 week to 5 years — always shown as odds and price ranges (bull / base / bear), never a single guaranteed number. Longer horizons show wider uncertainty.' },
+  { id: 'compare', label: 'Compare Coins', icon: Scale,
+    blurb: 'Run the same quant engine across Bitcoin, Ethereum and Solana side by side — score, market mood, near-term odds and key levels — so you can see how the majors stack up. Each coin computes its own model on first view, then caches.' },
   { id: 'market-intel', label: 'Market Intelligence', icon: BarChart3,
     blurb: 'The technical picture behind the score: chart structure and key levels, where Bitcoin sits in its 4-year cycle, and the raw indicators the model reads.' },
   { id: 'smartmoney', label: 'Smart Money', icon: Waves,
@@ -181,23 +183,32 @@ function TapInfo({ text, className = '', below = true, children }) {
 
 
 
-function AiReview({ text, voice, section }) {
+function AiReview({ text, voice, section, footer }) {
   const [speaking, setSpeaking] = React.useState(false);
-  const [aiText, setAiText] = React.useState(null);
+  const [mode, setMode] = React.useState('plain');
+  const [cache, setCache] = React.useState({ plain: null, technical: null });
   const [loading, setLoading] = React.useState(!!section);
-  const shown = aiText || text;
 
-  React.useEffect(() => {
+  const load = React.useCallback((m, force) => {
     if (!section) return;
-    let on = true;
     setLoading(true);
-    fetch(`/api/v1/albert/insight?section=${encodeURIComponent(section)}`)
+    fetch(`/api/v1/albert/insight?section=${encodeURIComponent(section)}&mode=${m}${force ? '&refresh=1' : ''}`)
       .then((r) => r.json())
-      .then((j) => { if (on && j && j.status === 'ready' && j.text) setAiText(j.text); })
-      .catch(() => { /* keep template */ })
-      .finally(() => { if (on) setLoading(false); });
-    return () => { on = false; };
+      .then((j) => { if (j && j.status === 'ready' && j.text) setCache((c) => ({ ...c, [m]: j.text })); })
+      .catch(() => { /* keep fallback */ })
+      .finally(() => setLoading(false));
   }, [section]);
+
+  React.useEffect(() => { if (section) load('plain'); }, [section, load]);
+
+  const switchMode = (m) => {
+    setMode(m);
+    if (section && !cache[m]) load(m);
+  };
+  const regenerate = () => load(mode, true);
+
+  const aiText = cache[mode];
+  const shown = aiText || (mode === 'plain' ? text : (loading ? 'Albert is writing the technical briefing…' : text));
 
   const speak = () => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
@@ -217,25 +228,36 @@ function AiReview({ text, voice, section }) {
   };
   return (
     <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-violet-500/[0.06] p-5 ring-1 ring-sky-500/25">
-      <div className="mb-2 flex items-center gap-2.5">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
         <img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-500/40" />
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className="text-sm font-semibold text-sky-100">Albert’s Review</h3>
-          {aiText ? (
-            <span className="flex items-center gap-1 rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-semibold text-violet-200 ring-1 ring-violet-500/40"><Sparkles className="h-3 w-3" />AI insight</span>
-          ) : loading ? (
-            <span className="flex items-center gap-1.5 text-[10px] text-slate-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />Albert is thinking…</span>
-          ) : (
-            <span className="hidden text-[10px] text-slate-500 sm:inline">plain-English read of the live numbers</span>
+        <h3 className="text-sm font-semibold text-sky-100">Albert’s Review</h3>
+        {aiText ? (
+          <span className="flex items-center gap-1 rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-semibold text-violet-200 ring-1 ring-violet-500/40"><Sparkles className="h-3 w-3" />AI insight</span>
+        ) : loading ? (
+          <span className="flex items-center gap-1.5 text-[10px] text-slate-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />Albert is thinking…</span>
+        ) : null}
+
+        <div className="ml-auto flex items-center gap-1.5">
+          {section && (
+            <div className="flex overflow-hidden rounded-full border border-slate-700 text-[11px] font-semibold">
+              <button onClick={() => switchMode('plain')} className={`px-2.5 py-1 transition-colors ${mode === 'plain' ? 'bg-sky-500/25 text-sky-200' : 'text-slate-400 hover:text-slate-200'}`}>Plain</button>
+              <button onClick={() => switchMode('technical')} className={`flex items-center gap-1 px-2.5 py-1 transition-colors ${mode === 'technical' ? 'bg-violet-500/25 text-violet-200' : 'text-slate-400 hover:text-slate-200'}`}><Brain className="h-3 w-3" />Technical</button>
+            </div>
+          )}
+          {section && (
+            <button onClick={regenerate} disabled={loading} title="Ask Albert for a fresh take" className="rounded-full border border-slate-700 p-1.5 text-slate-300 transition-colors hover:border-sky-500/40 hover:text-sky-300 disabled:opacity-50">
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </button>
+          )}
+          {voice && (
+            <button onClick={speak} className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${speaking ? 'border-sky-400 bg-sky-500/20 text-sky-200' : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-sky-500/40 hover:text-sky-300'}`}>
+              {speaking ? <><VolumeX className="h-3.5 w-3.5" />Stop</> : <><Volume2 className="h-3.5 w-3.5" />Listen</>}
+            </button>
           )}
         </div>
-        {voice && (
-          <button onClick={speak} className={`ml-auto flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${speaking ? 'border-sky-400 bg-sky-500/20 text-sky-200' : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-sky-500/40 hover:text-sky-300'}`}>
-            {speaking ? <><VolumeX className="h-3.5 w-3.5" />Stop</> : <><Volume2 className="h-3.5 w-3.5" />Listen</>}
-          </button>
-        )}
       </div>
       <p className={`whitespace-pre-line text-sm leading-relaxed text-slate-200 transition-opacity duration-300 ${loading && !aiText ? 'opacity-70' : 'opacity-100'}`}>{shown}</p>
+      {footer && <div className="mt-3">{footer}</div>}
     </Card>
   );
 }
@@ -304,22 +326,14 @@ const alignColor = (a) => (a || '').includes('Bullish') ? 'text-emerald-400'
   : (a || '').includes('Bearish') ? 'text-red-400'
   : (a || '').includes('Conflict') ? 'text-amber-400' : 'text-slate-300';
 
-function DecisionBottomLine({ d, dec }) {
+function TechnicalBreakdownLink({ d, dec }) {
   const [open, setOpen] = React.useState(false);
   const fc = d.forecasts || [];
   return (
-    <div className="mt-4 rounded-lg border border-sky-500/20 bg-sky-500/[0.05] p-4">
-      <div className="flex gap-3">
-        <img src="/albert.png" alt="Albert" className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-sky-500/40" />
-        <div className="min-w-0">
-          <div className="mb-0.5 flex items-center gap-2"><span className="text-sm font-semibold text-sky-200">Albert</span><span className="text-[11px] text-slate-500">· the bottom line</span></div>
-          <p className="text-sm leading-relaxed text-slate-300">{dec.summary}</p>
-          <button onClick={() => setOpen(true)} className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-sky-400 underline decoration-sky-500/40 underline-offset-2 transition-colors hover:text-sky-300">
-            <Brain className="h-3.5 w-3.5" />Want the more technical summary? Open the breakdown
-          </button>
-        </div>
-      </div>
-
+    <span className="mt-3 inline-block">
+      <button onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 text-xs font-semibold text-sky-400 underline decoration-sky-500/40 underline-offset-2 transition-colors hover:text-sky-300">
+        <Brain className="h-3.5 w-3.5" />Want the more technical summary? Open the breakdown
+      </button>
       {open && (
         <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm" onClick={() => setOpen(false)}>
           <div className="max-h-[86vh] w-full max-w-2xl overflow-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -386,7 +400,7 @@ function DecisionBottomLine({ d, dec }) {
           </div>
         </div>
       )}
-    </div>
+    </span>
   );
 }
 
@@ -459,8 +473,6 @@ function DecisionEngineCard({ d }) {
           })}
         </div>
       </div>
-
-      <DecisionBottomLine d={d} dec={dec} />
     </Card>
   );
 }
@@ -723,7 +735,7 @@ function OverviewSection({ d, ticker }) {
       <MarketStateHero d={d} ticker={ticker} />
       <OverviewChart d={d} />
       <DecisionEngineCard d={d} />
-      <AiReview text={reviewOverview(d)} voice section="overview" />
+      <AiReview text={reviewOverview(d)} voice section="overview" footer={<TechnicalBreakdownLink d={d} dec={d.decision || {}} />} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
@@ -2892,6 +2904,139 @@ let __dashCache = null;
 let __tickerCache = null;
 let __newsCache = null;
 let __alertsCache = null;
+const COMPARE_NAMES = { BTC: 'Bitcoin', ETH: 'Ethereum', SOL: 'Solana' };
+const COMPARE_SYMS = ['BTC', 'ETH', 'SOL'];
+
+function CoinSparkline({ data, up }) {
+  if (!data || data.length < 2) return null;
+  const w = 200, h = 44;
+  const mn = Math.min(...data), mx = Math.max(...data), rng = (mx - mn) || 1;
+  const pts = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - mn) / rng) * (h - 4) - 2}`).join(' ');
+  const col = up ? '#34d399' : '#f87171';
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="h-11 w-full">
+      <polyline points={pts} fill="none" stroke={col} strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function oddsColor(v) { return v == null ? '#94a3b8' : (v >= 55 ? '#34d399' : (v <= 45 ? '#f87171' : '#fbbf24')); }
+
+function CompareCoinCard({ d }) {
+  const up = (d.day_change_pct || 0) >= 0;
+  return (
+    <Card className="flex flex-col border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+      <div className="mb-3 flex items-center gap-2">
+        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-800 text-sm font-black text-sky-300">{d.symbol}</span>
+        <div className="flex-1">
+          <p className="text-sm font-bold text-white">{d.name}</p>
+          <p className="text-[10px] uppercase tracking-wider text-slate-500">{d.symbol}/USD · {d.source}</p>
+        </div>
+        <div className="text-right">
+          <p className="font-mono text-lg font-bold text-white">${d.price?.toLocaleString()}</p>
+          <p className={`text-xs font-semibold ${up ? 'text-emerald-400' : 'text-red-400'}`}>{up ? '+' : ''}{d.day_change_pct}%</p>
+        </div>
+      </div>
+      <CoinSparkline data={d.spark} up={up} />
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <div className="rounded-lg bg-slate-950/50 p-3">
+          <p className="text-[10px] uppercase tracking-wider text-slate-500">Quant Score</p>
+          <p className="text-2xl font-black" style={{ color: scoreColor(d.quant_score) }}>{d.quant_score}<span className="text-xs font-medium text-slate-500">/100</span></p>
+          <p className="text-[11px]" style={{ color: scoreColor(d.quant_score) }}>{d.quant_label}</p>
+        </div>
+        <div className="rounded-lg bg-slate-950/50 p-3">
+          <p className="text-[10px] uppercase tracking-wider text-slate-500">Market Regime</p>
+          <p className="mt-1 text-sm font-bold leading-tight text-white">{d.regime}</p>
+        </div>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2 text-center">
+        <div className="rounded-lg bg-slate-950/50 p-2">
+          <p className="text-[10px] uppercase tracking-wider text-slate-500">24h higher</p>
+          <p className="font-mono text-lg font-bold" style={{ color: oddsColor(d.forecast_24h?.higher) }}>{d.forecast_24h?.higher ?? '—'}%</p>
+          <p className="text-[10px] text-slate-500">{d.forecast_24h?.confidence}</p>
+        </div>
+        <div className="rounded-lg bg-slate-950/50 p-2">
+          <p className="text-[10px] uppercase tracking-wider text-slate-500">7d higher</p>
+          <p className="font-mono text-lg font-bold" style={{ color: oddsColor(d.forecast_7d?.higher) }}>{d.forecast_7d?.higher ?? '—'}%</p>
+          <p className="text-[10px] text-slate-500">{d.forecast_7d?.confidence}</p>
+        </div>
+      </div>
+      <div className="mt-2 flex justify-between rounded-lg bg-slate-950/50 p-2 text-xs">
+        <span className="text-emerald-300">Support ${d.support?.toLocaleString() ?? '—'}</span>
+        <span className="text-red-300">Resistance ${d.resistance?.toLocaleString() ?? '—'}</span>
+      </div>
+      {d.bullish?.[0] && <p className="mt-3 flex gap-1.5 text-[11px] text-slate-400"><TrendingUp className="mt-0.5 h-3 w-3 shrink-0 text-emerald-400" />{d.bullish[0]}</p>}
+      {d.risk?.[0] && <p className="mt-1.5 flex gap-1.5 text-[11px] text-slate-400"><TrendingDown className="mt-0.5 h-3 w-3 shrink-0 text-red-400" />{d.risk[0]}</p>}
+    </Card>
+  );
+}
+
+function CompareSection() {
+  const [data, setData] = React.useState({});
+  const [loading, setLoading] = React.useState({ BTC: true, ETH: true, SOL: true });
+  const [err, setErr] = React.useState({});
+
+  const loadCoin = React.useCallback((s, force) => {
+    setLoading((l) => ({ ...l, [s]: true }));
+    setErr((e) => ({ ...e, [s]: null }));
+    fetch(`/api/v1/compare/coin?symbol=${s}${force ? '&refresh=1' : ''}`)
+      .then((r) => r.json())
+      .then((j) => { if (j.status === 'ready') setData((d) => ({ ...d, [s]: j.data })); else setErr((e) => ({ ...e, [s]: j.reason || 'error' })); })
+      .catch(() => setErr((e) => ({ ...e, [s]: 'network' })))
+      .finally(() => setLoading((l) => ({ ...l, [s]: false })));
+  }, []);
+
+  React.useEffect(() => { COMPARE_SYMS.forEach((s) => loadCoin(s)); }, [loadCoin]);
+
+  const pending = COMPARE_SYMS.filter((s) => loading[s]);
+  const anyPending = pending.length > 0;
+
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={Scale} title="Compare Coins" blurb={sec('compare').blurb} />
+
+      <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-violet-500/[0.06] p-4 ring-1 ring-sky-500/25">
+        <div className="flex items-center gap-3">
+          <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-sky-100">Albert</p>
+            {anyPending ? (
+              <p className="flex items-center gap-2 text-xs text-slate-300"><RefreshCw className="h-3.5 w-3.5 animate-spin text-violet-300" />Crunching the quant model on {pending.map((s) => COMPARE_NAMES[s]).join(', ')}… first run per coin takes a few seconds, then it’s cached.</p>
+            ) : (
+              <p className="text-xs text-slate-300">Here’s how the majors stack up on the same engine. Scores are 0–100 conviction; odds are probabilities, not promises — never financial advice.</p>
+            )}
+          </div>
+          <button onClick={() => COMPARE_SYMS.forEach((s) => loadCoin(s, true))} disabled={anyPending} className="flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:border-sky-500/40 hover:text-sky-300 disabled:opacity-50">
+            <RefreshCw className={`h-3.5 w-3.5 ${anyPending ? 'animate-spin' : ''}`} />Recompute all
+          </button>
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {COMPARE_SYMS.map((s) => {
+          if (data[s]) return <CompareCoinCard key={s} d={data[s]} />;
+          if (err[s]) return (
+            <Card key={s} className="flex flex-col items-center justify-center border-0 bg-slate-900 p-8 text-center ring-1 ring-slate-800">
+              <p className="text-sm font-bold text-white">{COMPARE_NAMES[s]}</p>
+              <p className="mt-1 text-xs text-red-300">Couldn’t load {s} data.</p>
+              <button onClick={() => loadCoin(s, true)} className="mt-3 rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800">Retry</button>
+            </Card>
+          );
+          return (
+            <Card key={s} className="flex flex-col items-center justify-center border-0 bg-slate-900 p-8 text-center ring-1 ring-slate-800">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-800 text-sm font-black text-sky-300">{s}</span>
+              <p className="mt-3 text-sm font-semibold text-white">{COMPARE_NAMES[s]}</p>
+              <p className="mt-2 flex items-center gap-2 text-xs text-slate-400"><RefreshCw className="h-3.5 w-3.5 animate-spin text-violet-300" />Albert is computing…</p>
+              <div className="mt-3 h-1 w-32 overflow-hidden rounded-full bg-slate-800"><div className="h-full w-1/2 animate-pulse rounded-full bg-violet-400/70" /></div>
+            </Card>
+          );
+        })}
+      </div>
+      <p className="text-[11px] text-slate-600">Same price-agnostic quant engine (trend, momentum, volatility, volume) applied per coin on daily data via Kraken/Coinbase. BTC-specific context (halving cycle, dominance) isn’t shown here as it doesn’t apply to alts. Research signals only — not financial advice.</p>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const [data, setData] = useState(__dashCache);
   const [status, setStatus] = useState(__dashCache ? 'ready' : 'loading');
@@ -3006,6 +3151,7 @@ export default function DashboardPage() {
   const renderSection = () => {
     if (active === 'overview') return <OverviewSection d={d} ticker={ticker} />;
     if (active === 'forecasts') return <ForecastsHubSection d={d} />;
+    if (active === 'compare') return <CompareSection />;
     if (active === 'market-intel') return <MarketIntelligenceSection d={d} />;
     if (active === 'smartmoney') return <DemoMetricsCard title="Smart Money" icon={Waves} panel={d.smart_money} sectionId="smartmoney" />;
     if (active === 'institutional') return <DemoMetricsCard title="Institutional" icon={Landmark} panel={d.institutional} sectionId="institutional" />;

@@ -114,7 +114,29 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
-  - task: "Albert AI section insight endpoint GET /api/v1/albert/insight?section=X (Gemini, cached per run)"
+  - task: "Albert insight endpoint: technical mode + refresh (GET /api/v1/albert/insight?section=X&mode=technical&refresh=1)"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Extended insight endpoint. Truncation FIXED (root cause: gemini thinking tokens exhausting budget + asyncio.run in sync-route threadpool). Now async route, gemini-3-flash-preview, max_tokens=8000, retry-until-complete, cache only complete. Added mode=plain|technical (separate cache key + technical system prompt) and refresh=1 (bypass cache, regenerate). Test: mode=plain and mode=technical both return status ready with full 90-180 word complete text (ends with sentence punctuation, NOT truncated). 2nd identical call cached=true. refresh=1 returns cached=false and regenerates. No 500s."
+  - task: "Compare Coins endpoints: GET /api/v1/compare/coins and GET /api/v1/compare/coin?symbol=BTC|ETH|SOL"
+    implemented: true
+    working: "NA"
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW. /compare/coins lists supported coins (BTC/ETH/SOL). /compare/coin?symbol=X runs the same quant pipeline (fetch ccxt daily -> build_features -> compute_quant_analysis) and returns {status:'ready', cached, data:{symbol,name,price,day_change_pct,quant_score,quant_label,regime,forecast_24h,forecast_7d,bullish,risk,support,resistance,spark[60],as_of}}. Cached per symbol per UTC day in compare_coins collection. First call ~6s (computes), 2nd call cached=true fast. Test all 3 symbols return ready with numeric price/quant_score and 60-point spark. Test refresh=1 recomputes (cached=false). Test unsupported symbol (e.g. DOGE) returns status 'error' reason 'unsupported_symbol' (NOT 500)."
+
     implemented: true
     working: false
     file: "backend/server.py"
