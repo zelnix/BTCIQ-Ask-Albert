@@ -86,8 +86,8 @@ const LEGACY_SECTIONS = [
   { id: 'trust', label: 'Data Trust', icon: ShieldCheck,
     blurb: 'Where every number comes from: the source, how fresh it is, and how reliable. If a live feed goes stale the odds are automatically toned down.' },
 ];
-const sec = (id) => sec(id)
-  || LEGACY_sec(id)
+const sec = (id) => SECTIONS.find(s => s.id === id)
+  || LEGACY_SECTIONS.find(s => s.id === id)
   || { id, label: id, icon: Info, blurb: '' };
 
 /* --------------------------- small components ------------------------ */
@@ -1303,6 +1303,50 @@ function BmScenarioCard({ h }) {
   );
 }
 
+function WhyChangedPanel({ bm }) {
+  const [open, setOpen] = React.useState(null);
+  const byName = {};
+  (bm.horizons || []).forEach((h) => { byName[h.label] = h; byName[h.horizon] = h; });
+  const changes = bm.changes || [];
+  return (
+    <Card className="border-0 bg-gradient-to-br from-sky-500/[0.06] to-slate-900 p-5 ring-1 ring-sky-500/20">
+      <div className="mb-2 flex items-center gap-2.5">
+        <img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-500/40" />
+        <h3 className="text-sm font-semibold text-white">Why the forecast changed</h3>
+      </div>
+      <p className="text-sm leading-relaxed text-slate-300">{bm.change_explanation}</p>
+      {changes.length > 0 ? (
+        <div className="mt-3 space-y-1.5">
+          {changes.map((c, i) => {
+            const h = byName[c.horizon];
+            const isOpen = open === i;
+            return (
+              <div key={i} className="rounded-lg border border-slate-800 bg-slate-950/40">
+                <button onClick={() => setOpen(isOpen ? null : i)} className="flex w-full items-center gap-3 p-2.5 text-left text-sm">
+                  <span className="w-10 font-bold text-slate-200">{c.horizon}</span>
+                  <span className="text-slate-400">prob. higher {c.from}% → {c.to}%</span>
+                  <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${c.prob_delta > 0 ? 'border-emerald-500/30 text-emerald-300' : c.prob_delta < 0 ? 'border-red-500/30 text-red-300' : 'border-slate-700 text-slate-400'}`}>{c.prob_delta > 0 ? '+' : ''}{c.prob_delta}pt</span>
+                  <span className="ml-auto text-slate-500">{isOpen ? '▲' : '▼'}</span>
+                </button>
+                {isOpen && h && (
+                  <div className="space-y-2 border-t border-slate-800 p-3 text-sm">
+                    <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2.5"><p className="text-[10px] font-semibold uppercase text-emerald-400">Supporting factor</p><p className="mt-0.5 text-slate-300">{h.top_positive}</p></div>
+                    <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-2.5"><p className="text-[10px] font-semibold uppercase text-red-400">Offsetting risk</p><p className="mt-0.5 text-slate-300">{h.top_risk}</p></div>
+                    <p className="text-[11px] text-slate-500">Affects the <span className="font-semibold text-slate-300">{c.horizon}</span> horizon · confidence {h.model_confidence} · expected volatility {h.expected_volatility}</p>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="mt-2 text-xs text-slate-500">No material change since the previous run — the drivers are steady.</p>
+      )}
+      <p className="mt-3 text-[11px] text-slate-600">Tap a horizon to see the strongest factor for and against it. Factors are the model’s current interpretation of live signals — not guaranteed causes.</p>
+    </Card>
+  );
+}
+
 function BitMarkSection({ d }) {
   const bm = d.bitmark;
   const [running, setRunning] = React.useState(false);
@@ -1352,17 +1396,7 @@ function BitMarkSection({ d }) {
         )}
       </Card>
 
-      <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-        <div className="mb-1 flex items-center gap-2"><Info className="h-4 w-4 text-sky-400" /><h3 className="text-sm font-semibold text-white">What changed since the last forecast</h3></div>
-        <p className="text-sm leading-relaxed text-slate-300">{bm.change_explanation}</p>
-        {bm.changes?.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-2">
-            {bm.changes.map((c, i) => (
-              <span key={i} className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${c.prob_delta > 0 ? 'border-emerald-500/30 text-emerald-300' : 'border-red-500/30 text-red-300'}`}>{c.horizon}: {c.from}%→{c.to}% ({c.prob_delta > 0 ? '+' : ''}{c.prob_delta})</span>
-            ))}
-          </div>
-        )}
-      </Card>
+      <WhyChangedPanel bm={bm} />
 
       <div>
         <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Model forecasts · 1 week to 1 year</p>
@@ -1416,11 +1450,97 @@ function Stat({ label, value, sub, color }) {
   );
 }
 
+function LedgerExplorer({ ledger }) {
+  const [fHz, setFHz] = React.useState('all');
+  const [fOut, setFOut] = React.useState('all');
+  const [fTrig, setFTrig] = React.useState('all');
+  const [limit, setLimit] = React.useState(25);
+  if (!ledger || ledger.length === 0) {
+    return (
+      <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+        <h3 className="mb-2 text-sm font-semibold text-white">Full Prediction Ledger</h3>
+        <p className="text-sm text-slate-500">The ledger is still being built — issued forecasts will appear here with full filters.</p>
+      </Card>
+    );
+  }
+  const horizons = ['all', ...Array.from(new Set(ledger.map((x) => x.horizon).filter(Boolean)))];
+  const triggers = ['all', ...Array.from(new Set(ledger.map((x) => x.trigger).filter(Boolean)))];
+  const rows = ledger.filter((x) => {
+    if (fHz !== 'all' && x.horizon !== fHz) return false;
+    if (fTrig !== 'all' && x.trigger !== fTrig) return false;
+    if (fOut === 'open' && x.resolved) return false;
+    if (fOut === 'correct' && !(x.resolved && x.correct)) return false;
+    if (fOut === 'incorrect' && !(x.resolved && x.correct === false)) return false;
+    return true;
+  });
+  const Sel = ({ value, onChange, opts, label }) => (
+    <label className="flex items-center gap-1.5 text-xs text-slate-400">
+      {label}
+      <select value={value} onChange={(e) => { onChange(e.target.value); setLimit(25); }}
+        className="rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-xs text-slate-200 focus:border-sky-500/50 focus:outline-none">
+        {opts.map((o) => <option key={o} value={o}>{o === 'all' ? 'All' : o}</option>)}
+      </select>
+    </label>
+  );
+  return (
+    <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <h3 className="text-sm font-semibold text-white">Full Prediction Ledger</h3>
+        <span className="text-[11px] text-slate-500">{rows.length} of {ledger.length}</span>
+        <div className="ml-auto flex flex-wrap gap-3">
+          <Sel value={fHz} onChange={setFHz} opts={horizons} label="Horizon" />
+          <Sel value={fOut} onChange={setFOut} opts={['all', 'open', 'correct', 'incorrect']} label="Outcome" />
+          <Sel value={fTrig} onChange={setFTrig} opts={triggers} label="Trigger" />
+        </div>
+      </div>
+      <div className="max-h-[520px] overflow-auto rounded-lg border border-slate-800">
+        <table className="w-full text-xs">
+          <thead className="sticky top-0 bg-slate-950/90 text-left uppercase tracking-wider text-slate-500">
+            <tr>
+              <th className="p-2">Issued</th><th className="p-2">Hz</th><th className="p-2">Dir</th>
+              <th className="p-2">Base</th><th className="p-2">Conf</th><th className="p-2">Trigger</th>
+              <th className="p-2">Regime</th><th className="p-2">Outcome</th><th className="p-2">Err</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, limit).map((x, i) => (
+              <tr key={i} className="border-t border-slate-800/70 hover:bg-slate-800/30">
+                <td className="p-2 text-slate-400">{x.issued_date || '—'}</td>
+                <td className="p-2 font-semibold text-slate-200">{x.horizon}</td>
+                <td className={`p-2 font-semibold ${x.direction === 'UP' ? 'text-emerald-400' : 'text-red-400'}`}>{x.direction === 'UP' ? '▲' : '▼'} {x.prob_higher != null ? `${x.direction === 'UP' ? x.prob_higher : (100 - x.prob_higher)}%` : ''}</td>
+                <td className="p-2 text-slate-300">{x.base != null ? fmtUsd(x.base) : '—'}</td>
+                <td className="p-2 text-slate-400">{x.confidence || '—'}{x.confidence_pct != null ? ` ${Math.round(x.confidence_pct)}%` : ''}</td>
+                <td className="p-2 text-slate-500">{x.trigger}</td>
+                <td className="p-2 text-slate-500">{x.regime || '—'}</td>
+                <td className="p-2">{!x.resolved ? <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-300">open</span> : x.correct ? <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300">correct</span> : <span className="rounded bg-red-500/10 px-1.5 py-0.5 text-red-300">missed</span>}</td>
+                <td className="p-2 text-slate-400">{x.abs_pct_error != null ? `${x.abs_pct_error}%` : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {rows.length > limit && (
+        <button onClick={() => setLimit(limit + 50)} className="mt-3 w-full rounded-lg border border-slate-700 py-2 text-xs text-slate-300 hover:bg-slate-800">Show more ({rows.length - limit} remaining)</button>
+      )}
+      <p className="mt-3 text-[11px] text-slate-600">Every forecast — winning and losing — is kept permanently. "Trigger" shows how it was issued (scheduled / manual / event / backtest walk-forward).</p>
+    </Card>
+  );
+}
+
 function ScorecardSection({ d }) {
   const pl = d.prediction_ledger;
+  const [sc, setSc] = React.useState(null);
+  React.useEffect(() => {
+    let on = true;
+    fetch('/api/v1/scorecard', { cache: 'no-store' })
+      .then((r) => r.json()).then((j) => { if (on && j.status === 'ready') setSc(j); })
+      .catch(() => {});
+    return () => { on = false; };
+  }, []);
   if (!pl) return <ComingSoonSection section={sec('scorecard')} />;
   const o = pl.overall;
   const accCol = o.accuracy == null ? undefined : scoreColor(o.accuracy);
+  const byRegime = (sc && sc.by_regime) || {};
   return (
     <div className="space-y-5">
       <SectionHead icon={ClipboardList} title="Prediction Ledger" blurb={sec('scorecard').blurb} />
@@ -1433,6 +1553,38 @@ function ScorecardSection({ d }) {
         <Stat label="Mean Abs. Error" value={o.mae_pct == null ? '—' : `${o.mae_pct}%`} sub="base-case price vs actual" />
         <Stat label="Range Hit Rate" value={o.range_hit_pct == null ? '—' : `${o.range_hit_pct}%`} sub="actual inside base range" />
       </div>
+
+      <InfoBlock>
+        <ul className="mt-1 space-y-1 text-slate-400">
+          <li><span className="font-semibold text-slate-200">Directional accuracy</span> — how often the up/down call was right. 50% is a coin flip; higher is better.</li>
+          <li><span className="font-semibold text-slate-200">Brier score</span> — how honest the probabilities are (0 = perfect, 0.25 = a 50/50 guess). Lower is better.</li>
+          <li><span className="font-semibold text-slate-200">Mean absolute error</span> — on average, how far the base-case price landed from reality (%).</li>
+          <li><span className="font-semibold text-slate-200">Range hit rate</span> — how often price actually finished inside the base range we quoted.</li>
+        </ul>
+      </InfoBlock>
+
+      {Object.keys(byRegime).length > 0 && (
+        <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+          <h3 className="mb-3 text-sm font-semibold text-white">Results by Market Regime</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-[11px] uppercase tracking-wider text-slate-500">
+                <th className="pb-2">Regime</th><th className="pb-2">Graded</th><th className="pb-2">Accuracy</th><th className="pb-2">Brier</th><th className="pb-2">MAE</th></tr></thead>
+              <tbody>
+                {Object.entries(byRegime).map(([rg, r]) => (
+                  <tr key={rg} className="border-t border-slate-800">
+                    <td className="py-2 font-semibold text-slate-200">{rg}</td>
+                    <td className="py-2 text-slate-400">{r.n}</td>
+                    <td className="py-2 font-bold" style={{ color: scoreColor(r.accuracy) }}>{r.accuracy}%</td>
+                    <td className="py-2 text-slate-300">{r.brier ?? '—'}</td>
+                    <td className="py-2 text-slate-300">{r.mae_pct == null ? '—' : `${r.mae_pct}%`}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       {Object.keys(pl.by_horizon).length > 0 && (
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
@@ -1528,6 +1680,8 @@ function ScorecardSection({ d }) {
           )}
         </Card>
       </div>
+
+      <LedgerExplorer ledger={sc?.ledger} />
     </div>
   );
 }
@@ -1649,10 +1803,13 @@ function AskQuantSection({ d }) {
 
   const suggestions = [
     'Summarise the current Bitcoin market state in plain English.',
-    'Why is the quant score where it is right now?',
-    "What's the 7-day outlook and how confident is it?",
-    'How is the latest news affecting the forecast?',
-    'What are the biggest risks right now?',
+    'Why did the forecast change?',
+    'What is currently moving Bitcoin?',
+    'Which signal carries the greatest risk?',
+    'What evidence contradicts the current forecast?',
+    'What would invalidate the bullish outlook?',
+    'Why is the model confidence only moderate?',
+    'What is the difference between model confidence and data confidence?',
   ];
 
   const send = async (text) => {

@@ -1667,9 +1667,40 @@ def compute_scorecard():
 
     recent = sorted([x for x in resolved if x.get('trigger') != 'backtest'],
                     key=lambda z: z.get('resolved_at', ''), reverse=True)[:15]
+
+    # Performance grouped by market regime (real resolved forecasts that carry a regime)
+    by_regime = {}
+    regimes = set(x.get('regime') for x in resolved if x.get('regime'))
+    for rg in regimes:
+        a = agg([x for x in resolved if x.get('regime') == rg])
+        if a:
+            by_regime[rg] = a
+
+    # Filterable ledger: every open forecast + resolved live + a capped slice of backtested,
+    # each normalised with the fields the UI filters on. Nothing is deleted or hidden.
+    def _norm(x):
+        return {
+            'issued_date': x.get('as_of'), 'horizon': x.get('horizon'),
+            'price_at_issue': x.get('price_at_issue'),
+            'base': x.get('base'), 'bull': x.get('bull'), 'bear': x.get('bear'),
+            'prob_higher': x.get('prob_higher'), 'prob_lower': x.get('prob_lower'),
+            'direction': x.get('direction'),
+            'confidence': x.get('confidence'), 'confidence_pct': x.get('confidence_pct'),
+            'model_version': x.get('model_version'), 'trigger': x.get('trigger'),
+            'regime': x.get('regime'), 'target_date': x.get('target_date'),
+            'actual_close': x.get('actual_close'), 'actual_direction': x.get('actual_direction'),
+            'correct': x.get('correct'), 'abs_pct_error': x.get('abs_pct_error'),
+            'range_hit': x.get('range_hit'), 'resolved': x.get('resolved'),
+        }
+    resolved_live = sorted([x for x in resolved if x.get('trigger') != 'backtest'],
+                           key=lambda z: z.get('resolved_at', ''), reverse=True)
+    resolved_bt = sorted([x for x in resolved if x.get('trigger') == 'backtest'],
+                         key=lambda z: z.get('as_of', ''), reverse=True)[:150]
+    ledger = [_norm(p) for p in pending] + [_norm(x) for x in resolved_live] + [_norm(x) for x in resolved_bt]
+
     return {
-        'overall': overall, 'by_horizon': by_h, 'calibration': calib,
-        'pending': pending[:24], 'recent': recent,
+        'overall': overall, 'by_horizon': by_h, 'by_regime': by_regime, 'calibration': calib,
+        'pending': pending[:24], 'recent': recent, 'ledger': ledger,
         'total_logged': predictions_col.count_documents({}),
         'live_logged': predictions_col.count_documents({'trigger': {'$ne': 'backtest'}}),
         'backtested': predictions_col.count_documents({'trigger': 'backtest'}),
