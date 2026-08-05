@@ -817,9 +817,42 @@ def fetch_news():
     doc = {'id': str(uuid.uuid4()), 'created_at': datetime.datetime.utcnow().isoformat(),
            'cards': cards, 'briefing': briefing,
            'model': (GEMINI_MODEL if (EMERGENT_LLM_KEY and _HAS_LLM) else 'rule-based')}
+    try:
+        fire_news_alerts(cards)
+    except Exception:  # noqa
+        traceback.print_exc()
     news_col.delete_many({})
     news_col.insert_one({**doc, '_id': doc['id']})
     return doc
+
+
+def fire_news_alerts(cards):
+    """Turn each Confirmed, high-impact story into a Smart Alert (once ever, per story)."""
+    as_of = datetime.date.today().isoformat()
+    now_iso = datetime.datetime.utcnow().isoformat()
+    for c in cards:
+        if c.get('verification') != 'Confirmed' or int(c.get('impact', 0) or 0) < 70:
+            continue
+        key = 'news_' + _norm_title(c.get('title', ''))
+        if not key or key == 'news_':
+            continue
+        fi = c.get('forecast_impact') or {}
+        why = (c.get('ai') or {}).get('why_it_matters') or (c.get('ai') or {}).get('summary') or ''
+        sev = 'high' if int(c.get('impact', 0)) >= 85 else 'warning'
+        msg = f"{why} Effect on BitMarkAI forecast: {fi.get('note', 'neutral')}".strip()
+        try:
+            smart_alerts_col.update_one(
+                {'_id': key},
+                {'$setOnInsert': {
+                    '_id': key, 'id': key, 'ts': now_iso, 'as_of': as_of,
+                    'category': 'News', 'severity': sev,
+                    'title': c.get('title', 'High-impact story')[:120],
+                    'message': msg[:400], 'seen': False,
+                    'link': c.get('link'), 'impact': int(c.get('impact', 0)),
+                    'forecast_nudge': fi.get('nudge_pts'),
+                }}, upsert=True)
+        except Exception:  # noqa
+            traceback.print_exc()
 
 
 _news_state = {'status': 'idle', 'error': None}
