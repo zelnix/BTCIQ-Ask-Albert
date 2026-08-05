@@ -546,7 +546,9 @@ function TradingViewChart({ height = 460 }) {
         </div>
       )}
 
-      <div ref={ref} className="tradingview-widget-container w-full flex-1" style={{ height: fs ? 'calc(100vh - 42px)' : height, minHeight: fs ? undefined : height }} />
+      <div className="w-full" style={{ height: fs ? 'calc(100vh - 42px)' : height }}>
+        <div ref={ref} className="tradingview-widget-container" style={{ height: '100%', width: '100%' }} />
+      </div>
     </Card>
   );
 }
