@@ -569,10 +569,12 @@ function OverviewSection({ d, ticker }) {
     <div className="space-y-5">
       <SectionHead icon={LayoutDashboard} title="Overview" blurb={SECTIONS[0].blurb} />
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-        <MarketStateHero d={d} ticker={ticker} />
+        <div className="flex flex-col gap-4">
+          <MarketStateHero d={d} ticker={ticker} />
+          <AlbertIntroCard />
+        </div>
         <OverviewChart d={d} />
       </div>
-      <AlbertIntroCard />
       <DecisionEngineCard d={d} />
       <AiReview text={reviewOverview(d)} voice />
 
