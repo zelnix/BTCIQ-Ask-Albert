@@ -2898,7 +2898,7 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
     if not refresh:
         cached = insights_col.find_one({'_id': cache_id}, {'_id': 0})
         if cached and cached.get('text'):
-            return {'status': 'ready', 'section': section, 'mode': mode, 'text': cached['text'], 'model': cached.get('model'), 'cached': True}
+            return {'status': 'ready', 'section': section, 'mode': mode, 'text': cached['text'], 'model': cached.get('model'), 'generated_at': cached.get('created_at'), 'cached': True}
     if not (EMERGENT_LLM_KEY and _HAS_LLM):
         return {'status': 'fallback', 'reason': 'llm_unconfigured'}
     try:
@@ -2931,13 +2931,14 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
         if not text:
             return {'status': 'fallback', 'reason': 'empty'}
         # Only cache complete responses so an occasional partial regenerates on the next load.
+        now_iso = datetime.datetime.utcnow().isoformat()
         if _complete(text):
             insights_col.update_one(
                 {'_id': cache_id},
                 {'$set': {'_id': cache_id, 'section': section, 'mode': mode, 'version': version, 'text': text,
-                          'model': CHAT_MODEL, 'created_at': datetime.datetime.utcnow().isoformat()}},
+                          'model': CHAT_MODEL, 'created_at': now_iso}},
                 upsert=True)
-        return {'status': 'ready', 'section': section, 'mode': mode, 'text': text, 'model': CHAT_MODEL, 'cached': False}
+        return {'status': 'ready', 'section': section, 'mode': mode, 'text': text, 'model': CHAT_MODEL, 'generated_at': now_iso, 'cached': False}
     except Exception as ex:  # noqa
         traceback.print_exc()
         return {'status': 'fallback', 'reason': 'error'}
@@ -2951,6 +2952,15 @@ COMPARE_COINS = {
     'BTC': {'name': 'Bitcoin', 'pairs': [('kraken', 'BTC/USD'), ('coinbase', 'BTC/USD')]},
     'ETH': {'name': 'Ethereum', 'pairs': [('kraken', 'ETH/USD'), ('coinbase', 'ETH/USD')]},
     'SOL': {'name': 'Solana', 'pairs': [('kraken', 'SOL/USD'), ('coinbase', 'SOL/USD')]},
+    'XRP': {'name': 'XRP', 'pairs': [('kraken', 'XRP/USD'), ('coinbase', 'XRP/USD')]},
+    'ADA': {'name': 'Cardano', 'pairs': [('kraken', 'ADA/USD'), ('coinbase', 'ADA/USD')]},
+    'DOGE': {'name': 'Dogecoin', 'pairs': [('kraken', 'DOGE/USD'), ('coinbase', 'DOGE/USD')]},
+    'AVAX': {'name': 'Avalanche', 'pairs': [('kraken', 'AVAX/USD'), ('coinbase', 'AVAX/USD')]},
+    'LINK': {'name': 'Chainlink', 'pairs': [('kraken', 'LINK/USD'), ('coinbase', 'LINK/USD')]},
+    'DOT': {'name': 'Polkadot', 'pairs': [('kraken', 'DOT/USD'), ('coinbase', 'DOT/USD')]},
+    'LTC': {'name': 'Litecoin', 'pairs': [('kraken', 'LTC/USD'), ('coinbase', 'LTC/USD')]},
+    'MATIC': {'name': 'Polygon', 'pairs': [('kraken', 'MATIC/USD'), ('coinbase', 'MATIC/USD')]},
+    'ATOM': {'name': 'Cosmos', 'pairs': [('kraken', 'ATOM/USD'), ('coinbase', 'ATOM/USD')]},
 }
 
 

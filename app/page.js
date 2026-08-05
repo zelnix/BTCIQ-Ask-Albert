@@ -12,7 +12,7 @@ import {
   Check, X, LayoutDashboard, Target, FlaskConical, Bell, MessageCircle,
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
-  Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet,
+  Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet, Plus, Clock,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -187,6 +187,8 @@ function AiReview({ text, voice, section, footer }) {
   const [speaking, setSpeaking] = React.useState(false);
   const [mode, setMode] = React.useState('plain');
   const [cache, setCache] = React.useState({ plain: null, technical: null });
+  const [genAt, setGenAt] = React.useState({ plain: null, technical: null });
+  const [now, setNow] = React.useState(Date.now());
   const [loading, setLoading] = React.useState(!!section);
 
   const load = React.useCallback((m, force) => {
@@ -194,12 +196,19 @@ function AiReview({ text, voice, section, footer }) {
     setLoading(true);
     fetch(`/api/v1/albert/insight?section=${encodeURIComponent(section)}&mode=${m}${force ? '&refresh=1' : ''}`)
       .then((r) => r.json())
-      .then((j) => { if (j && j.status === 'ready' && j.text) setCache((c) => ({ ...c, [m]: j.text })); })
+      .then((j) => { if (j && j.status === 'ready' && j.text) { setCache((c) => ({ ...c, [m]: j.text })); setGenAt((g) => ({ ...g, [m]: j.generated_at || new Date().toISOString() })); } })
       .catch(() => { /* keep fallback */ })
       .finally(() => setLoading(false));
   }, [section]);
 
   React.useEffect(() => { if (section) load('plain'); }, [section, load]);
+  // tick for "updated X ago" + auto-refresh on new compute data every 5 min (cached, cheap)
+  React.useEffect(() => {
+    if (!section) return;
+    const tick = setInterval(() => setNow(Date.now()), 30000);
+    const refresh = setInterval(() => load(mode), 300000);
+    return () => { clearInterval(tick); clearInterval(refresh); };
+  }, [section, mode, load]);
 
   const switchMode = (m) => {
     setMode(m);
@@ -209,6 +218,17 @@ function AiReview({ text, voice, section, footer }) {
 
   const aiText = cache[mode];
   const shown = aiText || (mode === 'plain' ? text : (loading ? 'Albert is writing the technical briefing…' : text));
+  const agoLabel = (() => {
+    const iso = genAt[mode];
+    if (!iso) return null;
+    const secs = Math.max(0, Math.floor((now - new Date(iso + (iso.endsWith('Z') ? '' : 'Z')).getTime()) / 1000));
+    if (secs < 60) return 'just now';
+    const m = Math.floor(secs / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  })();
 
   const speak = () => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
@@ -236,6 +256,7 @@ function AiReview({ text, voice, section, footer }) {
         ) : loading ? (
           <span className="flex items-center gap-1.5 text-[10px] text-slate-400"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />Albert is thinking…</span>
         ) : null}
+        {aiText && agoLabel && <span className="flex items-center gap-1 text-[10px] text-slate-500"><Clock className="h-2.5 w-2.5" />updated {agoLabel}</span>}
 
         <div className="ml-auto flex items-center gap-1.5">
           {section && (
@@ -2379,6 +2400,18 @@ function AskQuantSection({ d }) {
               </div>
             </div>
           )}
+          {!loading && messages.length > 0 && messages[messages.length - 1].role === 'assistant' && (
+            <div className="flex flex-wrap gap-2 pl-9">
+              {[
+                ["Explain like I’m 5", "Explain your last answer like I’m 5 years old, in very simple plain words."],
+                ["Give me the risks", "What are the main risks or things that could go wrong with what you just told me?"],
+                ["What would change your mind?", "What would have to happen for your view to change?"],
+                ["What do I watch next?", "In one or two lines, what key levels or signals should I watch next?"],
+              ].map(([label, prompt]) => (
+                <button key={label} onClick={() => send(prompt)} className="rounded-full border border-slate-700 bg-slate-800/50 px-3 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-sky-500/40 hover:text-sky-300">{label}</button>
+              ))}
+            </div>
+          )}
           <div ref={endRef} />
         </div>
         <div className="border-t border-slate-800 p-3">
@@ -2922,11 +2955,12 @@ function CoinSparkline({ data, up }) {
 
 function oddsColor(v) { return v == null ? '#94a3b8' : (v >= 55 ? '#34d399' : (v <= 45 ? '#f87171' : '#fbbf24')); }
 
-function CompareCoinCard({ d }) {
+function CompareCoinCard({ d, onRemove }) {
   const up = (d.day_change_pct || 0) >= 0;
   return (
-    <Card className="flex flex-col border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-      <div className="mb-3 flex items-center gap-2">
+    <Card className="relative flex flex-col border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+      {onRemove && <button onClick={onRemove} title="Remove coin" className="absolute right-2 top-2 rounded-full p-1 text-slate-500 hover:bg-slate-800 hover:text-red-300"><X className="h-3.5 w-3.5" /></button>}
+      <div className="mb-3 flex items-center gap-2 pr-6">
         <span className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-800 text-sm font-black text-sky-300">{d.symbol}</span>
         <div className="flex-1">
           <p className="text-sm font-bold text-white">{d.name}</p>
@@ -2972,9 +3006,15 @@ function CompareCoinCard({ d }) {
 }
 
 function CompareSection() {
+  const [selected, setSelected] = React.useState(['BTC', 'ETH', 'SOL']);
+  const [allCoins, setAllCoins] = React.useState([]);
   const [data, setData] = React.useState({});
   const [loading, setLoading] = React.useState({ BTC: true, ETH: true, SOL: true });
   const [err, setErr] = React.useState({});
+
+  React.useEffect(() => {
+    fetch('/api/v1/compare/coins').then((r) => r.json()).then((j) => { if (j.coins) setAllCoins(j.coins); }).catch(() => {});
+  }, []);
 
   const loadCoin = React.useCallback((s, force) => {
     setLoading((l) => ({ ...l, [s]: true }));
@@ -2986,46 +3026,61 @@ function CompareSection() {
       .finally(() => setLoading((l) => ({ ...l, [s]: false })));
   }, []);
 
-  React.useEffect(() => { COMPARE_SYMS.forEach((s) => loadCoin(s)); }, [loadCoin]);
+  React.useEffect(() => { selected.forEach((s) => { if (!data[s] && !err[s]) loadCoin(s); }); }, [selected, loadCoin, data, err]);
 
-  const pending = COMPARE_SYMS.filter((s) => loading[s]);
+  const addCoin = (s) => { if (s && !selected.includes(s)) setSelected((sel) => [...sel, s]); };
+  const removeCoin = (s) => setSelected((sel) => sel.length > 1 ? sel.filter((x) => x !== s) : sel);
+
+  const nameOf = (s) => (allCoins.find((c) => c.symbol === s)?.name) || COMPARE_NAMES[s] || s;
+  const pending = selected.filter((s) => loading[s] && !data[s]);
   const anyPending = pending.length > 0;
+  const available = allCoins.filter((c) => !selected.includes(c.symbol));
 
   return (
     <div className="space-y-5">
       <SectionHead icon={Scale} title="Compare Coins" blurb={sec('compare').blurb} />
 
       <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-violet-500/[0.06] p-4 ring-1 ring-sky-500/25">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
-          <div className="flex-1">
+          <div className="min-w-[220px] flex-1">
             <p className="text-sm font-semibold text-sky-100">Albert</p>
             {anyPending ? (
-              <p className="flex items-center gap-2 text-xs text-slate-300"><RefreshCw className="h-3.5 w-3.5 animate-spin text-violet-300" />Crunching the quant model on {pending.map((s) => COMPARE_NAMES[s]).join(', ')}… first run per coin takes a few seconds, then it’s cached.</p>
+              <p className="flex items-center gap-2 text-xs text-slate-300"><RefreshCw className="h-3.5 w-3.5 animate-spin text-violet-300" />Crunching the quant model on {pending.map((s) => nameOf(s)).join(', ')}… first run per coin takes a few seconds, then it’s cached.</p>
             ) : (
-              <p className="text-xs text-slate-300">Here’s how the majors stack up on the same engine. Scores are 0–100 conviction; odds are probabilities, not promises — never financial advice.</p>
+              <p className="text-xs text-slate-300">Add any coin below to run it on the same engine. Scores are 0–100 conviction; odds are probabilities, not promises — never financial advice.</p>
             )}
           </div>
-          <button onClick={() => COMPARE_SYMS.forEach((s) => loadCoin(s, true))} disabled={anyPending} className="flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:border-sky-500/40 hover:text-sky-300 disabled:opacity-50">
-            <RefreshCw className={`h-3.5 w-3.5 ${anyPending ? 'animate-spin' : ''}`} />Recompute all
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 rounded-full border border-slate-700 bg-slate-800/60 px-2 py-1">
+              <Plus className="h-3.5 w-3.5 text-sky-300" />
+              <select value="" onChange={(e) => { addCoin(e.target.value); e.target.value = ''; }} disabled={!available.length} className="bg-transparent text-xs font-semibold text-slate-200 focus:outline-none disabled:opacity-50">
+                <option value="" className="bg-slate-900">{available.length ? 'Add a coin…' : 'All added'}</option>
+                {available.map((c) => <option key={c.symbol} value={c.symbol} className="bg-slate-900">{c.symbol} · {c.name}</option>)}
+              </select>
+            </div>
+            <button onClick={() => selected.forEach((s) => loadCoin(s, true))} disabled={anyPending} className="flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:border-sky-500/40 hover:text-sky-300 disabled:opacity-50">
+              <RefreshCw className={`h-3.5 w-3.5 ${anyPending ? 'animate-spin' : ''}`} />Recompute
+            </button>
+          </div>
         </div>
       </Card>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {COMPARE_SYMS.map((s) => {
-          if (data[s]) return <CompareCoinCard key={s} d={data[s]} />;
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        {selected.map((s) => {
+          if (data[s]) return <CompareCoinCard key={s} d={data[s]} onRemove={() => removeCoin(s)} />;
           if (err[s]) return (
-            <Card key={s} className="flex flex-col items-center justify-center border-0 bg-slate-900 p-8 text-center ring-1 ring-slate-800">
-              <p className="text-sm font-bold text-white">{COMPARE_NAMES[s]}</p>
-              <p className="mt-1 text-xs text-red-300">Couldn’t load {s} data.</p>
+            <Card key={s} className="relative flex flex-col items-center justify-center border-0 bg-slate-900 p-8 text-center ring-1 ring-slate-800">
+              <button onClick={() => removeCoin(s)} className="absolute right-2 top-2 rounded-full p-1 text-slate-500 hover:text-red-300"><X className="h-3.5 w-3.5" /></button>
+              <p className="text-sm font-bold text-white">{nameOf(s)}</p>
+              <p className="mt-1 text-xs text-red-300">Couldn’t load {s} — this market may not be available.</p>
               <button onClick={() => loadCoin(s, true)} className="mt-3 rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-slate-800">Retry</button>
             </Card>
           );
           return (
             <Card key={s} className="flex flex-col items-center justify-center border-0 bg-slate-900 p-8 text-center ring-1 ring-slate-800">
               <span className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-800 text-sm font-black text-sky-300">{s}</span>
-              <p className="mt-3 text-sm font-semibold text-white">{COMPARE_NAMES[s]}</p>
+              <p className="mt-3 text-sm font-semibold text-white">{nameOf(s)}</p>
               <p className="mt-2 flex items-center gap-2 text-xs text-slate-400"><RefreshCw className="h-3.5 w-3.5 animate-spin text-violet-300" />Albert is computing…</p>
               <div className="mt-3 h-1 w-32 overflow-hidden rounded-full bg-slate-800"><div className="h-full w-1/2 animate-pulse rounded-full bg-violet-400/70" /></div>
             </Card>
