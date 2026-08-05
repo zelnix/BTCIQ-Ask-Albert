@@ -336,7 +336,14 @@ function StateItem({ label, value, sub, color, big, hint }) {
     <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
       <p className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">
         {label}
-        {hint && <span title={hint} className="cursor-help text-slate-600 hover:text-sky-400">ⓘ</span>}
+        {hint && (
+          <span className="group/info relative inline-flex cursor-help text-slate-600 hover:text-sky-400">
+            <Info className="h-3 w-3" />
+            <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-1.5 w-52 -translate-x-1/2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-[11px] font-normal normal-case leading-snug tracking-normal text-slate-200 opacity-0 shadow-xl transition-opacity duration-150 group-hover/info:opacity-100">
+              {hint}
+            </span>
+          </span>
+        )}
       </p>
       <p className={`mt-1 font-black ${big ? 'text-2xl' : 'text-lg'}`} style={color ? { color } : undefined}>{value}</p>
       {sub && <p className="text-[11px] text-slate-500">{sub}</p>}
