@@ -283,15 +283,38 @@ function AiReview({ text, voice, section, footer }) {
   );
 }
 
-const SectionHead = ({ icon: Icon, title, blurb }) => (
-  <div className="space-y-3">
+const SectionHead = ({ icon: Icon, title, blurb }) => {
+  const [open, setOpen] = React.useState(false);
+  return (
     <div className="flex items-center gap-2">
       <Icon className="h-6 w-6 text-sky-400" />
       <h1 className="text-2xl font-bold tracking-tight text-white">{title}</h1>
+      {blurb && (
+        <div className="relative">
+          <button
+            type="button"
+            aria-label="What is this section?"
+            title="What is this section?"
+            onClick={() => setOpen((o) => !o)}
+            className={`flex h-7 w-7 items-center justify-center rounded-full border transition-colors ${open ? 'border-sky-400 bg-sky-500/20 text-sky-200' : 'border-sky-500/30 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20'}`}
+          >
+            <Info className="h-4 w-4" />
+          </button>
+          {open && (
+            <>
+              <div className="fixed inset-0 z-[70]" onClick={() => setOpen(false)} />
+              <div className="absolute left-0 top-full z-[80] mt-2 w-[min(30rem,90vw)]">
+                <div className="rounded-lg bg-slate-900 shadow-2xl ring-1 ring-slate-700">
+                  <InfoBlock>{blurb}</InfoBlock>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
-    <InfoBlock>{blurb}</InfoBlock>
-  </div>
-);
+  );
+};
 
 /* ---------------------------- AI reviews ----------------------------- */
 const f24 = (d) => (d.forecasts || []).find((x) => x.horizon === '24H');
