@@ -347,9 +347,10 @@ def fetch_dominance(price_change_24h):
         interp = 'Price down + dominance up: defensive rotation out of altcoins into Bitcoin.'
     else:
         interp = 'Price down + dominance down: broad crypto-market weakness.'
+    history = [{'date': h['date'], 'dominance': h['dominance']} for h in reversed(hist)][-30:]
     return {'dominance': dom, 'total_mcap_t': round(total / 1e12, 3),
             'change_7d': d7, 'change_30d': d30, 'direction': dom_dir,
-            'interpretation': interp, 'history_points': len(hist)}
+            'interpretation': interp, 'history_points': len(hist), 'history': history}
 
 
 COINGECKO_IDS = {
@@ -396,7 +397,6 @@ def compute_coin_dominance(symbol, price_change_24h):
         if len(hist) <= days:
             return None
         return round(dom - hist[days]['dominance'], 3)
-
     d7 = change_over(7)
     d30 = change_over(30)
     dom_dir = 'Neutral'
@@ -415,10 +415,11 @@ def compute_coin_dominance(symbol, price_change_24h):
         interp = f'Price down but share rising: {name} is holding up better than the market.'
     else:
         interp = f'Price down + share falling: {name} is underperforming the broader market.'
+    history = [{'date': h['date'], 'dominance': h['dominance']} for h in reversed(hist)][-30:]
     return {'dominance': dom, 'total_mcap_t': round(total / 1e12, 3),
             'mcap_usd': round(mcap) if mcap else None,
             'change_7d': d7, 'change_30d': d30, 'direction': dom_dir,
-            'interpretation': interp, 'history_points': len(hist)}
+            'interpretation': interp, 'history_points': len(hist), 'history': history}
 
 
 def _swings(series, order=4):

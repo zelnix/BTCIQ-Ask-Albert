@@ -559,7 +559,26 @@ const RISK_TXT = {
   Elevated: 'text-amber-400', High: 'text-orange-400', Extreme: 'text-red-400',
 };
 
-function StateItem({ label, value, sub, color, big, hint }) {
+function MiniSpark({ points, height = 20, width = 72 }) {
+  const vals = (points || []).map((p) => (p && typeof p.dominance === 'number' ? p.dominance : null)).filter((v) => v != null);
+  if (vals.length < 2) {
+    return <p className="mt-1 text-[9px] italic text-slate-600">building history…</p>;
+  }
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const rng = (max - min) || 1;
+  const step = width / (vals.length - 1);
+  const path = vals.map((v, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${(height - ((v - min) / rng) * (height - 3) - 1.5).toFixed(1)}`).join(' ');
+  const up = vals[vals.length - 1] >= vals[0];
+  const stroke = up ? '#34d399' : '#f87171';
+  return (
+    <svg width={width} height={height} className="mt-1.5 block" aria-hidden>
+      <path d={path} fill="none" stroke={stroke} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function StateItem({ label, value, sub, color, big, hint, spark }) {
   return (
     <TapInfo text={hint} className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
       <p className="flex items-center gap-1 pr-4 text-[10px] font-medium uppercase tracking-wider text-slate-500">
@@ -567,6 +586,7 @@ function StateItem({ label, value, sub, color, big, hint }) {
       </p>
       <p className={`mt-1 font-black ${big ? 'text-2xl' : 'text-lg'}`} style={color ? { color } : undefined}>{value}</p>
       {sub && <p className="text-[11px] text-slate-500">{sub}</p>}
+      {spark}
     </TapInfo>
   );
 }
@@ -620,7 +640,8 @@ function MarketStateHero({ d, ticker }) {
         <StateItem label="Model Confidence" value={modelConf} sub="how sure the model is" hint="How strong the model's own conviction is, based on how well it has done in similar past setups." />
         <StateItem label="Market Share" value={d.dominance ? `${d.dominance.dominance}%` : '—'}
           sub={d.dominance ? `of $${d.dominance.total_mcap_t}T${d.dominance.direction && d.dominance.direction !== 'Neutral' ? ` · ${d.dominance.direction}` : ''}` : ''}
-          hint={`${coinName}'s share of the total crypto market cap (its "dominance"). Rising share means capital is rotating toward it; falling share means the rest of the market is outpacing it.`} />
+          spark={d.dominance ? <MiniSpark points={d.dominance.history} /> : null}
+          hint={`${coinName}'s share of the total crypto market cap (its "dominance"), with a mini trend of the last few days once history builds up. Rising share means capital is rotating toward it; falling share means the rest of the market is outpacing it.`} />
         <StateItem label="Data Confidence" value={dh.level || '—'} sub={dh.score != null ? `${dh.score}/100 feeds` : ''} hint="How fresh and reliable the underlying data feeds are. If feeds go stale, the odds are automatically toned down." />
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
