@@ -303,8 +303,10 @@ const SectionHead = ({ icon: Icon, title, blurb }) => {
           {open && (
             <>
               <div className="fixed inset-0 z-[70]" onClick={() => setOpen(false)} />
-              <div className="absolute left-0 top-full z-[80] mt-2 w-[min(30rem,90vw)]">
-                <div className="rounded-lg bg-slate-900 shadow-2xl ring-1 ring-slate-700">
+              <div className="absolute left-0 top-full z-[80] mt-2 w-[min(30rem,90vw)] origin-top-left animate-in fade-in-0 zoom-in-95 slide-in-from-top-1 duration-200 ease-out">
+                {/* caret arrow anchored under the info button */}
+                <div className="absolute -top-1.5 left-2.5 h-3 w-3 rotate-45 rounded-[2px] border-l border-t border-slate-700 bg-slate-900" />
+                <div className="relative rounded-lg bg-slate-900 shadow-2xl ring-1 ring-slate-700">
                   <InfoBlock>{blurb}</InfoBlock>
                 </div>
               </div>
