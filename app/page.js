@@ -143,7 +143,7 @@ const InfoBlock = ({ children }) => (
 );
 
 // Reusable explainer tooltip. Shows on hover AND on tap/click (mobile-friendly). Bigger, readable popup.
-function InfoTip({ text, below, className = '' }) {
+function InfoTip({ text, below = true, className = '' }) {
   const [open, setOpen] = React.useState(false);
   return (
     <span
@@ -153,9 +153,14 @@ function InfoTip({ text, below, className = '' }) {
       onMouseLeave={() => setOpen(false)}
     >
       <Info className="h-3.5 w-3.5" />
-      <span className={`absolute left-1/2 z-[70] w-72 max-w-[80vw] -translate-x-1/2 rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-[13px] font-normal normal-case leading-relaxed tracking-normal text-slate-100 shadow-2xl transition-opacity duration-150 ${below ? 'top-full mt-2' : 'bottom-full mb-2'} ${open ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
-        {text}
-      </span>
+      {open && (
+        <span className={`absolute left-1/2 z-[70] w-72 max-w-[80vw] -translate-x-1/2 animate-in fade-in-0 zoom-in-95 duration-200 ease-out ${below ? 'top-full mt-2 origin-top slide-in-from-top-1' : 'bottom-full mb-2 origin-bottom slide-in-from-bottom-1'}`}>
+          <span className={`absolute left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 rounded-[2px] bg-slate-900 ${below ? '-top-1.5 border-l border-t border-slate-600' : '-bottom-1.5 border-b border-r border-slate-600'}`} />
+          <span className="relative block rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-[13px] font-normal normal-case leading-relaxed tracking-normal text-slate-100 shadow-2xl">
+            {text}
+          </span>
+        </span>
+      )}
     </span>
   );
 }
@@ -172,9 +177,12 @@ function TapInfo({ text, className = '', below = true, children }) {
     >
       {text && <span className="absolute right-2 top-2 z-10 text-slate-500 transition-colors group-hover/info:text-sky-400"><Info className="h-3.5 w-3.5" /></span>}
       {children}
-      {text && (
-        <div className={`absolute left-1/2 z-[70] w-72 max-w-[80vw] -translate-x-1/2 rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-[13px] leading-relaxed text-slate-100 shadow-2xl transition-opacity duration-150 ${below ? 'top-full mt-2' : 'bottom-full mb-2'} ${open ? 'opacity-100' : 'pointer-events-none opacity-0'}`}>
-          {text}
+      {text && open && (
+        <div className={`absolute left-1/2 z-[70] w-72 max-w-[80vw] -translate-x-1/2 animate-in fade-in-0 zoom-in-95 duration-200 ease-out ${below ? 'top-full mt-2 origin-top slide-in-from-top-1' : 'bottom-full mb-2 origin-bottom slide-in-from-bottom-1'}`}>
+          <div className={`absolute left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 rounded-[2px] bg-slate-900 ${below ? '-top-1.5 border-l border-t border-slate-600' : '-bottom-1.5 border-b border-r border-slate-600'}`} />
+          <div className="relative rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-[13px] leading-relaxed text-slate-100 shadow-2xl">
+            {text}
+          </div>
         </div>
       )}
     </div>
