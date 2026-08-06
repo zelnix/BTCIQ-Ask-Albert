@@ -13,6 +13,7 @@ import {
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
   Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet, Plus, Clock,
+  ChevronDown, Coins,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -92,6 +93,14 @@ const LEGACY_SECTIONS = [
 const sec = (id) => SECTIONS.find(s => s.id === id)
   || LEGACY_SECTIONS.find(s => s.id === id)
   || { id, label: id, icon: Info, blurb: '' };
+
+// Sections that are Bitcoin-specific and hidden from the nav when an altcoin is selected.
+const BTC_ONLY_SECTIONS = ['smartmoney', 'institutional', 'macro', 'events', 'timemachine'];
+// Sections removed from the app entirely (superseded by the global coin picker).
+const REMOVED_SECTIONS = ['compare'];
+// The currently-selected coin flows through this context so deep components
+// (Albert insights, Ask Albert chat) fetch data for the right asset.
+const SymbolContext = React.createContext('BTC');
 
 /* --------------------------- small components ------------------------ */
 function ChartTooltip({ active, payload, label }) {
@@ -192,6 +201,7 @@ function TapInfo({ text, className = '', below = true, children }) {
 
 
 function AiReview({ text, voice, section, footer }) {
+  const symbol = React.useContext(SymbolContext);
   const [speaking, setSpeaking] = React.useState(false);
   const [mode, setMode] = React.useState('plain');
   const [cache, setCache] = React.useState({ plain: null, technical: null });
@@ -202,14 +212,16 @@ function AiReview({ text, voice, section, footer }) {
   const load = React.useCallback((m, force) => {
     if (!section) return;
     setLoading(true);
-    fetch(`/api/v1/albert/insight?section=${encodeURIComponent(section)}&mode=${m}${force ? '&refresh=1' : ''}`)
+    fetch(`/api/v1/albert/insight?section=${encodeURIComponent(section)}&mode=${m}&symbol=${encodeURIComponent(symbol)}${force ? '&refresh=1' : ''}`)
       .then((r) => r.json())
       .then((j) => { if (j && j.status === 'ready' && j.text) { setCache((c) => ({ ...c, [m]: j.text })); setGenAt((g) => ({ ...g, [m]: j.generated_at || new Date().toISOString() })); } })
       .catch(() => { /* keep fallback */ })
       .finally(() => setLoading(false));
-  }, [section]);
+  }, [section, symbol]);
 
-  React.useEffect(() => { if (section) load('plain'); }, [section, load]);
+  // Reset cached insight whenever the coin changes so we never show the wrong asset.
+  React.useEffect(() => { setCache({ plain: null, technical: null }); setGenAt({ plain: null, technical: null }); }, [symbol]);
+  React.useEffect(() => { if (section) load('plain'); }, [section, symbol, load]);
   // tick for "updated X ago" + auto-refresh on new compute data every 5 min (cached, cheap)
   React.useEffect(() => {
     if (!section) return;
@@ -568,20 +580,22 @@ function MarketStateHero({ d, ticker }) {
   const dec = d.decision || {};
   const modelConf = f7o?.confidence || f24o?.confidence || '—';
   const dh = d.data_health || {};
+  const sym = d.symbol || 'BTC';
+  const coinName = d.coin_name || 'Bitcoin';
   return (
     <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-slate-900 to-slate-900/60 p-6 ring-1 ring-slate-800">
       <div aria-hidden className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-amber-500/5 blur-3xl" />
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
           <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" /></span>
-          BITCOIN MARKET STATE
+          {coinName.toUpperCase()} MARKET STATE
         </span>
         <span className="ml-auto text-[11px] text-slate-500">Updated {timeAgo(d.created_at)} · source {d.data_source}</span>
       </div>
 
       <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-slate-500">BTC Live Price</p>
+          <p className="text-[10px] uppercase tracking-wider text-slate-500">{sym} Live Price</p>
           <p className="text-4xl font-black text-white">{fmtUsd(ticker?.price ?? d.last_close)}</p>
           <p className={`text-sm font-semibold ${ch >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
             {ch >= 0 ? '▲' : '▼'} {ch}% (24h){ticker?.price_aud ? ` · ≈ ${fmtAud(ticker.price_aud)}` : ''}
@@ -656,6 +670,7 @@ function loadPreset() {
 }
 
 function TradingViewChart({ height = 460 }) {
+  const symbol = React.useContext(SymbolContext);
   const [fs, setFs] = React.useState(false);
   const [cfg, setCfg] = React.useState(false);
   const [preset, setPreset] = React.useState(DEFAULT_PRESET);
@@ -668,6 +683,8 @@ function TradingViewChart({ height = 460 }) {
   React.useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    // For altcoins, always follow the selected coin; BTC uses the saved preset symbol.
+    const effSymbol = symbol === 'BTC' ? preset.symbol : `COINBASE:${symbol}USD`;
     el.innerHTML = '';
     const widget = document.createElement('div');
     widget.className = 'tradingview-widget-container__widget';
@@ -679,13 +696,13 @@ function TradingViewChart({ height = 460 }) {
     s.type = 'text/javascript';
     s.async = true;
     s.innerHTML = JSON.stringify({
-      autosize: true, symbol: preset.symbol, interval: preset.interval, timezone: 'Etc/UTC',
+      autosize: true, symbol: effSymbol, interval: preset.interval, timezone: 'Etc/UTC',
       theme: 'dark', style: preset.style, locale: 'en', allow_symbol_change: true,
       hide_side_toolbar: false, withdateranges: true, details: false, hotlist: false,
       calendar: false, studies: preset.studies || [], support_host: 'https://www.tradingview.com',
     });
     el.appendChild(s);
-  }, [preset]);
+  }, [preset, symbol]);
 
   React.useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') setFs(false); };
@@ -2355,6 +2372,7 @@ function EventsSection({ d }) {
 
 /* ----------------------------- Ask Quant ----------------------------- */
 function AskQuantSection({ d }) {
+  const symbol = React.useContext(SymbolContext);
   const [sessionId] = React.useState(() => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)));
   const [messages, setMessages] = React.useState([]);
   const [input, setInput] = React.useState('');
@@ -2383,7 +2401,7 @@ function AskQuantSection({ d }) {
     try {
       const r = await fetch('/api/v1/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: msg }),
+        body: JSON.stringify({ session_id: sessionId, message: msg, symbol }),
       });
       const j = await r.json();
       setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.' }]);
@@ -2930,33 +2948,36 @@ function DrawableChart({ ohlc }) {
 }
 
 function MarketIntelligenceSection({ d }) {
+  const isBtc = React.useContext(SymbolContext) === 'BTC';
   return (
     <div className="space-y-8">
       <div>
-        <SectionHead icon={CandlestickChart} title="Draw & Annotate" blurb="Your own lightweight BTC chart with trendlines, horizontal levels and notes — everything you draw is saved in this browser and reloads automatically. No account needed." />
+        <SectionHead icon={CandlestickChart} title="Draw & Annotate" blurb="Your own lightweight chart with trendlines, horizontal levels and notes — everything you draw is saved in this browser and reloads automatically. No account needed." />
         <DrawableChart ohlc={d.chart?.ohlc} />
       </div>
       <ChartSection d={d} />
-      <CycleSection d={d} />
+      {isBtc && <CycleSection d={d} />}
       <AnalysisSection d={d} />
     </div>
   );
 }
 
 function PerformanceHubSection({ d }) {
+  const isBtc = React.useContext(SymbolContext) === 'BTC';
   return (
     <div className="space-y-8">
-      <ScorecardSection d={d} />
+      {isBtc && <ScorecardSection d={d} />}
       <PerformanceSection d={d} />
-      <DataTrustSection d={d} />
+      {isBtc && <DataTrustSection d={d} />}
     </div>
   );
 }
 
 function ForecastsHubSection({ d }) {
+  const isBtc = React.useContext(SymbolContext) === 'BTC';
   return (
     <div className="space-y-8">
-      <BitMarkSection d={d} />
+      {isBtc && <BitMarkSection d={d} />}
       <ForecastsSection d={d} />
     </div>
   );
@@ -3125,7 +3146,41 @@ function CompareSection() {
   );
 }
 
+function CoinPicker({ coins, symbol, onSelect }) {
+  const [open, setOpen] = React.useState(false);
+  const current = coins.find((c) => c.symbol === symbol) || { symbol, name: symbol };
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen((o) => !o)} title="Switch coin — the whole dashboard follows"
+        className={`flex items-center gap-2 rounded-xl border px-3 py-1.5 text-sm font-semibold text-white transition-colors ${open ? 'border-sky-500/60 bg-slate-800' : 'border-slate-700 bg-slate-900 hover:border-sky-500/50'}`}>
+        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-amber-400/30 to-sky-500/30 text-[10px] font-black text-sky-200 ring-1 ring-sky-500/40">{current.symbol}</span>
+        <span className="hidden sm:inline">{current.name}</span>
+        <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-[90]" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full z-[100] mt-2 max-h-[70vh] w-56 overflow-auto rounded-xl border border-slate-700 bg-slate-900 p-1.5 shadow-2xl animate-in fade-in-0 zoom-in-95 slide-in-from-top-1 duration-150">
+            <p className="px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500">Choose an asset</p>
+            {coins.map((c) => (
+              <button key={c.symbol} onClick={() => { onSelect(c.symbol); setOpen(false); }}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${c.symbol === symbol ? 'bg-sky-500/15 text-sky-200' : 'text-slate-300 hover:bg-slate-800'}`}>
+                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-800 text-[10px] font-black text-sky-300">{c.symbol}</span>
+                <span className="flex-1">{c.name}</span>
+                {c.symbol === 'BTC' && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-bold text-amber-300">FULL</span>}
+                {c.symbol === symbol && <Check className="h-3.5 w-3.5 text-sky-300" />}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
+  const [symbol, setSymbol] = useState('BTC');
+  const [coins, setCoins] = useState([{ symbol: 'BTC', name: 'Bitcoin' }]);
   const [data, setData] = useState(__dashCache);
   const [status, setStatus] = useState(__dashCache ? 'ready' : 'loading');
   const [error, setError] = useState(null);
@@ -3136,6 +3191,30 @@ export default function DashboardPage() {
   const [newsStatus, setNewsStatus] = useState(__newsCache ? 'ready' : 'loading');
   const [newsRefreshing, setNewsRefreshing] = useState(false);
   const [alertsData, setAlertsData] = useState(__alertsCache);
+  const firstSym = React.useRef(true);
+
+  // Restore last-picked coin + load the supported coin list.
+  useEffect(() => {
+    try { const s = (localStorage.getItem('btciq_symbol') || '').toUpperCase(); if (s) setSymbol(s); } catch (e) { /* noop */ }
+    fetch('/api/v1/compare/coins').then((r) => r.json()).then((j) => { if (j.coins) setCoins([{ symbol: 'BTC', name: 'Bitcoin' }, ...j.coins.filter((c) => c.symbol !== 'BTC')]); }).catch(() => {});
+  }, []);
+
+  // Persist choice + reset the view whenever the coin changes so we never show a stale asset.
+  useEffect(() => {
+    try { localStorage.setItem('btciq_symbol', symbol); } catch (e) { /* noop */ }
+    if (firstSym.current) { firstSym.current = false; return; }
+    const btc = symbol === 'BTC';
+    setData(btc ? (__dashCache || null) : null);
+    setStatus(btc && __dashCache ? 'ready' : 'loading');
+    setError(null);
+    setNews(btc ? (__newsCache || null) : null);
+    setNewsStatus(btc && __newsCache ? 'ready' : 'loading');
+    setTicker(btc ? (__tickerCache || null) : null);
+    // if the current section is hidden for altcoins, jump back to Overview
+    setActive((a) => (!btc && BTC_ONLY_SECTIONS.includes(a) ? 'overview' : a));
+  }, [symbol]);
+
+  const symQs = (base) => (symbol === 'BTC' ? base : `${base}${base.includes('?') ? '&' : '?'}symbol=${encodeURIComponent(symbol)}`);
 
   const loadAlerts = useCallback(async () => {
     try {
@@ -3160,12 +3239,12 @@ export default function DashboardPage() {
 
   const loadNews = useCallback(async () => {
     try {
-      const r = await fetch('/api/v1/news', { cache: 'no-store' });
+      const r = await fetch(symbol === 'BTC' ? '/api/v1/news' : `/api/v1/news?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
       const j = await r.json();
-      if (j.status === 'ready') { __newsCache = j; setNews(j); setNewsStatus('ready'); setNewsRefreshing(false); }
+      if (j.status === 'ready') { if (symbol === 'BTC') __newsCache = j; setNews(j); setNewsStatus('ready'); setNewsRefreshing(false); }
       else setNewsStatus(j.status || 'computing');
     } catch (e) { setNewsStatus('error'); }
-  }, []);
+  }, [symbol]);
 
   useEffect(() => {
     loadNews();
@@ -3174,6 +3253,7 @@ export default function DashboardPage() {
   }, [loadNews]);
 
   const handleNewsRefresh = async () => {
+    if (symbol !== 'BTC') { loadNews(); return; }
     setNewsRefreshing(true);
     await fetch('/api/v1/news/refresh', { method: 'POST' });
     const id = setInterval(loadNews, 5000);
@@ -3182,13 +3262,13 @@ export default function DashboardPage() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch('/api/v1/dashboard', { cache: 'no-store' });
+      const res = await fetch(symbol === 'BTC' ? '/api/v1/dashboard' : `/api/v1/dashboard?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
       const json = await res.json();
-      if (json.status === 'ready') { __dashCache = json; setData(json); setStatus('ready'); setRefreshing(false); }
+      if (json.status === 'ready') { if (symbol === 'BTC') __dashCache = json; setData(json); setStatus('ready'); setRefreshing(false); }
       else if (json.status === 'error') { setError(json.error || 'Unknown error'); setStatus('error'); }
       else setStatus('computing');
     } catch (e) { setError(String(e)); setStatus('error'); }
-  }, []);
+  }, [symbol]);
 
   useEffect(() => {
     load();
@@ -3199,13 +3279,13 @@ export default function DashboardPage() {
   useEffect(() => {
     let alive = true;
     const loadTicker = async () => {
-      try { const r = await fetch('/api/v1/ticker', { cache: 'no-store' }); const j = await r.json(); if (alive && j && j.price) { __tickerCache = j; setTicker(j); } } catch (e) { /* noop */ }
+      try { const r = await fetch(symbol === 'BTC' ? '/api/v1/ticker' : `/api/v1/ticker?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' }); const j = await r.json(); if (alive && j && j.price) { if (symbol === 'BTC') __tickerCache = j; setTicker(j); } } catch (e) { /* noop */ }
     };
     loadTicker();
     const t = setInterval(loadTicker, 10000);
     const dref = setInterval(() => load(), 60000);
     return () => { alive = false; clearInterval(t); clearInterval(dref); };
-  }, [load]);
+  }, [load, symbol]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -3219,7 +3299,7 @@ export default function DashboardPage() {
       <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-slate-950 px-6">
         <img src="/btciq-logo.png" alt="BTCIQ" className="h-14 w-auto object-contain" />
         <div className="relative"><div className="h-16 w-16 animate-spin rounded-full border-4 border-slate-800 border-t-sky-400" /><Cpu className="absolute inset-0 m-auto h-6 w-6 text-sky-400" /></div>
-        <div className="text-center"><h2 className="text-lg font-semibold text-slate-100">Building Bitcoin intelligence…</h2><p className="mt-1 text-sm text-slate-400">BTCIQ · powered by BitCentAI · decision engine · news-linked forecasts · backtests</p></div>
+        <div className="text-center"><h2 className="text-lg font-semibold text-slate-100">{symbol === 'BTC' ? 'Building Bitcoin intelligence…' : `Building ${(coins.find((c) => c.symbol === symbol) || {}).name || symbol} intelligence…`}</h2><p className="mt-1 text-sm text-slate-400">BTCIQ · powered by BitCentAI · decision engine · news-linked forecasts · backtests</p></div>
       </main>
     );
   }
@@ -3236,10 +3316,10 @@ export default function DashboardPage() {
 
   const d = data;
   const activeSection = sec(active);
+  const visibleSections = SECTIONS.filter((s) => !REMOVED_SECTIONS.includes(s.id) && (symbol === 'BTC' || !BTC_ONLY_SECTIONS.includes(s.id)));
   const renderSection = () => {
     if (active === 'overview') return <OverviewSection d={d} ticker={ticker} />;
     if (active === 'forecasts') return <ForecastsHubSection d={d} />;
-    if (active === 'compare') return <CompareSection />;
     if (active === 'market-intel') return <MarketIntelligenceSection d={d} />;
     if (active === 'smartmoney') return <DemoMetricsCard title="Smart Money" icon={Waves} panel={d.smart_money} sectionId="smartmoney" />;
     if (active === 'institutional') return <DemoMetricsCard title="Institutional" icon={Landmark} panel={d.institutional} sectionId="institutional" />;
@@ -3256,6 +3336,7 @@ export default function DashboardPage() {
   };
 
   return (
+    <SymbolContext.Provider value={symbol}>
     <div className="relative min-h-screen bg-slate-950 text-slate-100">
       <div aria-hidden className="pointer-events-none fixed inset-0 bg-[radial-gradient(55rem_38rem_at_-8%_-12%,rgba(247,147,26,0.10),transparent_58%),radial-gradient(52rem_40rem_at_112%_6%,rgba(109,94,246,0.14),transparent_55%)]" />
       <div className="relative flex">
@@ -3269,7 +3350,7 @@ export default function DashboardPage() {
             </p>
           </div>
           <nav className="flex-1 space-y-1">
-            {SECTIONS.map((s) => {
+            {visibleSections.map((s) => {
               const Icon = s.icon;
               const on = active === s.id;
               return (
@@ -3292,6 +3373,7 @@ export default function DashboardPage() {
           {/* Top bar */}
           <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/80 px-4 py-3 backdrop-blur md:px-8">
             <div className="flex items-center gap-2 md:hidden"><img src="/btciq-logo.png" alt="BTCIQ" className="h-6 w-auto object-contain" /></div>
+            <CoinPicker coins={coins} symbol={symbol} onSelect={setSymbol} />
             <div className="hidden items-center gap-2 md:flex">
               <span className="flex items-center gap-1 text-xs font-bold text-emerald-400">
                 <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" /></span>LIVE
@@ -3314,7 +3396,7 @@ export default function DashboardPage() {
 
           {/* Mobile nav */}
           <div className="flex gap-1 overflow-x-auto border-b border-slate-800 px-3 py-2 md:hidden">
-            {SECTIONS.map((s) => (
+            {visibleSections.map((s) => (
               <button key={s.id} onClick={() => setActive(s.id)} className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs ${active === s.id ? 'bg-sky-500/15 font-semibold text-sky-300' : 'text-slate-400'}`}>{s.label}</button>
             ))}
           </div>
@@ -3329,5 +3411,6 @@ export default function DashboardPage() {
         </div>
       </div>
     </div>
+    </SymbolContext.Provider>
   );
 }

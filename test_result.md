@@ -1006,3 +1006,99 @@ agent_communication:
       NO CRITICAL ISSUES FOUND. All Stage 3 backend features working as expected with REAL data.
       Data is REAL (Yahoo Finance for scenarios, RSS feeds + Gemini 2.5 Flash for news).
       WebSockets NOT tested (as instructed).
+
+#====================================================================================================
+# GLOBAL COIN SWITCH FEATURE (new) - added by main agent
+#====================================================================================================
+backend:
+  - task: "Global coin switch - per-coin dashboard endpoint"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Added coin-aware endpoints so the whole dashboard can follow any supported coin.
+          - GET /api/v1/dashboard?symbol=ETH : returns {status:'computing'} on first call, then
+            {status:'ready', ...full payload...} after background compute (compute_coin_dashboard).
+            BTC-only fields (cycle, dominance, policy, smart_money, institutional, bitmark,
+            event_calendar, prediction_ledger, data_health) are intentionally null for altcoins.
+            Populated coin-generic fields: quant_score, regime, forecasts, long_outlook, factors,
+            decision, risk, chart, market_intel, performance, scoreboard, trades, cv_folds, importances.
+          - GET /api/v1/dashboard (no symbol) and ?symbol=BTC : MUST be unchanged (full BTC payload
+            with cycle/dominance/policy/smart_money present). This is the critical regression check.
+          - GET /api/v1/ticker?symbol=ETH : returns ETH price/aud.
+          - GET /api/v1/news?symbol=ETH : coin-filtered news, {status:'computing'} then {status:'ready', cards[...]}.
+          - GET /api/v1/albert/insight?section=overview&mode=plain&symbol=ETH : coin-aware insight text
+            (mentions Ethereum, not Bitcoin). ?symbol=BTC unchanged.
+          Supported symbols come from GET /api/v1/compare/coins. Isolated from BTC pipeline & persistence.
+          Please test: (1) BTC regression on dashboard/ticker/news/insight, (2) ETH full flow for all four
+          endpoints incl. polling until ready, (3) an unsupported symbol returns error gracefully.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive global coin switch backend test via external URL. ALL 3 TEST SUITES PASSED (BTC Regression, ETH New Coin Flow, Error Handling).
+          
+          TEST 1: BTC REGRESSION (CRITICAL) - ✅ ALL 5 TESTS PASSED
+          (1.1) GET /api/v1/dashboard (default BTC): status='ready', pair='BTC/USD', ALL BTC-only fields present and non-null (cycle, dominance, smart_money, institutional, policy, prediction_ledger) ✅, quant_score=49 ✅
+          (1.2) GET /api/v1/dashboard?symbol=BTC: status='ready', pair='BTC/USD', all BTC-only fields present and non-null ✅
+          (1.3) GET /api/v1/ticker (default BTC): price=$64,717.40 (valid number >0) ✅
+          (1.4) GET /api/v1/news (default BTC): status='ready', cards=8 news items ✅
+          (1.5) GET /api/v1/albert/insight?section=overview&mode=plain&symbol=BTC: status='ready', text mentions Bitcoin (817 chars) ✅
+          
+          TEST 2: ETH NEW COIN FLOW - ✅ ALL 4 TESTS PASSED
+          (2.1) GET /api/v1/dashboard?symbol=ETH: status='ready' (ready on first attempt, already cached) ✅, symbol='ETH' ✅, coin_name='Ethereum' ✅, pair='ETH/USD' ✅, quant_score=49 ✅, regime={'regime': 'Weak Bullish Trend', ...} ✅, forecasts=3 items ✅, performance=491 items ✅, decision present and non-null ✅, risk present and non-null ✅, chart present and non-null ✅, ALL BTC-only fields are null (cycle, dominance, policy, smart_money, institutional, event_calendar, prediction_ledger, bitmark, data_health) ✅
+          (2.2) GET /api/v1/ticker?symbol=ETH: price=$1,908.26 (valid number >0) ✅, symbol='ETH' ✅
+          (2.3) GET /api/v1/news?symbol=ETH: status='ready' (ready on first attempt, already cached) ✅, coin_name='Ethereum' ✅, cards=6 news items ✅
+          (2.4) GET /api/v1/albert/insight?section=overview&mode=plain&symbol=ETH: status='ready' ✅, text mentions Ethereum (731 chars) ✅, NOT framed as Bitcoin ✅
+          
+          TEST 3: ERROR HANDLING - ✅ ALL 2 TESTS PASSED
+          (3.1) GET /api/v1/dashboard?symbol=FOO: HTTP 200 (no 500 error) ✅, status='error' (graceful error handling) ✅
+          (3.2) GET /api/v1/news?symbol=FOO: HTTP 200 (no 500 error) ✅, status='error' (graceful error handling) ✅
+          
+          NO CRITICAL ISSUES FOUND. All backend functionality working as expected with real data (ccxt Kraken). BTC regression confirmed - all BTC-specific fields remain intact. ETH altcoin flow working correctly with proper field isolation (BTC-only fields null for altcoins). Error handling graceful for unsupported symbols. Data is REAL.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.1"
+  test_sequence: 1
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Global coin switch - per-coin dashboard endpoint"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Implemented the global coin picker backend. Please test the coin-aware endpoints (dashboard,
+      ticker, news, albert/insight) for BTC (regression - must be unchanged) and ETH (new coin flow,
+      poll computing->ready). Also verify unsupported symbol (e.g. FOO) is handled gracefully. Do NOT
+      test frontend. Note first altcoin dashboard/news compute can take ~30-60s (RandomForest backtest
+      + Gemini news), so poll with generous timeouts.
+    -agent: "testing"
+    -message: |
+      ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED
+      
+      Completed comprehensive testing of global coin switch backend endpoints via external URL.
+      
+      RESULTS:
+      • BTC Regression: ✅ PASSED (5/5 tests) - All BTC endpoints unchanged, BTC-only fields present
+      • ETH New Coin Flow: ✅ PASSED (4/4 tests) - Full altcoin support working, BTC-only fields null
+      • Error Handling: ✅ PASSED (2/2 tests) - Graceful error handling for unsupported symbols
+      
+      KEY FINDINGS:
+      1. BTC regression confirmed - all BTC-specific fields (cycle, dominance, smart_money, institutional, policy, prediction_ledger) remain intact and non-null ✅
+      2. ETH altcoin flow working correctly - proper field isolation with BTC-only fields set to null ✅
+      3. All coin-generic fields populated correctly for ETH (quant_score, regime, forecasts, decision, risk, chart, performance) ✅
+      4. Error handling graceful - unsupported symbols return status='error' without 500 crashes ✅
+      5. Polling not needed in this test run - ETH dashboard and news were already cached from prior compute ✅
+      
+      NO CRITICAL ISSUES FOUND. Feature is production-ready. Data is REAL (ccxt Kraken).

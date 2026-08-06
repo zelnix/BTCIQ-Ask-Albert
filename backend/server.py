@@ -56,6 +56,8 @@ smart_alerts_col = db['smart_alerts']
 audit_col = db['forecast_audit']
 insights_col = db['albert_insights']  # cache for AI-generated section insights
 compare_col = db['compare_coins']  # cache for per-coin comparison summaries
+coin_dash_col = db['coin_dashboards']  # cache for per-coin full dashboards (altcoins)
+coin_news_col = db['coin_news']  # cache for per-coin news (altcoins)
 # Admin passcode gate for manual forecast runs (Stage-1: passcode instead of full auth)
 ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', 'btciq-admin')
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
@@ -74,7 +76,7 @@ except Exception:  # noqa
     _HAS_LLM = False
 
 # in-memory ticker cache (avoid hammering the exchange on every poll)
-_ticker_cache = {'data': None, 'ts': 0.0}
+_ticker_cache = {}  # symbol -> {'data':..., 'ts':...}
 # USD->AUD fx rate cache (refreshed ~30 min)
 _fx_cache = {'rate': None, 'ts': 0.0}
 
@@ -1455,15 +1457,29 @@ CHAT_SYSTEM = (
 )
 
 
-def build_chat_context():
-    run = runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0})
+def build_chat_context(symbol='BTC'):
+    symbol = (symbol or 'BTC').strip().upper()[:6]
+    if symbol != 'BTC':
+        today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+        cd = coin_dash_col.find_one({'_id': f'{symbol}:{today}'}, {'_id': 0})
+        run = (cd or {}).get('data')
+        cn = coin_news_col.find_one({'_id': f'{symbol}:{today}'}, {'_id': 0})
+        news = (cn or {}).get('doc')
+        label = (run or {}).get('coin_name', symbol)
+        sym = symbol
+    else:
+        run = runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0})
+        news = news_col.find_one(sort=[('created_at', -1)], projection={'_id': 0})
+        label = 'Bitcoin'
+        sym = 'BTC'
     if not run:
         return 'No dashboard data is available yet.'
-    news = news_col.find_one(sort=[('created_at', -1)], projection={'_id': 0})
     dec = run.get('decision') or {}
     L = []
-    L.append(f"As of {run.get('as_of')}: BTC/USD last close ${run.get('last_close')} ({run.get('day_change_pct')}% on the day), data source {run.get('data_source')}.")
-    L.append(f"Bitcoin Quant Score {run.get('quant_score')}/100 ({run.get('quant_label')}). Next-day model signal: {run.get('signal')} at {run.get('confidence')}% confidence.")
+    if sym != 'BTC':
+        L.append(f"IMPORTANT: The asset in focus is {label} ({sym}/USD), an altcoin — NOT Bitcoin. Talk about {label} throughout and ignore Bitcoin-only concepts (halving cycle, BTC dominance) which do not apply here.")
+    L.append(f"As of {run.get('as_of')}: {sym}/USD last close ${run.get('last_close')} ({run.get('day_change_pct')}% on the day), data source {run.get('data_source')}.")
+    L.append(f"{label} Quant Score {run.get('quant_score')}/100 ({run.get('quant_label')}). Next-day model signal: {run.get('signal')} at {run.get('confidence')}% confidence.")
     L.append(f"Market regime: {run['regime']['regime']} — {run['regime']['description']} (30d trend {run['regime'].get('trend30d_pct')}%, volatility {run['regime'].get('vol_percentile')}th percentile).")
     if dec:
         L.append(f"Unified Decision Engine: overall {dec.get('overall_score')}/100 ({dec.get('label')}), risk level {dec.get('risk_level')}, signal alignment: {dec.get('alignment')}.")
@@ -2620,11 +2636,14 @@ def health():
 
 
 @app.get('/api/v1/ticker')
-def ticker():
+def ticker(symbol: str = 'BTC'):
     import time
+    symbol = (symbol or 'BTC').strip().upper()[:6]
+    pair = 'BTC/USD' if symbol == 'BTC' else f'{symbol}/USD'
     now = time.time()
-    if _ticker_cache['data'] and (now - _ticker_cache['ts']) < 8:
-        return _ticker_cache['data']
+    cache = _ticker_cache.get(symbol)
+    if cache and cache.get('data') and (now - cache['ts']) < 8:
+        return cache['data']
 
     def usd_aud():
         if _fx_cache['rate'] and (now - _fx_cache['ts']) < 1800:
@@ -2642,13 +2661,14 @@ def ticker():
     for name in ['kraken', 'coinbase']:
         try:
             ex = getattr(ccxt, name)({'enableRateLimit': True})
-            t = ex.fetch_ticker('BTC/USD')
+            t = ex.fetch_ticker(pair)
             last = float(t['last'])
             pct = t.get('percentage')
             if pct is None and t.get('open'):
                 pct = (last - float(t['open'])) / float(t['open']) * 100
             rate = usd_aud()
             data = {
+                'symbol': symbol,
                 'price': round(last, 2),
                 'price_aud': round(last * rate, 2) if rate else None,
                 'aud_rate': round(rate, 4) if rate else None,
@@ -2658,8 +2678,7 @@ def ticker():
                 'source': name,
                 'ts': datetime.datetime.utcnow().isoformat(),
             }
-            _ticker_cache['data'] = data
-            _ticker_cache['ts'] = now
+            _ticker_cache[symbol] = {'data': data, 'ts': now}
             return data
         except Exception:  # noqa
             continue
@@ -2667,7 +2686,22 @@ def ticker():
 
 
 @app.get('/api/v1/dashboard')
-def dashboard():
+def dashboard(symbol: str = 'BTC'):
+    symbol = (symbol or 'BTC').strip().upper()[:6]
+    if symbol != 'BTC':
+        if symbol not in COMPARE_COINS:
+            return {'status': 'error', 'error': 'unsupported_symbol'}
+        today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+        cache_id = f'{symbol}:{today}'
+        cached = coin_dash_col.find_one({'_id': cache_id}, {'_id': 0})
+        if cached and cached.get('data'):
+            return {'status': 'ready', 'compute_status': 'done', **cached['data']}
+        st = _coin_dash_state.get(symbol)
+        if st != 'running':
+            threading.Thread(target=run_coin_dash_bg, args=(symbol,), daemon=True).start()
+        if st == 'error':
+            return {'status': 'error', 'error': 'compute_failed'}
+        return {'status': 'computing'}
     doc = runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0})
     if not doc:
         st = _state['status']
@@ -2684,7 +2718,22 @@ def refresh():
 
 
 @app.get('/api/v1/news')
-def news():
+def news(symbol: str = 'BTC'):
+    symbol = (symbol or 'BTC').strip().upper()[:6]
+    if symbol != 'BTC':
+        if symbol not in COMPARE_COINS:
+            return {'status': 'error', 'error': 'unsupported_symbol'}
+        today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+        cache_id = f'{symbol}:{today}'
+        cached = coin_news_col.find_one({'_id': cache_id}, {'_id': 0})
+        if cached and cached.get('doc'):
+            return {'status': 'ready', 'news_status': 'done', **cached['doc']}
+        st = _coin_news_state.get(symbol)
+        if st != 'running':
+            threading.Thread(target=run_coin_news_bg, args=(symbol,), daemon=True).start()
+        if st == 'error':
+            return {'status': 'error', 'error': 'news_failed'}
+        return {'status': 'computing'}
     doc = news_col.find_one(sort=[('created_at', -1)], projection={'_id': 0})
     if not doc:
         if _news_state['status'] not in ('running',):
@@ -2805,7 +2854,7 @@ def chat_endpoint(payload: dict = Body(...)):
         return {'error': 'llm_unconfigured',
                 'text': 'The Ask Quant chat model is not configured on this server.'}
     try:
-        ctx = build_chat_context()
+        ctx = build_chat_context((payload.get('symbol') or 'BTC'))
         hist = list(chat_col.find({'session_id': session_id}, {'_id': 0}).sort('created_at', 1))
         hist_txt = ''
         for h in hist[-5:]:
@@ -2888,13 +2937,19 @@ def _latest_run_version():
 
 
 @app.get('/api/v1/albert/insight')
-async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh: int = 0):
+async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh: int = 0, symbol: str = 'BTC'):
     section = (section or 'overview').strip().lower()[:40]
     mode = 'technical' if str(mode).lower().startswith('tech') else 'plain'
-    version = _latest_run_version()
+    symbol = (symbol or 'BTC').strip().upper()[:6]
+    if symbol != 'BTC':
+        today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+        cd = coin_dash_col.find_one({'_id': f'{symbol}:{today}'}, {'created_at': 1})
+        version = str((cd or {}).get('created_at') or today) if cd else None
+    else:
+        version = _latest_run_version()
     if not version:
         return {'status': 'fallback', 'reason': 'no_data'}
-    cache_id = f"{section}:{mode}:{version}"
+    cache_id = f"{symbol}:{section}:{mode}:{version}"
     if not refresh:
         cached = insights_col.find_one({'_id': cache_id}, {'_id': 0})
         if cached and cached.get('text'):
@@ -2902,8 +2957,8 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
     if not (EMERGENT_LLM_KEY and _HAS_LLM):
         return {'status': 'fallback', 'reason': 'llm_unconfigured'}
     try:
-        ctx = build_chat_context()
-        focus = SECTION_FOCUS.get(section, "Explain what this section means for Bitcoin's price and outlook in plain English.")
+        ctx = build_chat_context(symbol)
+        focus = SECTION_FOCUS.get(section, "Explain what this section means for the asset's price and outlook in plain English.")
         sys_tmpl = ALBERT_TECH_SYSTEM if mode == 'technical' else ALBERT_INSIGHT_SYSTEM
         kind = 'technical briefing' if mode == 'technical' else 'insight'
         umsg = f"Write Albert's {kind} for the '{section}' section now, following all the rules."
@@ -3049,3 +3104,414 @@ def compare_coin(symbol: str = 'BTC', refresh: int = 0):
     except Exception as ex:  # noqa
         traceback.print_exc()
         return {'status': 'error', 'reason': str(ex)[:200]}
+
+
+
+# =====================================================================
+# GLOBAL COIN SWITCH — full per-coin dashboard (altcoins), isolated from
+# the Bitcoin pipeline (no persistence, no BTC ledger writes).
+# =====================================================================
+_coin_dash_state = {}          # symbol -> 'running' | 'done' | 'error'
+_coin_dash_lock = threading.Lock()
+
+
+def compute_coin_dashboard(symbol):
+    """Build a full dashboard payload for any supported coin using the same
+    price-agnostic quant engine as Bitcoin. BTC-specific engines (halving cycle,
+    dominance, policy, news, events, ETF/institutional) are left None because
+    those views are hidden for altcoins in the UI."""
+    cfg = COMPARE_COINS[symbol]
+    df, source = _fetch_ohlcv_pairs(cfg['pairs'])
+    df = build_features(df)
+    df = df.dropna().reset_index(drop=True)
+    df['Target'] = (df['close'].shift(-1) > df['close']).astype(int)
+
+    live_row = df.iloc[[-1]].copy()
+    train_df = df.iloc[:-1].copy()
+    X = train_df[FEATURE_COLS]
+    y = train_df['Target']
+
+    # TimeSeriesSplit cross validation
+    tscv = TimeSeriesSplit(n_splits=5)
+    cv_folds = []
+    for i, (tr, te) in enumerate(tscv.split(X)):
+        m = RandomForestClassifier(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
+        m.fit(X.iloc[tr], y.iloc[tr])
+        acc = accuracy_score(y.iloc[te], m.predict(X.iloc[te]))
+        cv_folds.append({'fold': i + 1, 'accuracy': round(float(acc) * 100, 2), 'testSize': int(len(te))})
+
+    # Walk-forward backtest -> accuracy over time + trade log
+    start = 200 if len(X) > 260 else max(30, int(len(X) * 0.4))
+    retrain_every = 10
+    model = None
+    rows = []
+    trades = []
+    closes_full = df['close'].reset_index(drop=True)
+    for i in range(start, len(X)):
+        if model is None or (i - start) % retrain_every == 0:
+            model = RandomForestClassifier(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
+            model.fit(X.iloc[:i], y.iloc[:i])
+        classes = list(model.classes_)
+        pred = int(model.predict(X.iloc[[i]])[0])
+        proba = model.predict_proba(X.iloc[[i]])[0]
+        conf = float(proba[classes.index(pred)]) * 100 if pred in classes else 50.0
+        actual = int(y.iloc[i])
+        cur_close = float(closes_full.iloc[i])
+        nxt_close = float(closes_full.iloc[i + 1])
+        d = train_df['timestamp'].iloc[i]
+        rows.append({'date': d, 'correct': 1 if pred == actual else 0, 'close': cur_close})
+        trades.append({
+            'date': d.strftime('%Y-%m-%d'),
+            'signal': 'UP' if pred == 1 else 'DOWN',
+            'confidence': round(conf, 1),
+            'close': round(cur_close, 2),
+            'nextClose': round(nxt_close, 2),
+            'actual': 'UP' if actual == 1 else 'DOWN',
+            'correct': bool(pred == actual),
+        })
+
+    total = len(trades)
+    wins = sum(1 for t in trades if t['correct'])
+    losses = total - wins
+    win_rate = round(wins / total * 100, 1) if total else 0.0
+    best = cur = 0
+    for t in trades:
+        if t['correct']:
+            cur += 1
+            best = max(best, cur)
+        else:
+            cur = 0
+    sign = None
+    streak_len = 0
+    for t in reversed(trades):
+        if sign is None:
+            sign = t['correct']
+            streak_len = 1
+        elif t['correct'] == sign:
+            streak_len += 1
+        else:
+            break
+    scoreboard = {
+        'total': total, 'wins': wins, 'losses': losses, 'winRate': win_rate,
+        'bestWinStreak': best, 'currentStreak': (streak_len if sign else -streak_len),
+    }
+    recent_trades = list(reversed(trades))[:25]
+
+    pser = pd.DataFrame(rows)
+    pser['rolling_acc'] = pser['correct'].rolling(30, min_periods=10).mean() * 100
+    overall_acc = round(float(pser['correct'].mean()) * 100, 2)
+    performance = []
+    for _, r in pser.iterrows():
+        if pd.isna(r['rolling_acc']):
+            continue
+        d = r['date']
+        performance.append({
+            'date': d.strftime('%m/%d'),
+            'iso': d.strftime('%Y-%m-%d'),
+            'btcPrice': round(float(r['close']), 2),
+            'aiAccuracy': round(float(r['rolling_acc']), 2),
+        })
+
+    final = RandomForestClassifier(n_estimators=200, max_depth=5, random_state=42, n_jobs=-1)
+    final.fit(X, y)
+    live_X = live_row[FEATURE_COLS]
+    pred = int(final.predict(live_X)[0])
+    proba = final.predict_proba(live_X)[0]
+    classes = list(final.classes_)
+    p_up = float(proba[classes.index(1)]) if 1 in classes else 0.0
+    p_down = float(proba[classes.index(0)]) if 0 in classes else 0.0
+    confidence = round((p_up if pred == 1 else p_down) * 100, 2)
+
+    importances = sorted(
+        [{'feature': f, 'label': FEATURE_META[f]['label'], 'category': FEATURE_META[f]['category'],
+          'importance': round(float(imp) * 100, 2)} for f, imp in zip(FEATURE_COLS, final.feature_importances_)],
+        key=lambda z: -z['importance'],
+    )
+
+    feats = live_row.iloc[0]
+    feature_snapshot = [
+        {'feature': 'RSI', 'label': 'RSI (14)', 'category': 'Momentum', 'value': round(float(feats['RSI']) * 100, 1), 'unit': ''},
+        {'feature': 'StochRSI', 'label': 'Stochastic RSI', 'category': 'Momentum', 'value': round(float(feats['StochRSI']) * 100, 1), 'unit': ''},
+        {'feature': 'MACD_Hist_Norm', 'label': 'MACD Histogram', 'category': 'Trend', 'value': round(float(feats['MACD_Hist_Norm']) * 100, 3), 'unit': '%'},
+        {'feature': 'EMA_Ratio', 'label': 'EMA 9/21 Spread', 'category': 'Trend', 'value': round(float(feats['EMA_Ratio']) * 100, 2), 'unit': '%'},
+        {'feature': 'ATR_Pct', 'label': 'ATR %', 'category': 'Volatility', 'value': round(float(feats['ATR_Pct']) * 100, 2), 'unit': '%'},
+        {'feature': 'BB_Width_Pct', 'label': 'Bollinger Width', 'category': 'Volatility', 'value': round(float(feats['BB_Width_Pct']) * 100, 2), 'unit': '%'},
+        {'feature': 'Volume_Z', 'label': 'Volume Z-Score', 'category': 'Volume', 'value': round(float(feats['Volume_Z']), 2), 'unit': 'σ'},
+        {'feature': 'Volume_Ratio', 'label': 'Volume Ratio', 'category': 'Volume', 'value': round(float(feats['Volume_Ratio']), 2), 'unit': 'x'},
+    ]
+
+    prev_close = float(train_df['close'].iloc[-1])
+    last_close = float(live_row['close'].iloc[0])
+    day_change = round((last_close - prev_close) / prev_close * 100, 2)
+    as_of = live_row['timestamp'].iloc[0].strftime('%Y-%m-%d')
+    predict_for = (live_row['timestamp'].iloc[0] + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
+
+    quant = compute_quant_analysis(df, feats, last_close, live_row['timestamp'].iloc[0])
+
+    chart = market_intel = decision = risk = alerts = None
+    try:
+        chart = compute_chart_intelligence(df)
+    except Exception:  # noqa
+        traceback.print_exc()
+    try:
+        market_intel = build_market_intel(quant, quant['forecasts'], None, None, chart)
+    except Exception:  # noqa
+        traceback.print_exc()
+    all_outlook = list(quant['forecasts']) + list(quant.get('long_outlook', []))
+    try:
+        decision = compute_decision_engine(quant, all_outlook, None, None, chart, None, None)
+    except Exception:  # noqa
+        traceback.print_exc()
+    try:
+        risk = compute_risk_engine(quant, chart, decision, None, None, last_close, feats)
+    except Exception:  # noqa
+        traceback.print_exc()
+    try:
+        alerts = compute_alerts(quant, None, None, chart, None)
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    doc = {
+        'id': str(uuid.uuid4()),
+        'created_at': datetime.datetime.utcnow().isoformat(),
+        'as_of': as_of,
+        'symbol': symbol,
+        'coin_name': cfg['name'],
+        'data_source': source,
+        'pair': f'{symbol}/USD',
+        'last_close': round(last_close, 2),
+        'day_change_pct': day_change,
+        'signal': 'UP' if pred == 1 else 'DOWN',
+        'confidence': confidence,
+        'prob_up': round(p_up * 100, 2),
+        'prob_down': round(p_down * 100, 2),
+        'overall_accuracy': overall_acc,
+        'cv_folds': cv_folds,
+        'cv_mean': round(float(np.mean([f['accuracy'] for f in cv_folds])), 2),
+        'importances': importances,
+        'performance': performance,
+        'features': feature_snapshot,
+        'n_samples': int(len(X)),
+        'history_days': int((train_df['timestamp'].iloc[-1] - train_df['timestamp'].iloc[0]).days),
+        'first_date': train_df['timestamp'].iloc[0].strftime('%Y-%m-%d'),
+        'predict_for_date': predict_for,
+        'scoreboard': scoreboard,
+        'trades': recent_trades,
+        'quant_score': quant['quant_score'],
+        'quant_label': quant['quant_label'],
+        'quant_breakdown': quant['quant_breakdown'],
+        'regime': quant['regime'],
+        'forecasts': quant['forecasts'],
+        'long_outlook': quant.get('long_outlook', []),
+        'factors': quant['factors'],
+        'decision': decision,
+        'risk': risk,
+        'chart': chart,
+        'market_intel': market_intel,
+        'alerts': alerts,
+        # BTC-only engines (hidden for altcoins in UI)
+        'live_record': None, 'news_forecast_link': None, 'data_health': None,
+        'event_calendar': None, 'smart_money': None, 'institutional': None,
+        'prediction_ledger': None, 'bitmark': None, 'cycle': None, 'dominance': None,
+        'crossmarket': None, 'policy': None, 'smart_alerts': [],
+    }
+    return doc
+
+
+def run_coin_dash_bg(symbol):
+    with _coin_dash_lock:
+        if _coin_dash_state.get(symbol) == 'running':
+            return
+        _coin_dash_state[symbol] = 'running'
+    try:
+        data = compute_coin_dashboard(symbol)
+        today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+        cache_id = f'{symbol}:{today}'
+        coin_dash_col.update_one({'_id': cache_id},
+                                 {'$set': {'_id': cache_id, 'symbol': symbol, 'day': today, 'data': data,
+                                           'created_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+        _coin_dash_state[symbol] = 'done'
+    except Exception:  # noqa
+        _coin_dash_state[symbol] = 'error'
+        traceback.print_exc()
+
+
+# =====================================================================
+# PER-COIN NEWS (altcoins) — same RSS + clustering + Gemini pipeline,
+# coin-keyword filtered, cached per coin/day, isolated from BTC news.
+# =====================================================================
+COIN_NEWS_TERMS = {
+    'ETH': ['ethereum', 'ether', 'vitalik', 'layer 2', 'staking', 'erc-20'],
+    'SOL': ['solana'],
+    'XRP': ['xrp', 'ripple'],
+    'ADA': ['cardano'],
+    'DOGE': ['dogecoin', 'doge'],
+    'AVAX': ['avalanche', 'avax'],
+    'LINK': ['chainlink'],
+    'DOT': ['polkadot'],
+    'LTC': ['litecoin'],
+    'MATIC': ['polygon', 'matic'],
+    'ATOM': ['cosmos'],
+}
+COIN_NEWS_SHARED = ['sec', 'etf', 'regulation', 'federal reserve', 'interest rate',
+                    'rate cut', 'rate hike', 'inflation', 'cpi', 'stablecoin', 'coinbase',
+                    'binance', 'blackrock', 'custody', 'fomc']
+
+_coin_news_state = {}          # symbol -> 'running' | 'done' | 'error'
+_coin_news_lock = threading.Lock()
+
+
+def generate_coin_news_summary(name, headline, text):
+    sysmsg = NEWS_SYSTEM.replace('Bitcoin', name)
+    chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'coinnews-{abs(hash(headline)) % 99999}',
+                    system_message=sysmsg)
+            .with_model('gemini', GEMINI_MODEL)
+            .with_params(temperature=0.0, max_tokens=1200))
+    reply = asyncio.run(chat.send_message(UserMessage(text=f'Headline: {headline}\n\nArticle:\n{text[:4000]}')))
+    raw = (getattr(reply, 'text', None) or str(reply)).strip()
+    if '```' in raw:
+        raw = re.sub(r'```(?:json)?', '', raw).strip()
+    s, e = raw.find('{'), raw.rfind('}')
+    obj = json.loads(raw[s:e + 1])
+    return obj
+
+
+def build_coin_news(symbol):
+    cfg = COMPARE_COINS[symbol]
+    name = cfg['name']
+    terms = [name.lower(), symbol.lower()] + COIN_NEWS_TERMS.get(symbol, [])
+    match_terms = list(dict.fromkeys(terms + COIN_NEWS_SHARED))
+
+    entries = []
+    for sname, url, cred in NEWS_SOURCES:
+        try:
+            fp = feedparser.parse(url)
+            for e in fp.entries[:14]:
+                title = e.get('title', '')
+                summ = re.sub('<[^>]+>', '', e.get('summary', e.get('description', '')))[:1400]
+                blob = (title + ' ' + summ).lower()
+                # keep coin-specific stories, plus macro stories from the Fed feed
+                if not any(k in blob for k in terms) and not (sname == 'Federal Reserve'):
+                    if not any(k in blob for k in match_terms):
+                        continue
+                entries.append({'source': sname, 'credibility': cred, 'title': title,
+                                'summary': summ.strip(), 'link': e.get('link', ''),
+                                'published': e.get('published', e.get('updated', ''))})
+        except Exception:  # noqa
+            traceback.print_exc()
+
+    def _toks(t):
+        stop = {'the', 'a', 'an', 'to', 'of', 'in', 'on', 'for', 'and', 'is', 'as', 'at',
+                'by', 'it', 'be', 'with', 'from', 'that', 'this', 'its', 'are', 'will', 'has'}
+        return set(w for w in re.sub(r'[^a-z0-9 ]', ' ', (t or '').lower()).split()
+                   if len(w) > 2 and w not in stop)
+
+    clusters = []
+    for e in entries:
+        et = _toks(e['title'])
+        if not et:
+            continue
+        placed = False
+        for cl in clusters:
+            inter = len(et & cl['tokens'])
+            union = len(et | cl['tokens']) or 1
+            if inter / union >= 0.34 or (inter >= 3 and inter >= 0.6 * min(len(et), len(cl['tokens']))):
+                cl['members'].append(e)
+                cl['tokens'] |= et
+                placed = True
+                break
+        if not placed:
+            clusters.append({'tokens': set(et), 'members': [e]})
+    clusters.sort(key=lambda cl: (-len(set(m['source'] for m in cl['members'])),
+                                  -max(m['credibility'] for m in cl['members'])))
+    clusters = clusters[:6]
+
+    SPEC_WORDS = ('rumor', 'rumour', 'reportedly', 'could ', 'may ', 'might', 'proposal',
+                  'proposed', 'unconfirmed', 'alleged', 'speculat', 'plans to', 'considering',
+                  'reports', 'said to', 'expected to')
+    cards = []
+    for cl in clusters:
+        members = cl['members']
+        rep = max(members, key=lambda m: m['credibility'])
+        sources = [{'source': m['source'], 'link': m['link'], 'credibility': m['credibility'],
+                    'published': m['published'], 'title': m['title']} for m in members]
+        n_src = len(set(m['source'] for m in members))
+        ai = None
+        if EMERGENT_LLM_KEY and _HAS_LLM:
+            try:
+                ai = generate_coin_news_summary(name, rep['title'], rep['summary'] or rep['title'])
+            except Exception:  # noqa
+                traceback.print_exc()
+        if not ai:
+            ai = {'summary': (rep['summary'] or rep['title'])[:220], 'why_it_matters': '',
+                  'direction': 'neutral', 'bullish_pct': 40, 'bearish_pct': 30, 'neutral_pct': 30,
+                  'impact_score': 40, 'confidence': 0.4,
+                  'time_horizons': {'immediate': 'neutral', 'seven_day': 'neutral', 'long_term': 'neutral'},
+                  'categories': ['general']}
+        try:
+            imp = int(round(float(ai.get('impact_score', 40)) * (0.55 + 0.45 * rep['credibility'] / 100)))
+        except Exception:  # noqa
+            imp = 40
+        imp = max(0, min(100, imp))
+        imp_label = ('Market Moving' if imp >= 85 else 'High Impact' if imp >= 70 else 'Important'
+                     if imp >= 50 else 'Monitor' if imp >= 30 else 'Low Significance')
+        blob = (rep['title'] + ' ' + (rep['summary'] or '')).lower()
+        speculative = any(w in blob for w in SPEC_WORDS)
+        max_cred = max(m['credibility'] for m in members)
+        if n_src >= 2 and max_cred >= 65 and not speculative:
+            verification = 'Confirmed'
+        elif speculative or max_cred < 55:
+            verification = 'Unconfirmed'
+        else:
+            verification = 'Single-source'
+        dirn = ai.get('direction', 'neutral')
+        sign = 1 if dirn == 'bullish' else -1 if dirn == 'bearish' else 0
+        nudge = round(sign * imp / 100 * 3.0, 1)
+        forecast_impact = {
+            'direction': dirn, 'nudge_pts': nudge,
+            'horizons': ['24H', '7D'] if imp >= 50 else ['24H'],
+            'note': (f'Nudges near-term higher-odds by {"+" if nudge > 0 else ""}{nudge} pts'
+                     if nudge else 'No material push to the near-term odds') + ' (model interpretation).',
+        }
+        cards.append({**rep, 'ai': ai, 'impact': imp, 'impact_label': imp_label,
+                      'sources': sources, 'n_sources': n_src,
+                      'verification': verification, 'forecast_impact': forecast_impact})
+    cards.sort(key=lambda c: -c['impact'])
+
+    bull = sum(1 for c in cards if c['ai'].get('direction') == 'bullish')
+    bear = sum(1 for c in cards if c['ai'].get('direction') == 'bearish')
+    bias = 'Moderately Bullish' if bull > bear else 'Moderately Bearish' if bear > bull else 'Mixed / Neutral'
+    tail = next((c for c in cards if c['ai'].get('direction') == 'bullish'), None)
+    risk = next((c for c in cards if c['ai'].get('direction') == 'bearish'), None)
+    briefing = {
+        'bias': bias, 'total': len(cards),
+        'major_stories': sum(1 for c in cards if c['impact'] >= 70),
+        'market_moving': sum(1 for c in cards if c['impact'] >= 85),
+        'top_tailwind': (tail['ai'].get('why_it_matters') or tail['title']) if tail else f'No clear {name} tailwind in the current feed.',
+        'top_risk': (risk['ai'].get('why_it_matters') or risk['title']) if risk else f'No clear {name} risk in the current feed.',
+        'next_event': None,
+    }
+    doc = {'id': str(uuid.uuid4()), 'created_at': datetime.datetime.utcnow().isoformat(),
+           'symbol': symbol, 'coin_name': name, 'cards': cards, 'briefing': briefing,
+           'model': (GEMINI_MODEL if (EMERGENT_LLM_KEY and _HAS_LLM) else 'rule-based')}
+    return doc
+
+
+def run_coin_news_bg(symbol):
+    with _coin_news_lock:
+        if _coin_news_state.get(symbol) == 'running':
+            return
+        _coin_news_state[symbol] = 'running'
+    try:
+        doc = build_coin_news(symbol)
+        today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+        cache_id = f'{symbol}:{today}'
+        coin_news_col.update_one({'_id': cache_id},
+                                 {'$set': {'_id': cache_id, 'symbol': symbol, 'day': today,
+                                           'doc': doc, 'created_at': datetime.datetime.utcnow().isoformat()}},
+                                 upsert=True)
+        _coin_news_state[symbol] = 'done'
+    except Exception:  # noqa
+        _coin_news_state[symbol] = 'error'
+        traceback.print_exc()
+
