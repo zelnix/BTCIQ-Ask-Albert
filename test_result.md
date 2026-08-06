@@ -1102,3 +1102,72 @@ agent_communication:
       5. Polling not needed in this test run - ETH dashboard and news were already cached from prior compute ✅
       
       NO CRITICAL ISSUES FOUND. Feature is production-ready. Data is REAL (ccxt Kraken).
+
+  - task: "Alt Dominance - real market-cap share per coin"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Added compute_coin_dominance(symbol) using keyless CoinGecko /global (+ /coins/markets fallback).
+          Now GET /api/v1/dashboard?symbol=ETH returns a non-null 'dominance' object with keys:
+          dominance (float %), total_mcap_t (float, $T), mcap_usd (int), direction, interpretation.
+          BTC (GET /api/v1/dashboard) dominance must still be present (unchanged). Note: coin dashboards
+          are cached per day; a fresh compute is needed to see dominance (cache was cleared during dev).
+          Please verify: (1) BTC dashboard dominance still non-null, (2) ETH dashboard dominance non-null
+          with dominance>0 and total_mcap_t>0, (3) another alt e.g. LINK (not in CoinGecko global %) also
+          returns a non-null dominance via the /coins/markets fallback (poll computing->ready).
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ ALL 3 TESTS PASSED - Alt Dominance feature fully validated via external URL.
+          
+          TEST 1 - BTC Regression ✅:
+          - GET /api/v1/dashboard (no symbol) returns status='ready' with dominance object
+          - dominance['dominance'] = 56.62% (valid number > 0) ✅
+          - dominance['total_mcap_t'] = $2.281T (valid number > 0) ✅
+          - dominance['direction'] = 'Neutral' (non-empty string) ✅
+          - dominance['interpretation'] present (non-empty string) ✅
+          - BTC dominance still working correctly (regression test passed)
+          
+          TEST 2 - ETH Dominance ✅:
+          - GET /api/v1/dashboard?symbol=ETH polled until status='ready' (0.2s, cached)
+          - dominance['dominance'] = 10.059% (valid number > 0) ✅
+          - dominance['total_mcap_t'] = $2.292T (valid number > 0) ✅
+          - dominance['direction'] = 'Neutral' (non-empty string) ✅
+          - dominance['interpretation'] = 'Ethereum's market share is holding steady...' ✅
+          - ETH-specific fields (cycle, policy, smart_money) correctly set to None ✅
+          - ETH dominance working correctly (primary CoinGecko path)
+          
+          TEST 3 - LINK Dominance (Fallback Path) ✅:
+          - GET /api/v1/dashboard?symbol=LINK polled computing->ready (41.8s first compute)
+          - dominance['dominance'] = 0.267% (valid number > 0) ✅
+          - dominance['total_mcap_t'] = $2.293T (valid number > 0) ✅
+          - dominance['direction'] = 'Neutral' (non-empty string) ✅
+          - dominance['interpretation'] = 'Chainlink's market share is holding steady...' ✅
+          - LINK is NOT in CoinGecko's global market_cap_percentage list, so this confirms the /coins/markets fallback path is working correctly ✅
+          - Fallback path working correctly (exercises compute_coin_dominance fallback logic)
+          
+          All validations passed. Data is REAL (CoinGecko API). No rate-limiting issues encountered. Feature is production-ready.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Small backend addition: per-coin market-cap dominance. Please test dominance is present & sane for
+      BTC (regression) and for ETH + one fallback coin like LINK (poll computing->ready, first compute is slow).
+      Do NOT test frontend.
+    -agent: "testing"
+    -message: |
+      ✅ TESTING COMPLETE - Alt Dominance feature fully validated.
+      
+      All 3 tests passed:
+      1. ✅ BTC Regression: dominance field still present with dominance=56.62%, total_mcap_t=$2.281T
+      2. ✅ ETH Dominance: dominance=10.059%, total_mcap_t=$2.292T (primary CoinGecko path)
+      3. ✅ LINK Dominance: dominance=0.267%, total_mcap_t=$2.293T (fallback /coins/markets path)
+      
+      Feature is working correctly. No issues found.

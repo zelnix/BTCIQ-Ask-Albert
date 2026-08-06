@@ -608,16 +608,19 @@ function MarketStateHero({ d, ticker }) {
         </div>
       </div>
 
-      <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
         <StateItem label="Quant Score" value={`${d.quant_score}`} sub={d.quant_label} color={scoreColor(d.quant_score)} big
-          hint="A 0–100 health score for Bitcoin right now. Above 55 leans positive, below 45 leans negative, near 50 is undecided." />
+          hint={`A 0–100 health score for ${coinName} right now. Above 55 leans positive, below 45 leans negative, near 50 is undecided.`} />
         <StateItem label="24-Hour Outlook" value={f24o ? `${Math.max(f24o.higher, f24o.lower)}%` : '—'} sub={f24o ? (f24o.higher >= f24o.lower ? 'prob. higher' : 'prob. lower') : ''} color={f24o && f24o.higher >= f24o.lower ? '#34d399' : '#f87171'}
-          hint="The model's estimated chance that Bitcoin closes higher (or lower) one day from now. It's odds, not a promise." />
+          hint={`The model's estimated chance that ${coinName} closes higher (or lower) one day from now. It's odds, not a promise.`} />
         <StateItem label="7-Day Outlook" value={f7o ? `${Math.max(f7o.higher, f7o.lower)}%` : '—'} sub={f7o ? (f7o.higher >= f7o.lower ? 'prob. higher' : 'prob. lower') : ''} color={f7o && f7o.higher >= f7o.lower ? '#34d399' : '#f87171'}
           hint="Same idea as the 24-hour view, but looking one week ahead." />
         <StateItem label="Risk Level" value={riskLevel} sub="how bumpy, not direction" color={undefined}
           hint="How wild price swings could be right now — separate from whether the outlook is up or down. You can be 'leaning up' AND 'high risk' at the same time." />
         <StateItem label="Model Confidence" value={modelConf} sub="how sure the model is" hint="How strong the model's own conviction is, based on how well it has done in similar past setups." />
+        <StateItem label="Market Share" value={d.dominance ? `${d.dominance.dominance}%` : '—'}
+          sub={d.dominance ? `of $${d.dominance.total_mcap_t}T${d.dominance.direction && d.dominance.direction !== 'Neutral' ? ` · ${d.dominance.direction}` : ''}` : ''}
+          hint={`${coinName}'s share of the total crypto market cap (its "dominance"). Rising share means capital is rotating toward it; falling share means the rest of the market is outpacing it.`} />
         <StateItem label="Data Confidence" value={dh.level || '—'} sub={dh.score != null ? `${dh.score}/100 feeds` : ''} hint="How fresh and reliable the underlying data feeds are. If feeds go stale, the odds are automatically toned down." />
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
@@ -3146,6 +3149,82 @@ function CompareSection() {
   );
 }
 
+function CompareOverlay({ coinData, coinSymbol, coinName, onClose }) {
+  const [btc, setBtc] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    let alive = true;
+    fetch('/api/v1/dashboard', { cache: 'no-store' }).then((r) => r.json())
+      .then((j) => { if (alive && j.status === 'ready') setBtc(j); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+
+  const horizons = [['24H', '24-Hour'], ['7D', '7-Day'], ['30D', '30-Day']];
+  const getf = (dd, h) => ((dd && dd.forecasts) || []).find((x) => x.horizon === h);
+  const chartData = btc ? horizons.map(([h, lbl]) => {
+    const b = getf(btc, h); const c = getf(coinData, h);
+    return { horizon: lbl, Bitcoin: b ? b.higher : null, [coinName]: c ? c.higher : null };
+  }) : [];
+
+  const Col = ({ dd, name, sym }) => {
+    const qs = dd ? dd.quant_score : null;
+    return (
+      <div className="flex-1 rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-center">
+        <div className="flex items-center justify-center gap-2">
+          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-800 text-[10px] font-black text-sky-300">{sym}</span>
+          <p className="text-sm font-bold text-white">{name}</p>
+        </div>
+        <p className="mt-3 text-4xl font-black" style={{ color: qs != null ? scoreColor(qs) : '#94a3b8' }}>{qs != null ? qs : '—'}</p>
+        <p className="text-xs text-slate-400">{(dd && dd.quant_label) || 'Quant Score'}</p>
+        <div className="mt-3 space-y-1 text-left text-xs text-slate-300">
+          <p><span className="text-slate-500">Regime:</span> {(dd && dd.regime && dd.regime.regime) || '—'}</p>
+          <p><span className="text-slate-500">Next-day:</span> {(dd && dd.signal) || '—'} {dd && dd.confidence ? `(${dd.confidence}%)` : ''}</p>
+          <p><span className="text-slate-500">Market share:</span> {dd && dd.dominance ? `${dd.dominance.dominance}%` : '—'}</p>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="fixed inset-0 z-[140] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl animate-in fade-in-0 zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2"><Scale className="h-5 w-5 text-sky-400" /><h2 className="text-lg font-bold text-white">{coinName} vs Bitcoin</h2></div>
+          <button onClick={onClose} className="rounded-lg p-1 text-slate-400 hover:bg-slate-800 hover:text-white"><X className="h-5 w-5" /></button>
+        </div>
+        {loading && !btc ? (
+          <p className="py-10 text-center text-sm text-slate-400">Loading Bitcoin data…</p>
+        ) : (
+          <>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <Col dd={btc} name="Bitcoin" sym="BTC" />
+              <Col dd={coinData} name={coinName} sym={coinSymbol} />
+            </div>
+            <div className="mt-5">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">Probability of closing higher (%)</p>
+              <div className="h-56 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <XAxis dataKey="horizon" stroke="#64748b" fontSize={12} />
+                    <YAxis domain={[0, 100]} stroke="#64748b" fontSize={12} />
+                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} cursor={{ fill: 'rgba(148,163,184,0.08)' }} />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    <Bar dataKey="Bitcoin" fill="#f7931a" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey={coinName} fill="#38bdf8" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+            <p className="mt-3 text-[11px] italic text-slate-500">Higher % = the model&apos;s estimated chance of a higher close over that horizon. Odds, not certainty — not financial advice.</p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function CoinPicker({ coins, symbol, onSelect }) {
   const [open, setOpen] = React.useState(false);
   const current = coins.find((c) => c.symbol === symbol) || { symbol, name: symbol };
@@ -3191,6 +3270,7 @@ export default function DashboardPage() {
   const [newsStatus, setNewsStatus] = useState(__newsCache ? 'ready' : 'loading');
   const [newsRefreshing, setNewsRefreshing] = useState(false);
   const [alertsData, setAlertsData] = useState(__alertsCache);
+  const [compareOpen, setCompareOpen] = useState(false);
   const firstSym = React.useRef(true);
 
   // Restore last-picked coin + load the supported coin list.
@@ -3212,6 +3292,7 @@ export default function DashboardPage() {
     setTicker(btc ? (__tickerCache || null) : null);
     // if the current section is hidden for altcoins, jump back to Overview
     setActive((a) => (!btc && BTC_ONLY_SECTIONS.includes(a) ? 'overview' : a));
+    if (btc) setCompareOpen(false);
   }, [symbol]);
 
   const symQs = (base) => (symbol === 'BTC' ? base : `${base}${base.includes('?') ? '&' : '?'}symbol=${encodeURIComponent(symbol)}`);
@@ -3339,6 +3420,9 @@ export default function DashboardPage() {
     <SymbolContext.Provider value={symbol}>
     <div className="relative min-h-screen bg-slate-950 text-slate-100">
       <div aria-hidden className="pointer-events-none fixed inset-0 bg-[radial-gradient(55rem_38rem_at_-8%_-12%,rgba(247,147,26,0.10),transparent_58%),radial-gradient(52rem_40rem_at_112%_6%,rgba(109,94,246,0.14),transparent_55%)]" />
+      {compareOpen && symbol !== 'BTC' && d && (
+        <CompareOverlay coinData={d} coinSymbol={symbol} coinName={(coins.find((c) => c.symbol === symbol) || {}).name || symbol} onClose={() => setCompareOpen(false)} />
+      )}
       <div className="relative flex">
         {/* Sidebar */}
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-900/40 p-4 backdrop-blur-sm md:flex">
@@ -3374,6 +3458,12 @@ export default function DashboardPage() {
           <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/80 px-4 py-3 backdrop-blur md:px-8">
             <div className="flex items-center gap-2 md:hidden"><img src="/btciq-logo.png" alt="BTCIQ" className="h-6 w-auto object-contain" /></div>
             <CoinPicker coins={coins} symbol={symbol} onSelect={setSymbol} />
+            {symbol !== 'BTC' && (
+              <button onClick={() => setCompareOpen(true)} title="Overlay this coin vs Bitcoin"
+                className="flex items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-sky-500/50 hover:text-sky-200">
+                <Scale className="h-4 w-4" /><span className="hidden sm:inline">vs Bitcoin</span>
+              </button>
+            )}
             <div className="hidden items-center gap-2 md:flex">
               <span className="flex items-center gap-1 text-xs font-bold text-emerald-400">
                 <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" /></span>LIVE

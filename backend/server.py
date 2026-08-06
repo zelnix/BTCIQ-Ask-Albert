@@ -58,6 +58,7 @@ insights_col = db['albert_insights']  # cache for AI-generated section insights
 compare_col = db['compare_coins']  # cache for per-coin comparison summaries
 coin_dash_col = db['coin_dashboards']  # cache for per-coin full dashboards (altcoins)
 coin_news_col = db['coin_news']  # cache for per-coin news (altcoins)
+coin_dom_col = db['coin_dominance_hist']  # per-coin market-cap dominance history
 # Admin passcode gate for manual forecast runs (Stage-1: passcode instead of full auth)
 ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', 'btciq-admin')
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
@@ -347,6 +348,75 @@ def fetch_dominance(price_change_24h):
     else:
         interp = 'Price down + dominance down: broad crypto-market weakness.'
     return {'dominance': dom, 'total_mcap_t': round(total / 1e12, 3),
+            'change_7d': d7, 'change_30d': d30, 'direction': dom_dir,
+            'interpretation': interp, 'history_points': len(hist)}
+
+
+COINGECKO_IDS = {
+    'BTC': 'bitcoin', 'ETH': 'ethereum', 'SOL': 'solana', 'XRP': 'ripple',
+    'ADA': 'cardano', 'DOGE': 'dogecoin', 'AVAX': 'avalanche-2', 'LINK': 'chainlink',
+    'DOT': 'polkadot', 'LTC': 'litecoin', 'MATIC': 'matic-network', 'ATOM': 'cosmos',
+}
+
+
+def compute_coin_dominance(symbol, price_change_24h):
+    """Real market-cap dominance (share of total crypto market cap) for any coin,
+    keyless via CoinGecko. Shaped like the BTC dominance object so the UI can reuse it."""
+    try:
+        g = _http_json('https://api.coingecko.com/api/v3/global')['data']
+    except Exception:  # noqa
+        return None
+    total = float(g['total_market_cap']['usd'])
+    pct = g.get('market_cap_percentage', {}) or {}
+    key = symbol.lower()
+    dom = None
+    mcap = None
+    if key in pct:
+        dom = round(float(pct[key]), 3)
+        mcap = total * dom / 100.0
+    else:
+        cid = COINGECKO_IDS.get(symbol)
+        if cid:
+            try:
+                arr = _http_json(f'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids={cid}')
+                if arr and arr[0].get('market_cap'):
+                    mcap = float(arr[0]['market_cap'])
+                    dom = round(mcap / total * 100.0, 4)
+            except Exception:  # noqa
+                pass
+    if dom is None:
+        return None
+    today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+    coin_dom_col.update_one({'symbol': symbol, 'date': today},
+                            {'$set': {'symbol': symbol, 'date': today, 'dominance': dom, 'total_mcap': total}},
+                            upsert=True)
+    hist = list(coin_dom_col.find({'symbol': symbol}, {'_id': 0}).sort('date', -1).limit(40))
+
+    def change_over(days):
+        if len(hist) <= days:
+            return None
+        return round(dom - hist[days]['dominance'], 3)
+
+    d7 = change_over(7)
+    d30 = change_over(30)
+    dom_dir = 'Neutral'
+    if d7 is not None:
+        thr = max(0.02, dom * 0.03)
+        dom_dir = 'Rising' if d7 > thr else ('Falling' if d7 < -thr else 'Neutral')
+    p_up = price_change_24h >= 0
+    name = COMPARE_COINS.get(symbol, {}).get('name', symbol) if 'COMPARE_COINS' in globals() else symbol
+    if dom_dir == 'Neutral':
+        interp = f'{name}\u2019s market share is holding steady (history is still building).'
+    elif p_up and dom_dir == 'Rising':
+        interp = f'Price up + share rising: capital is rotating into {name}.'
+    elif p_up and dom_dir == 'Falling':
+        interp = f'Price up but share slipping: the broader market is rising even faster than {name}.'
+    elif (not p_up) and dom_dir == 'Rising':
+        interp = f'Price down but share rising: {name} is holding up better than the market.'
+    else:
+        interp = f'Price down + share falling: {name} is underperforming the broader market.'
+    return {'dominance': dom, 'total_mcap_t': round(total / 1e12, 3),
+            'mcap_usd': round(mcap) if mcap else None,
             'change_7d': d7, 'change_30d': d30, 'direction': dom_dir,
             'interpretation': interp, 'history_points': len(hist)}
 
@@ -3270,6 +3340,11 @@ def compute_coin_dashboard(symbol):
         alerts = compute_alerts(quant, None, None, chart, None)
     except Exception:  # noqa
         traceback.print_exc()
+    dominance = None
+    try:
+        dominance = compute_coin_dominance(symbol, day_change)
+    except Exception:  # noqa
+        traceback.print_exc()
 
     doc = {
         'id': str(uuid.uuid4()),
@@ -3312,7 +3387,7 @@ def compute_coin_dashboard(symbol):
         # BTC-only engines (hidden for altcoins in UI)
         'live_record': None, 'news_forecast_link': None, 'data_health': None,
         'event_calendar': None, 'smart_money': None, 'institutional': None,
-        'prediction_ledger': None, 'bitmark': None, 'cycle': None, 'dominance': None,
+        'prediction_ledger': None, 'bitmark': None, 'cycle': None, 'dominance': dominance,
         'crossmarket': None, 'policy': None, 'smart_alerts': [],
     }
     return doc
