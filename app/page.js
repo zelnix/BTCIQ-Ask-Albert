@@ -3194,6 +3194,7 @@ function CrossMarketSection() {
   const symbol = React.useContext(SymbolContext);
   const [window, setWindow] = React.useState('1y');
   const [logScale, setLogScale] = React.useState(false);
+  const [benchmark, setBenchmark] = React.useState('S&P 500');
   const [data, setData] = React.useState(null);
   const [status, setStatus] = React.useState('loading');
 
@@ -3212,6 +3213,9 @@ function CrossMarketSection() {
   const colorFor = (asset) => MK_COLORS[(data ? data.assets.indexOf(asset) : 0) % MK_COLORS.length];
   const maxVol = data ? Math.max(1, ...data.table.map((t) => t.vol_annual || 0)) : 1;
   const winKey = `ret_${window}`;
+  const benchmarks = (data && data.corr_benchmarks) || [];
+  const activeBench = benchmarks.includes(benchmark) ? benchmark : (benchmarks[0] || 'S&P 500');
+  const trend = (data && data.corr_trend_map && data.corr_trend_map[activeBench]) || (data && data.corr_trend) || [];
 
   return (
     <div className="space-y-6">
@@ -3341,24 +3345,33 @@ function CrossMarketSection() {
             </Card>
           </div>
 
-          {data.corr_trend && data.corr_trend.length > 1 && (
+          {trend && trend.length > 1 && (
             <Card className="border-0 bg-slate-900/60 p-5 ring-1 ring-slate-800">
-              <TapInfo text={`A rolling 30-day correlation between ${data.coin_name} and the S&P 500 over time. Above 0 = moving together (risk-on); near 0 or below = decoupled. The drift matters more than today's single number.`} className="mb-3">
-                <h3 className="pr-5 text-sm font-bold text-white">How {data.coin_name} tracks the S&P 500 · 30-day rolling correlation</h3>
-              </TapInfo>
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <TapInfo text={`A rolling 30-day correlation between ${data.coin_name} and the chosen market over time. Above 0 = moving together (risk-on); near 0 or below = decoupled. The drift matters more than today's single number.`}>
+                  <h3 className="pr-5 text-sm font-bold text-white">How {data.coin_name} tracks {activeBench} · 30-day rolling correlation</h3>
+                </TapInfo>
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Benchmark</span>
+                  <select value={activeBench} onChange={(e) => setBenchmark(e.target.value)}
+                    className="rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1 text-xs font-semibold text-slate-200 outline-none focus:border-sky-500/60">
+                    {benchmarks.map((b) => <option key={b} value={b}>{b}</option>)}
+                  </select>
+                </div>
+              </div>
               <div className="h-56 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={data.corr_trend} margin={{ top: 6, right: 12, left: -18, bottom: 0 }}>
+                  <LineChart data={trend} margin={{ top: 6, right: 12, left: -18, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                     <XAxis dataKey="date" stroke="#64748b" fontSize={10} minTickGap={40} />
                     <YAxis stroke="#64748b" fontSize={11} domain={[-1, 1]} ticks={[-1, -0.5, 0, 0.5, 1]} />
                     <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} />
                     <ReferenceLine y={0} stroke="#475569" strokeDasharray="4 4" />
-                    <Line type="monotone" dataKey="corr" stroke="#38bdf8" strokeWidth={2} dot={false} name="30d correlation" connectNulls />
+                    <Line type="monotone" dataKey="corr" stroke={colorFor(activeBench)} strokeWidth={2} dot={false} name={`30d corr vs ${activeBench}`} connectNulls />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
-              <p className="mt-2 text-[11px] text-slate-500">Latest: <b className="text-slate-300">{data.corr_trend[data.corr_trend.length - 1].corr}</b> · {data.corr_trend.length} days shown. Rising = coupling with stocks; falling = decoupling.</p>
+              <p className="mt-2 text-[11px] text-slate-500">Latest: <b className="text-slate-300">{trend[trend.length - 1].corr}</b> vs {activeBench} · {trend.length} days shown. Rising = coupling; falling = decoupling.</p>
             </Card>
           )}
 
