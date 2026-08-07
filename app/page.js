@@ -3193,6 +3193,7 @@ function reviewCrossMarket(d) {
 function CrossMarketSection() {
   const symbol = React.useContext(SymbolContext);
   const [window, setWindow] = React.useState('1y');
+  const [logScale, setLogScale] = React.useState(false);
   const [data, setData] = React.useState(null);
   const [status, setStatus] = React.useState('loading');
 
@@ -3232,19 +3233,27 @@ function CrossMarketSection() {
       ) : (
         <>
           <Card className="border-0 bg-slate-900/60 p-5 ring-1 ring-slate-800">
-            <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-bold text-white">Rebased performance (start = 100)</h3>
-              <span className="text-[11px] text-slate-500">as of {data.as_of} · {data.coin_name} highlighted</span>
+              <div className="flex items-center gap-2">
+                <div className="flex overflow-hidden rounded-lg ring-1 ring-slate-700">
+                  {[[false, 'Linear'], [true, 'Log']].map(([v, lbl]) => (
+                    <button key={lbl} onClick={() => setLogScale(v)}
+                      className={`px-2.5 py-1 text-[11px] font-semibold transition-colors ${logScale === v ? 'bg-sky-500/20 text-sky-200' : 'bg-slate-800/60 text-slate-400 hover:text-slate-200'}`}>{lbl}</button>
+                  ))}
+                </div>
+                <span className="hidden text-[11px] text-slate-500 sm:inline">as of {data.as_of} · {data.coin_name} highlighted</span>
+              </div>
             </div>
             <div className="h-80 w-full">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={data.series} margin={{ top: 6, right: 12, left: -14, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
                   <XAxis dataKey="date" stroke="#64748b" fontSize={10} minTickGap={40} />
-                  <YAxis stroke="#64748b" fontSize={11} domain={['auto', 'auto']} />
+                  <YAxis stroke="#64748b" fontSize={11} scale={logScale ? 'log' : 'linear'} domain={['auto', 'auto']} allowDataOverflow tickFormatter={(v) => Math.round(v)} />
                   <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <ReferenceLine y={100} stroke="#475569" strokeDasharray="4 4" />
+                  {!logScale && <ReferenceLine y={100} stroke="#475569" strokeDasharray="4 4" />}
                   {data.assets.map((a) => (
                     <Line key={a} type="monotone" dataKey={a} stroke={colorFor(a)} dot={false}
                       strokeWidth={a === data.coin_name ? 2.6 : 1.3} connectNulls />
@@ -3331,6 +3340,27 @@ function CrossMarketSection() {
               </div>
             </Card>
           </div>
+
+          {data.corr_trend && data.corr_trend.length > 1 && (
+            <Card className="border-0 bg-slate-900/60 p-5 ring-1 ring-slate-800">
+              <TapInfo text={`A rolling 30-day correlation between ${data.coin_name} and the S&P 500 over time. Above 0 = moving together (risk-on); near 0 or below = decoupled. The drift matters more than today's single number.`} className="mb-3">
+                <h3 className="pr-5 text-sm font-bold text-white">How {data.coin_name} tracks the S&P 500 · 30-day rolling correlation</h3>
+              </TapInfo>
+              <div className="h-56 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={data.corr_trend} margin={{ top: 6, right: 12, left: -18, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                    <XAxis dataKey="date" stroke="#64748b" fontSize={10} minTickGap={40} />
+                    <YAxis stroke="#64748b" fontSize={11} domain={[-1, 1]} ticks={[-1, -0.5, 0, 0.5, 1]} />
+                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} />
+                    <ReferenceLine y={0} stroke="#475569" strokeDasharray="4 4" />
+                    <Line type="monotone" dataKey="corr" stroke="#38bdf8" strokeWidth={2} dot={false} name="30d correlation" connectNulls />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="mt-2 text-[11px] text-slate-500">Latest: <b className="text-slate-300">{data.corr_trend[data.corr_trend.length - 1].corr}</b> · {data.corr_trend.length} days shown. Rising = coupling with stocks; falling = decoupling.</p>
+            </Card>
+          )}
 
           {data.best && data.worst && (
             <Card className="border-0 bg-gradient-to-br from-slate-900 to-slate-900/60 p-5 ring-1 ring-slate-800">

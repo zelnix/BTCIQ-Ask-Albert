@@ -3755,11 +3755,24 @@ def compute_markets(symbol, window):
     worst = ranked[-1] if ranked else None
     coin_rank = next((i + 1 for i, t in enumerate(ranked) if t['is_coin']), None)
 
+    # rolling 30-day correlation trend vs the S&P 500 (the primary equity benchmark)
+    corr_trend = []
+    try:
+        sp = raw.get('S&P 500')
+        if sp is not None:
+            spr = np.log(sp / sp.shift(1))
+            j = pd.concat([coin_ret, spr], axis=1, keys=['b', 'a']).dropna()
+            roll = j['b'].rolling(30).corr(j['a']).dropna().tail(180)
+            corr_trend = [{'date': idx, 'corr': round(float(v), 2)} for idx, v in roll.items() if pd.notna(v)]
+    except Exception:  # noqa
+        traceback.print_exc()
+
     return {
         'id': str(uuid.uuid4()), 'created_at': datetime.datetime.utcnow().isoformat(),
         'symbol': symbol, 'coin_name': coin_name, 'window': window,
         'as_of': last, 'assets': order,
         'series': series, 'table': table, 'correlations': corr_rows,
+        'corr_trend': corr_trend, 'corr_benchmark': 'S&P 500',
         'best': best, 'worst': worst, 'coin_rank': coin_rank, 'ranked_count': len(ranked),
     }
 
