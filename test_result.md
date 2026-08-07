@@ -1171,3 +1171,93 @@ agent_communication:
       3. ✅ LINK Dominance: dominance=0.267%, total_mcap_t=$2.293T (fallback /coins/markets path)
       
       Feature is working correctly. No issues found.
+
+  - task: "Cross-Market screen - coin vs traditional markets"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          New GET /api/v1/markets?symbol=<COIN>&window=<1m|3m|6m|ytd|1y> compares the coin to
+          traditional markets via keyless Yahoo Finance (S&P 500, Nasdaq 100, Dow, Nikkei 225,
+          Euro Stoxx 50, FTSE 100, DAX, Gold, US Dollar). First call returns {status:'computing'};
+          poll (every ~5s, up to ~90s) until {status:'ready'}. On ready assert:
+          symbol, coin_name, window echoed; 'series' is a non-empty list of rebased points; 'table'
+          is a list where exactly one row has is_coin=true and rows have ret_1w/ret_1m/.../vol_annual;
+          'correlations' is a list with corr_30d/corr_90d/beta_30d/label per index; best/worst present;
+          coin_rank an int. Cached per symbol:window:day.
+          Albert insight coin+section aware: GET /api/v1/albert/insight?section=crossmarket&mode=plain&symbol=BTC
+          returns status 'ready' with text referencing cross-market context (correlations/returns).
+          Please test: (1) BTC markets window=1y ready with above shape, (2) an altcoin e.g. ETH markets
+          window=6m ready (coin_name Ethereum, is_coin row present), (3) crossmarket insight for BTC ready,
+          (4) unsupported symbol FOO -> graceful error. Do NOT test frontend.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Cross-Market endpoint validation via external URL. All 4 tests passed:
+          
+          (1) BTC Markets (window=1y): ✅ PASSED
+              - GET /api/v1/markets?symbol=BTC&window=1y returns status='ready' (cached, 0.3s)
+              - symbol='BTC' ✅
+              - coin_name='Bitcoin' ✅
+              - window='1y' ✅
+              - series: non-empty list with 123 items ✅
+              - table: non-empty list with 10 items ✅
+              - EXACTLY 1 row has is_coin=true ✅
+              - Coin row has all required keys: ret_1w, ret_1m, ret_3m, ret_6m, ret_ytd, ret_1y, vol_annual, price ✅
+              - correlations: non-empty list with 9 items ✅
+              - Correlation items have required keys: corr_30d, corr_90d, beta_30d, label, asset ✅
+              - best and worst are non-null objects ✅
+              - coin_rank=7 (int) ✅
+              - assets: list with 10 items (~10 expected) ✅
+          
+          (2) ETH Markets (window=6m): ✅ PASSED
+              - GET /api/v1/markets?symbol=ETH&window=6m
+              - First call: status='computing' (background thread started) ✅
+              - Polled until status='ready' after 5.8s ✅
+              - coin_name='Ethereum' ✅
+              - window='6m' ✅
+              - is_coin row's asset='Ethereum' ✅
+              - series: non-empty list with 183 items ✅
+          
+          (3) Cross-market Albert Insight: ✅ PASSED
+              - GET /api/v1/albert/insight?section=crossmarket&mode=plain&symbol=BTC
+              - status='ready' ✅
+              - text: non-empty string with 771 characters ✅
+              - Text references cross-market context (found keywords: correlation, traditional, stock) ✅
+              - Text preview: "Bitcoin is currently drifting in a 'Weak Bearish Trend,' showing a notable breakaway from traditional stocks. While it often mirrors the Nasdaq, its s..." ✅
+          
+          (4) Error Handling (unsupported symbol FOO): ✅ PASSED
+              - GET /api/v1/markets?symbol=FOO&window=1y
+              - Returns HTTP 200 (graceful error, no 500 crash) ✅
+              - status='error' ✅
+              - error='unsupported_symbol' ✅
+          
+          All validations passed. Data is REAL (Yahoo Finance BTC-USD, ETH-USD vs traditional market indices). Caching working correctly (BTC 1y cached from previous run, ETH 6m computed in ~6s). Background computation thread working as expected. Albert insight correctly integrates cross-market data into LLM context.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Added a new /api/v1/markets endpoint + crossmarket Albert insight. Please test BTC (window=1y) and
+      ETH (window=6m) markets (poll computing->ready, first compute ~10-40s due to ~10 Yahoo fetches),
+      the crossmarket insight for BTC, and an unsupported symbol. Do NOT test frontend.
+    -agent: "testing"
+    -message: |
+      ✅ ALL CROSS-MARKET TESTS PASSED (4/4)
+      
+      Completed comprehensive testing of the new Cross-Market endpoint via external URL:
+      
+      1. ✅ BTC Markets (window=1y) - All validations passed (symbol, coin_name, window, series with 123 items, table with 10 items including exactly 1 is_coin row with all required return/volatility keys, correlations with 9 items, best/worst objects, coin_rank=7, assets list with 10 items)
+      
+      2. ✅ ETH Markets (window=6m) - Polling working correctly (computing->ready in 5.8s), coin_name='Ethereum', window='6m', is_coin row's asset='Ethereum', series with 183 items
+      
+      3. ✅ Cross-market Albert Insight - status='ready' with 771 character text referencing cross-market context (keywords: correlation, traditional, stock)
+      
+      4. ✅ Error Handling (FOO) - Graceful error handling (status='error', error='unsupported_symbol', no 500 crash)
+      
+      NO CRITICAL ISSUES FOUND. All backend functionality working as expected with real Yahoo Finance data. Caching working correctly. Background computation thread working as expected.

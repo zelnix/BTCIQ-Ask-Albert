@@ -59,6 +59,7 @@ compare_col = db['compare_coins']  # cache for per-coin comparison summaries
 coin_dash_col = db['coin_dashboards']  # cache for per-coin full dashboards (altcoins)
 coin_news_col = db['coin_news']  # cache for per-coin news (altcoins)
 coin_dom_col = db['coin_dominance_hist']  # per-coin market-cap dominance history
+markets_col = db['markets_cache']  # per-coin vs traditional-markets comparison, cached daily
 # Admin passcode gate for manual forecast runs (Stage-1: passcode instead of full auth)
 ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', 'btciq-admin')
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
@@ -2997,6 +2998,7 @@ SECTION_FOCUS = {
     'policy': "Macro and liquidity: how interest rates, the US dollar and global liquidity are pushing or pulling Bitcoin.",
     'news': "The day's Bitcoin news: which stories actually matter for price and why.",
     'risk': "The current risk level: how big the swings could be and what could trigger a sharp move either way.",
+    'crossmarket': "How this coin is performing versus traditional markets (S&P 500, Nasdaq, Nikkei, European indices, Gold, the US Dollar): whether crypto is currently moving WITH stocks (risk-on coupling) or breaking away (decoupling), how its returns and volatility stack up, and what that correlation means for a non-trader.",
 }
 
 
@@ -3030,6 +3032,28 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
     try:
         ctx = build_chat_context(symbol)
         focus = SECTION_FOCUS.get(section, "Explain what this section means for the asset's price and outlook in plain English.")
+        if section == 'crossmarket':
+            today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+            mk = None
+            for w in ('1y', '6m', '3m', '1m', 'ytd'):
+                doc = markets_col.find_one({'_id': f'{symbol}:{w}:{today}'}, {'_id': 0})
+                if doc and doc.get('data'):
+                    mk = doc['data']
+                    break
+            if mk:
+                tbl = mk.get('table', [])
+                coin_row = next((t for t in tbl if t.get('is_coin')), None)
+                lines = [f"CROSS-MARKET DATA (as of {mk.get('as_of')}): {mk.get('coin_name')} vs traditional markets."]
+                if coin_row:
+                    lines.append(f"{mk.get('coin_name')} returns: 1M {coin_row.get('ret_1m')}%, 3M {coin_row.get('ret_3m')}%, 1Y {coin_row.get('ret_1y')}%, YTD {coin_row.get('ret_ytd')}%; annualized volatility {coin_row.get('vol_annual')}%.")
+                for t in tbl:
+                    if not t.get('is_coin'):
+                        lines.append(f"{t['asset']}: 1M {t.get('ret_1m')}%, 1Y {t.get('ret_1y')}%, vol {t.get('vol_annual')}%.")
+                for c in mk.get('correlations', []):
+                    lines.append(f"Correlation {mk.get('coin_name')}–{c['asset']}: 30d {c.get('corr_30d')}, 90d {c.get('corr_90d')} ({c.get('label')}), beta {c.get('beta_30d')}.")
+                if mk.get('best') and mk.get('worst'):
+                    lines.append(f"Over the {mk.get('window')} window the best performer is {mk['best']['asset']} and the worst is {mk['worst']['asset']}; {mk.get('coin_name')} ranks #{mk.get('coin_rank')} of {mk.get('ranked_count')}.")
+                ctx = ctx + "\n\n" + "\n".join(lines)
         sys_tmpl = ALBERT_TECH_SYSTEM if mode == 'technical' else ALBERT_INSIGHT_SYSTEM
         kind = 'technical briefing' if mode == 'technical' else 'insight'
         umsg = f"Write Albert's {kind} for the '{section}' section now, following all the rules."
@@ -3590,4 +3614,190 @@ def run_coin_news_bg(symbol):
     except Exception:  # noqa
         _coin_news_state[symbol] = 'error'
         traceback.print_exc()
+
+
+
+# =====================================================================
+# CROSS-MARKET — selected coin vs traditional markets (keyless, Yahoo Finance).
+# =====================================================================
+MARKET_INDICES = [
+    ('S&P 500', '%5EGSPC'),
+    ('Nasdaq 100', '%5ENDX'),
+    ('Dow Jones', '%5EDJI'),
+    ('Nikkei 225', '%5EN225'),
+    ('Euro Stoxx 50', '%5ESTOXX50E'),
+    ('FTSE 100', '%5EFTSE'),
+    ('DAX', '%5EGDAXI'),
+    ('Gold', 'GC=F'),
+    ('US Dollar (DXY)', 'DX-Y.NYB'),
+]
+MARKET_WINDOWS = {'1m': 30, '3m': 91, '6m': 182, 'ytd': None, '1y': 365}
+_markets_state = {}
+_markets_lock = threading.Lock()
+
+
+def _yahoo_coin_ticker(symbol):
+    return 'BTC-USD' if symbol == 'BTC' else f'{symbol}-USD'
+
+
+def _ret_over(s, days):
+    if s is None or len(s) < 2:
+        return None
+    last = s.index[-1]
+    target = (pd.to_datetime(last) - pd.Timedelta(days=days)).strftime('%Y-%m-%d')
+    prior = s[s.index <= target]
+    if len(prior) == 0:
+        return None
+    base = float(prior.iloc[-1])
+    if base == 0:
+        return None
+    return round((float(s.iloc[-1]) / base - 1) * 100, 2)
+
+
+def _ret_ytd(s):
+    if s is None or len(s) < 2:
+        return None
+    yr = s.index[-1][:4]
+    ys = s[s.index >= f'{yr}-01-01']
+    if len(ys) < 2:
+        return None
+    base = float(ys.iloc[0])
+    if base == 0:
+        return None
+    return round((float(s.iloc[-1]) / base - 1) * 100, 2)
+
+
+def _annual_vol(s, periods_per_year):
+    if s is None or len(s) < 20:
+        return None
+    r = np.log(s / s.shift(1)).dropna().tail(90)
+    if len(r) < 10:
+        return None
+    return round(float(r.std()) * (periods_per_year ** 0.5) * 100, 1)
+
+
+def compute_markets(symbol, window):
+    window = window if window in MARKET_WINDOWS else '1y'
+    cfg = COMPARE_COINS.get(symbol, {'name': symbol})
+    coin_name = cfg['name']
+    coin_s = fetch_yahoo_series(_yahoo_coin_ticker(symbol), '1y')
+    coin_ret = np.log(coin_s / coin_s.shift(1))
+
+    raw = {coin_name: coin_s}
+    corr_rows = []
+    for name, sym in MARKET_INDICES:
+        try:
+            s = fetch_yahoo_series(sym, '1y')
+            raw[name] = s
+            r = np.log(s / s.shift(1))
+            j = pd.concat([coin_ret, r], axis=1, keys=['b', 'a']).dropna()
+
+            def corr(n):
+                x = j.tail(n)
+                return round(float(x['b'].corr(x['a'])), 2) if len(x) > 3 else None
+            c30 = corr(30)
+            beta = None
+            x = j.tail(30)
+            if len(x) > 3 and x['a'].var() > 0:
+                beta = round(float(x['b'].cov(x['a']) / x['a'].var()), 2)
+            ar = abs(c30 or 0)
+            lab = ('Strong' if ar > 0.6 else 'Moderate' if ar > 0.3 else 'Weak') + (' Positive' if (c30 or 0) >= 0 else ' Negative')
+            corr_rows.append({'asset': name, 'corr_30d': c30, 'corr_90d': corr(90), 'beta_30d': beta, 'label': lab})
+        except Exception:  # noqa
+            traceback.print_exc()
+
+    # returns + volatility table (coin first)
+    table = []
+    order = [coin_name] + [n for n, _ in MARKET_INDICES]
+    for name in order:
+        s = raw.get(name)
+        if s is None or len(s) < 2:
+            continue
+        is_coin = (name == coin_name)
+        table.append({
+            'asset': name, 'is_coin': is_coin,
+            'price': round(float(s.iloc[-1]), 2),
+            'ret_1w': _ret_over(s, 7), 'ret_1m': _ret_over(s, 30), 'ret_3m': _ret_over(s, 91),
+            'ret_6m': _ret_over(s, 182), 'ret_1y': _ret_over(s, 365), 'ret_ytd': _ret_ytd(s),
+            'vol_annual': _annual_vol(s, 365 if is_coin else 252),
+        })
+
+    # rebased performance chart over the selected window, aligned to coin (continuous) dates
+    df = pd.DataFrame(raw).sort_index().ffill()
+    last = df.index[-1]
+    if window == 'ytd':
+        start = f'{last[:4]}-01-01'
+        df = df[df.index >= start]
+    else:
+        days = MARKET_WINDOWS[window]
+        start = (pd.to_datetime(last) - pd.Timedelta(days=days)).strftime('%Y-%m-%d')
+        df = df[df.index >= start]
+    df = df.dropna(how='all')
+    series = []
+    if len(df) > 0:
+        base = df.bfill().iloc[0]
+        # downsample to ~120 points max for a light chart
+        stepn = max(1, len(df) // 120)
+        for i, (dt, row) in enumerate(df.iterrows()):
+            if i % stepn != 0 and i != len(df) - 1:
+                continue
+            pt = {'date': dt}
+            for name in order:
+                if name in df.columns and pd.notna(row[name]) and pd.notna(base.get(name)) and base[name]:
+                    pt[name] = round(float(row[name]) / float(base[name]) * 100, 2)
+            series.append(pt)
+
+    # best / worst by the selected-window return
+    win_key = {'1m': 'ret_1m', '3m': 'ret_3m', '6m': 'ret_6m', 'ytd': 'ret_ytd', '1y': 'ret_1y'}[window]
+    ranked = [t for t in table if t.get(win_key) is not None]
+    ranked.sort(key=lambda t: -t[win_key])
+    best = ranked[0] if ranked else None
+    worst = ranked[-1] if ranked else None
+    coin_rank = next((i + 1 for i, t in enumerate(ranked) if t['is_coin']), None)
+
+    return {
+        'id': str(uuid.uuid4()), 'created_at': datetime.datetime.utcnow().isoformat(),
+        'symbol': symbol, 'coin_name': coin_name, 'window': window,
+        'as_of': last, 'assets': order,
+        'series': series, 'table': table, 'correlations': corr_rows,
+        'best': best, 'worst': worst, 'coin_rank': coin_rank, 'ranked_count': len(ranked),
+    }
+
+
+def run_markets_bg(symbol, window):
+    key = f'{symbol}:{window}'
+    with _markets_lock:
+        if _markets_state.get(key) == 'running':
+            return
+        _markets_state[key] = 'running'
+    try:
+        data = compute_markets(symbol, window)
+        today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+        cache_id = f'{symbol}:{window}:{today}'
+        markets_col.update_one({'_id': cache_id},
+                               {'$set': {'_id': cache_id, 'symbol': symbol, 'window': window, 'day': today,
+                                         'data': data, 'created_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+        _markets_state[key] = 'done'
+    except Exception:  # noqa
+        _markets_state[key] = 'error'
+        traceback.print_exc()
+
+
+@app.get('/api/v1/markets')
+def markets(symbol: str = 'BTC', window: str = '1y'):
+    symbol = (symbol or 'BTC').strip().upper()[:6]
+    window = window if window in MARKET_WINDOWS else '1y'
+    if symbol != 'BTC' and symbol not in COMPARE_COINS:
+        return {'status': 'error', 'error': 'unsupported_symbol'}
+    today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+    cache_id = f'{symbol}:{window}:{today}'
+    cached = markets_col.find_one({'_id': cache_id}, {'_id': 0})
+    if cached and cached.get('data'):
+        return {'status': 'ready', **cached['data']}
+    st = _markets_state.get(f'{symbol}:{window}')
+    if st != 'running':
+        threading.Thread(target=run_markets_bg, args=(symbol, window), daemon=True).start()
+    if st == 'error':
+        return {'status': 'error', 'error': 'compute_failed'}
+    return {'status': 'computing'}
 
