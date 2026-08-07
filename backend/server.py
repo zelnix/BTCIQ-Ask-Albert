@@ -3950,6 +3950,20 @@ def compute_analogs():
 
     dates = list(df.index)
     vals = [float(x) for x in df['btc'].values]
+
+    def path_for(start, base_price, lo=-60, hi=180, step=3):
+        pts = []
+        sd = pd.to_datetime(start)
+        for off in range(lo, hi + 1, step):
+            td = (sd + pd.Timedelta(days=off)).strftime('%Y-%m-%d')
+            if td > dates[-1]:
+                break
+            sub = df[df.index <= td]
+            if len(sub) == 0:
+                continue
+            pts.append({'off': off, 'v': round(float(sub['btc'].iloc[-1]) / base_price * 100, 1)})
+        return pts
+
     pivots = _zigzag(dates, vals, 0.30)
     episodes = []
     for k in range(len(pivots) - 1):
@@ -3972,7 +3986,17 @@ def compute_analogs():
             'move_pct': move, 'duration_days': dur,
             'fingerprint': fp, 'tags': tags,
             'fwd_30': fwd_ret(d0, 30), 'fwd_90': fwd_ret(d0, 90), 'fwd_180': fwd_ret(d0, 180),
+            'path': path_for(d0, p0),
         })
+
+    today_price = float(df['btc'].iloc[-1])
+    current_path = []
+    for off in range(-60, 1, 3):
+        td = (pd.to_datetime(dates[-1]) + pd.Timedelta(days=off)).strftime('%Y-%m-%d')
+        sub = df[df.index <= td]
+        if len(sub) == 0:
+            continue
+        current_path.append({'off': off, 'v': round(float(sub['btc'].iloc[-1]) / today_price * 100, 1)})
 
     current = {k: (None if pd.isna(df[k].iloc[-1]) else round(float(df[k].iloc[-1]), 2)) for k in ANALOG_KEYS}
 
@@ -4003,6 +4027,7 @@ def compute_analogs():
         'as_of': dates[-1], 'history_from': dates[0],
         'signals': ANALOG_SIGNALS, 'norm': norm,
         'current': current, 'episodes': ranked, 'episode_count': len(ranked),
+        'current_path': current_path,
     }
 
 
@@ -4016,6 +4041,23 @@ def run_analogs_bg():
         today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
         analogs_col.update_one({'_id': today}, {'$set': {'_id': today, 'day': today, 'data': data,
                                'created_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+        # Auto-alert: ping the bell once/day when the strongest analog crosses a high threshold.
+        try:
+            top = (data.get('episodes') or [None])[0]
+            if top and top.get('match', 0) >= 70:
+                now_iso = datetime.datetime.utcnow().isoformat()
+                sev = 'high' if top['match'] >= 80 else 'warning'
+                smart_alerts_col.update_one(
+                    {'_id': f"analog_{today}_{top['id']}"},
+                    {'$setOnInsert': {
+                        '_id': f"analog_{today}_{top['id']}", 'id': f"analog_{today}_{top['id']}",
+                        'ts': now_iso, 'as_of': data.get('as_of'), 'category': 'Setup', 'severity': sev,
+                        'title': f"Strong historical setup forming ({top['match']}% match)",
+                        'message': f"Today's Bitcoin conditions closely resemble {top['label']} ({top['start']}→{top['end']}), which then moved {top.get('fwd_90')}% over 90 days. Educational pattern-match, not a prediction.",
+                        'seen': False, 'impact': int(top['match']),
+                    }}, upsert=True)
+        except Exception:  # noqa
+            traceback.print_exc()
         _analogs_state['status'] = 'done'
     except Exception:  # noqa
         _analogs_state['status'] = 'error'

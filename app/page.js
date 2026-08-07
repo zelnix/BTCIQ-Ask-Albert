@@ -3219,6 +3219,12 @@ function AnalogsSection() {
   const [data, setData] = React.useState(null);
   const [status, setStatus] = React.useState('loading');
   const [weights, setWeights] = React.useState({});
+  const [threshold, setThreshold] = React.useState(70);
+
+  React.useEffect(() => {
+    try { const t = parseInt(localStorage.getItem('analog_threshold'), 10); if (t) setThreshold(t); } catch (e) { /* noop */ }
+  }, []);
+  React.useEffect(() => { try { localStorage.setItem('analog_threshold', String(threshold)); } catch (e) { /* noop */ } }, [threshold]);
 
   React.useEffect(() => {
     let alive = true;
@@ -3239,6 +3245,15 @@ function AnalogsSection() {
     if (!data) return [];
     return data.episodes.map((e) => ({ ...e, match: scoreAnalog(e, data.current, data.norm, weights) })).sort((a, b) => b.match - a.match);
   }, [data, weights]);
+
+  const topEp = ranked[0];
+  const overlay = React.useMemo(() => {
+    if (!data || !topEp) return [];
+    const cur = Object.fromEntries((data.current_path || []).map((p) => [p.off, p.v]));
+    const ana = Object.fromEntries((topEp.path || []).map((p) => [p.off, p.v]));
+    const offs = Array.from(new Set([...Object.keys(cur), ...Object.keys(ana)].map(Number))).sort((a, b) => a - b);
+    return offs.map((o) => ({ off: o, Today: cur[o] == null ? null : cur[o], Analog: ana[o] == null ? null : ana[o] }));
+  }, [data, topEp]);
 
   const sig = (k) => (data ? data.signals.find((s) => s.key === k) : null);
   const fmtSig = (k, v) => {
@@ -3261,6 +3276,21 @@ function AnalogsSection() {
     <div className="space-y-6">
       <SectionHead icon={History} title="Happening Again" blurb={sec('analogs').blurb} />
       <AiReview text={data ? `Today's Bitcoin setup most resembles ${(ranked[0] || {}).label || 'a past episode'} (${(ranked[0] || {}).match || '—'}% match).` : 'Scanning history for the closest analog…'} voice section="analogs" />
+
+      {status === 'ready' && topEp && topEp.match >= threshold && (
+        <Card className="border-0 bg-gradient-to-r from-amber-500/15 to-sky-500/10 p-4 ring-1 ring-amber-500/40 animate-in fade-in-0 slide-in-from-top-1 duration-300">
+          <div className="flex items-start gap-3">
+            <span className="relative mt-0.5 flex h-6 w-6 items-center justify-center">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400/40" />
+              <Bell className="relative h-5 w-5 text-amber-300" />
+            </span>
+            <div className="text-sm">
+              <p className="font-bold text-white">Strong setup forming — {topEp.match}% match to {topEp.label}</p>
+              <p className="text-slate-300">Back then, Bitcoin went on to move <b className={topEp.fwd_90 >= 0 ? 'text-emerald-400' : 'text-red-400'}>{topEp.fwd_90 == null ? '—' : `${topEp.fwd_90 > 0 ? '+' : ''}${topEp.fwd_90}%`}</b> over the next 90 days. Educational pattern-match, not a prediction. <span className="text-slate-500">(A daily bell alert fires automatically at ≥70%.)</span></p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {status !== 'ready' || !data ? (
         <Card className="border-0 bg-slate-900/60 p-10 text-center ring-1 ring-slate-800">
@@ -3304,6 +3334,36 @@ function AnalogsSection() {
               </div>
             </Card>
           </div>
+
+          <Card className="border-0 bg-slate-900/60 p-5 ring-1 ring-slate-800">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <TapInfo text="Overlays the closest past episode's price path (rebased to 100 at its setup point) with Bitcoin's recent path (rebased to 100 at today). The overlap left of 0 shows how similar the lead-ins are; the analog line right of 0 shows what happened next in that episode.">
+                <h3 className="pr-5 text-sm font-bold text-white">Shape overlay · today vs {topEp ? topEp.label : 'top analog'}</h3>
+              </TapInfo>
+              <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                <Bell className="h-3.5 w-3.5 text-amber-300" />
+                <span>Alert me at ≥</span>
+                <input type="range" min="50" max="90" step="5" value={threshold} onChange={(e) => setThreshold(parseInt(e.target.value, 10))} className="h-1.5 w-24 cursor-pointer accent-amber-400" />
+                <span className="w-8 font-semibold text-amber-300">{threshold}%</span>
+              </div>
+            </div>
+            <div className="h-72 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={overlay} margin={{ top: 6, right: 12, left: -14, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis dataKey="off" stroke="#64748b" fontSize={11} tickFormatter={(v) => `${v > 0 ? '+' : ''}${v}d`} />
+                  <YAxis stroke="#64748b" fontSize={11} domain={['auto', 'auto']} tickFormatter={(v) => Math.round(v)} />
+                  <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} labelFormatter={(v) => `${v > 0 ? '+' : ''}${v} days from setup`} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <ReferenceLine x={0} stroke="#64748b" strokeDasharray="4 4" />
+                  <ReferenceLine y={100} stroke="#334155" strokeDasharray="3 3" />
+                  <Line type="monotone" dataKey="Analog" stroke="#f7931a" strokeWidth={2} dot={false} connectNulls name={topEp ? topEp.label : 'Analog'} />
+                  <Line type="monotone" dataKey="Today" stroke="#38bdf8" strokeWidth={2.4} dot={false} connectNulls name="Bitcoin now" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-500">Both rebased to 100 at the “now / setup” line (day 0). Left of 0 = the lead-in shapes; right of 0 = how the analog played out afterward.</p>
+          </Card>
 
           <div>
             <h3 className="mb-3 text-sm font-bold text-white">Closest historical analogs</h3>
