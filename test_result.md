@@ -1261,3 +1261,92 @@ agent_communication:
       4. ✅ Error Handling (FOO) - Graceful error handling (status='error', error='unsupported_symbol', no 500 crash)
       
       NO CRITICAL ISSUES FOUND. All backend functionality working as expected with real Yahoo Finance data. Caching working correctly. Background computation thread working as expected.
+
+  - task: "Happening Again - historical-analog engine (Bitcoin)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          New GET /api/v1/analogs (Bitcoin-only). First call {status:'computing'}; poll (5s, up to ~90s)
+          until {status:'ready'}. Fetches 10y daily BTC + Nasdaq/Gold/DXY/10Y (Yahoo, keyless),
+          auto-detects trend episodes (zigzag >=30%), builds an 8-signal condition fingerprint per
+          episode + today's, and ranks episodes by weighted similarity. On ready assert:
+          'current' has 8 keys (rates_dir,dxy_dir,nasdaq_corr,gold_corr,vol_regime,drawdown,momentum,cycle)
+          with sane values (e.g. momentum between -95 and +300, not thousands); 'episodes' is a non-empty
+          list where each has label,type,start,end,move_pct,fingerprint,match(0-100),fwd_30,fwd_90,fwd_180,tags;
+          'signals' is a list of 8 with key/label/cat; 'norm' present. episode_count>0.
+          Also GET /api/v1/albert/insight?section=analogs&mode=plain&symbol=BTC -> status 'ready' text
+          referencing an analog/period (context injected).
+          Please test: (1) analogs ready with above shape & sane momentum (regression on the monthly-data
+          bug that produced momentum ~1465%), (2) analogs insight ready. Do NOT test frontend.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive validation via external URL. All 3 tests passed:
+          
+          (1) GET /api/v1/analogs - ✅ PASSED
+              - Status changed to 'ready' immediately (0.3s, already cached)
+              - 'current' fingerprint validated: exactly 8 keys (rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum, cycle) ✅
+              - Current values (eyeball check): rates_dir=0.25, dxy_dir=2.16, nasdaq_corr=0.47, gold_corr=0.55, vol_regime=29.2, drawdown=-48.5, momentum=-19.9, cycle=27.6 ✅
+              - REGRESSION CHECK PASSED: momentum=-19.9 (valid range -95 to +400, NOT ~1465 from earlier monthly-data bug) ✅
+              - Value range validations: nasdaq_corr (0.47) in [-1,1] ✅, gold_corr (0.55) in [-1,1] ✅, drawdown (-48.5) in [-100,5] ✅, cycle (27.6) in [0,60] ✅
+              - 'signals' is a list of 8 items, each with key/label/cat ✅
+              - 'norm' is a dict with 8 keys, each with 'std' field ✅
+              - 'episodes' is a non-empty list with 28 items ✅
+              - episode_count=28 (matches len(episodes)) ✅
+              - episodes[0] validated: all required fields (label, type, start, end, move_pct, duration_days, fingerprint, match, fwd_30, fwd_90, fwd_180, tags) ✅
+              - episodes[0]['type']='rally' (valid enum) ✅
+              - episodes[0]['fingerprint'] has 8 keys ✅
+              - episodes[0]['match']=56.0 (valid range 0-100) ✅
+              - episodes[0]['tags'] is a list ✅
+              - Episodes sorted by match descending (first: 56.0, last: 23.0) ✅
+          
+          (2) GET /api/v1/albert/insight?section=analogs&mode=plain&symbol=BTC - ✅ PASSED
+              - Status='ready' ✅
+              - 'text' is a non-empty string (800 chars) ✅
+              - Text references historical period/analog (mentions "early 2022", "interest rates", "stronger dollar") ✅
+              - Preview: "Bitcoin is currently mirroring historical periods where the market paused after a cooling-off phase. The strongest match is early 2022, a time when shifting interest rates and a stronger dollar..." ✅
+          
+          (3) GET /api/v1/dashboard - ✅ PASSED (regression check)
+              - Status='ready' ✅
+              - All required fields present (signal, confidence, last_close, quant_score, regime, forecasts, decision) ✅
+              - signal='DOWN' (valid) ✅
+              - last_close=$64,301.90 (valid) ✅
+          
+          All validations passed. Data is REAL (Yahoo Finance BTC-USD, Nasdaq, Gold, DXY, 10Y yield). No critical issues found.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Added /api/v1/analogs (historical-analog engine, BTC-only) + analogs Albert insight. Please poll
+      analogs to ready and validate the shape + that momentum/values are realistic daily-based (not the
+      earlier monthly-data bug). Also confirm the analogs insight returns 'ready'. Do NOT test frontend.
+    -agent: "testing"
+    -message: |
+      ✅ TESTING COMPLETE - ALL TESTS PASSED (3/3)
+      
+      Tested "Happening Again" historical-analog engine via external URL:
+      
+      1. GET /api/v1/analogs - ✅ PASSED
+         - Returns status='ready' with complete historical-analog data
+         - Current fingerprint: 8 signals validated (momentum=-19.9, within valid range -95 to +400)
+         - REGRESSION CHECK PASSED: No monthly-data bug (momentum NOT ~1465)
+         - 28 historical episodes detected, sorted by match score (56.0 to 23.0)
+         - All episodes have complete structure with fingerprints, forward returns, and tags
+      
+      2. GET /api/v1/albert/insight?section=analogs - ✅ PASSED
+         - Returns status='ready' with 800-char insight text
+         - Text correctly references historical analog (early 2022 period)
+         - Context properly injected from analogs data
+      
+      3. GET /api/v1/dashboard - ✅ PASSED (regression)
+         - Main pipeline still working correctly
+         - No breaking changes from new analogs code
+      
+      NO CRITICAL ISSUES FOUND. All backend functionality working as expected with real data (Yahoo Finance).

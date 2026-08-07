@@ -60,6 +60,7 @@ coin_dash_col = db['coin_dashboards']  # cache for per-coin full dashboards (alt
 coin_news_col = db['coin_news']  # cache for per-coin news (altcoins)
 coin_dom_col = db['coin_dominance_hist']  # per-coin market-cap dominance history
 markets_col = db['markets_cache']  # per-coin vs traditional-markets comparison, cached daily
+analogs_col = db['analogs_cache']  # historical-analog engine (Bitcoin), cached daily
 # Admin passcode gate for manual forecast runs (Stage-1: passcode instead of full auth)
 ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', 'btciq-admin')
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
@@ -2999,6 +3000,7 @@ SECTION_FOCUS = {
     'news': "The day's Bitcoin news: which stories actually matter for price and why.",
     'risk': "The current risk level: how big the swings could be and what could trigger a sharp move either way.",
     'crossmarket': "How this coin is performing versus traditional markets (S&P 500, Nasdaq, Nikkei, European indices, Gold, the US Dollar): whether crypto is currently moving WITH stocks (risk-on coupling) or breaking away (decoupling), how its returns and volatility stack up, and what that correlation means for a non-trader.",
+    'analogs': "Historical analogs: which past Bitcoin trend episode today's market conditions most resemble (macro rates, US dollar, equity/gold correlation, volatility, drawdown, momentum and halving-cycle position), what drove that past episode, and what would confirm or break a repeat. Educational pattern-matching on a small sample — never a guarantee.",
 }
 
 
@@ -3053,6 +3055,20 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
                     lines.append(f"Correlation {mk.get('coin_name')}–{c['asset']}: 30d {c.get('corr_30d')}, 90d {c.get('corr_90d')} ({c.get('label')}), beta {c.get('beta_30d')}.")
                 if mk.get('best') and mk.get('worst'):
                     lines.append(f"Over the {mk.get('window')} window the best performer is {mk['best']['asset']} and the worst is {mk['worst']['asset']}; {mk.get('coin_name')} ranks #{mk.get('coin_rank')} of {mk.get('ranked_count')}.")
+                ctx = ctx + "\n\n" + "\n".join(lines)
+        if section == 'analogs':
+            today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+            adoc = analogs_col.find_one({'_id': today}, {'_id': 0})
+            data = (adoc or {}).get('data')
+            if data:
+                cur = data.get('current', {})
+                lines = [f"HISTORICAL-ANALOG DATA (as of {data.get('as_of')}). Today's Bitcoin condition fingerprint:"]
+                sigmap = {s['key']: s['label'] for s in data.get('signals', [])}
+                for k, v in cur.items():
+                    lines.append(f"- {sigmap.get(k, k)}: {v}")
+                top = (data.get('episodes') or [])[:3]
+                for ep in top:
+                    lines.append(f"Analog: {ep['label']} ({ep['start']}→{ep['end']}) match {ep['match']}% — then moved fwd 30d {ep['fwd_30']}%, 90d {ep['fwd_90']}%, 180d {ep['fwd_180']}%. Drivers: {', '.join(t['label'] for t in ep.get('tags', [])) or 'price-driven'}.")
                 ctx = ctx + "\n\n" + "\n".join(lines)
         sys_tmpl = ALBERT_TECH_SYSTEM if mode == 'technical' else ALBERT_INSIGHT_SYSTEM
         kind = 'technical briefing' if mode == 'technical' else 'insight'
@@ -3817,6 +3833,204 @@ def markets(symbol: str = 'BTC', window: str = '1y'):
     if st != 'running':
         threading.Thread(target=run_markets_bg, args=(symbol, window), daemon=True).start()
     if st == 'error':
+        return {'status': 'error', 'error': 'compute_failed'}
+    return {'status': 'computing'}
+
+
+
+# =====================================================================
+# HAPPENING AGAIN — historical-analog engine (Bitcoin). Auto-detects past
+# trend episodes, builds a condition "fingerprint" for each, and matches
+# today's conditions against them. Keyless (Yahoo Finance). Cached daily.
+# =====================================================================
+HALVINGS = ['2012-11-28', '2016-07-09', '2020-05-11', '2024-04-20']
+CURATED_EVENTS = [
+    {'date': '2017-12-17', 'label': '2017 cycle top / futures launch', 'cat': 'Events'},
+    {'date': '2020-03-12', 'label': 'COVID crash', 'cat': 'Events'},
+    {'date': '2020-05-11', 'label': '3rd halving', 'cat': 'On-chain'},
+    {'date': '2021-04-14', 'label': 'Coinbase IPO / cycle top area', 'cat': 'Events'},
+    {'date': '2021-11-10', 'label': '2021 all-time high', 'cat': 'Market structure'},
+    {'date': '2022-05-09', 'label': 'Terra/LUNA collapse', 'cat': 'Events'},
+    {'date': '2022-11-08', 'label': 'FTX collapse', 'cat': 'Events'},
+    {'date': '2023-03-10', 'label': 'US bank failures / SVB', 'cat': 'Macro'},
+    {'date': '2024-01-11', 'label': 'US spot ETFs approved', 'cat': 'Events'},
+    {'date': '2024-04-20', 'label': '4th halving', 'cat': 'On-chain'},
+]
+ANALOG_SIGNALS = [
+    {'key': 'rates_dir', 'label': 'Rates trend (10Y, 90d chg)', 'cat': 'Macro', 'unit': 'pts', 'good_high': False},
+    {'key': 'dxy_dir', 'label': 'US Dollar trend (90d %)', 'cat': 'Macro', 'unit': '%', 'good_high': False},
+    {'key': 'nasdaq_corr', 'label': 'BTC–Nasdaq correlation (30d)', 'cat': 'Market structure', 'unit': '', 'good_high': None},
+    {'key': 'gold_corr', 'label': 'BTC–Gold correlation (30d)', 'cat': 'Market structure', 'unit': '', 'good_high': None},
+    {'key': 'vol_regime', 'label': 'Volatility (30d annualized)', 'cat': 'Market structure', 'unit': '%', 'good_high': None},
+    {'key': 'drawdown', 'label': 'Drawdown from ATH', 'cat': 'Market structure', 'unit': '%', 'good_high': None},
+    {'key': 'momentum', 'label': 'Momentum (90d return)', 'cat': 'Market structure', 'unit': '%', 'good_high': True},
+    {'key': 'cycle', 'label': 'Months since halving', 'cat': 'On-chain', 'unit': 'mo', 'good_high': None},
+]
+ANALOG_KEYS = [s['key'] for s in ANALOG_SIGNALS]
+_analogs_state = {'status': 'idle'}
+_analogs_lock = threading.Lock()
+
+
+def _months_since_halving(d):
+    dd = pd.to_datetime(d)
+    prev = [h for h in HALVINGS if pd.to_datetime(h) <= dd]
+    if not prev:
+        return None
+    return round((dd - pd.to_datetime(prev[-1])).days / 30.44, 1)
+
+
+def _zigzag(dates, v, pct=0.3):
+    piv = []
+    trend = 0
+    hi_i = lo_i = 0
+    for i in range(1, len(v)):
+        if v[i] > v[hi_i]:
+            hi_i = i
+        if v[i] < v[lo_i]:
+            lo_i = i
+        if trend >= 0 and v[i] <= v[hi_i] * (1 - pct):
+            piv.append((dates[hi_i], v[hi_i], 'peak'))
+            trend = -1
+            lo_i = i
+        elif trend <= 0 and v[i] >= v[lo_i] * (1 + pct):
+            piv.append((dates[lo_i], v[lo_i], 'trough'))
+            trend = 1
+            hi_i = i
+    return piv
+
+
+def compute_analogs():
+    btc = fetch_yahoo_series('BTC-USD', '10y')
+    ndx = fetch_yahoo_series('%5ENDX', '10y')
+    gold = fetch_yahoo_series('GC=F', '10y')
+    dxy = fetch_yahoo_series('DX-Y.NYB', '10y')
+    tnx = fetch_yahoo_series('%5ETNX', '10y')
+    df = pd.DataFrame({'btc': btc}).sort_index()
+    df = df[df['btc'] > 0]
+    ret = np.log(df['btc'] / df['btc'].shift(1))
+
+    def align(s):
+        return s.reindex(df.index).ffill()
+    ndx_r = np.log(align(ndx) / align(ndx).shift(1))
+    gold_r = np.log(align(gold) / align(gold).shift(1))
+    tnx_a = align(tnx)
+    dxy_a = align(dxy)
+    df['rates_dir'] = (tnx_a - tnx_a.shift(90)).round(2)
+    df['dxy_dir'] = ((dxy_a / dxy_a.shift(90) - 1) * 100).round(2)
+    df['nasdaq_corr'] = ret.rolling(30).corr(ndx_r).round(2)
+    df['gold_corr'] = ret.rolling(30).corr(gold_r).round(2)
+    df['vol_regime'] = (ret.rolling(30).std() * (365 ** 0.5) * 100).round(1)
+    df['drawdown'] = ((df['btc'] / df['btc'].cummax() - 1) * 100).round(1)
+    df['momentum'] = ((df['btc'] / df['btc'].shift(90) - 1) * 100).round(1)
+    df['cycle'] = [(_months_since_halving(d) or 0) for d in df.index]
+
+    # normalization stats across history
+    norm = {}
+    for k in ANALOG_KEYS:
+        col = df[k].dropna()
+        norm[k] = {'mean': round(float(col.mean()), 3), 'std': round(float(col.std()) or 1.0, 3)}
+
+    def fp_at(date):
+        try:
+            row = df.loc[date]
+        except Exception:  # noqa
+            sub = df[df.index <= date]
+            if len(sub) == 0:
+                return None
+            row = sub.iloc[-1]
+        return {k: (None if pd.isna(row[k]) else round(float(row[k]), 2)) for k in ANALOG_KEYS}
+
+    def fwd_ret(start, days):
+        target = (pd.to_datetime(start) + pd.Timedelta(days=days)).strftime('%Y-%m-%d')
+        after = df[df.index >= target]
+        base = df[df.index <= start]
+        if len(after) == 0 or len(base) == 0:
+            return None
+        return round((float(after['btc'].iloc[0]) / float(base['btc'].iloc[-1]) - 1) * 100, 1)
+
+    dates = list(df.index)
+    vals = [float(x) for x in df['btc'].values]
+    pivots = _zigzag(dates, vals, 0.30)
+    episodes = []
+    for k in range(len(pivots) - 1):
+        (d0, p0, t0) = pivots[k]
+        (d1, p1, t1) = pivots[k + 1]
+        move = round((p1 / p0 - 1) * 100, 1)
+        if abs(move) < 30:
+            continue
+        up = move > 0
+        fp = fp_at(d0)
+        if not fp:
+            continue
+        tags = [e for e in CURATED_EVENTS if d0 <= e['date'] <= d1]
+        dur = (pd.to_datetime(d1) - pd.to_datetime(d0)).days
+        episodes.append({
+            'id': str(uuid.uuid4())[:8],
+            'label': f"{d0[:4]} {'rally' if up else 'drawdown'} {move:+.0f}%",
+            'type': 'rally' if up else 'drawdown',
+            'start': d0, 'end': d1, 'start_price': round(p0, 2), 'end_price': round(p1, 2),
+            'move_pct': move, 'duration_days': dur,
+            'fingerprint': fp, 'tags': tags,
+            'fwd_30': fwd_ret(d0, 30), 'fwd_90': fwd_ret(d0, 90), 'fwd_180': fwd_ret(d0, 180),
+        })
+
+    current = {k: (None if pd.isna(df[k].iloc[-1]) else round(float(df[k].iloc[-1]), 2)) for k in ANALOG_KEYS}
+
+    def match_score(fp, weights=None):
+        tot = 0.0
+        wsum = 0.0
+        for s in ANALOG_SIGNALS:
+            k = s['key']
+            w = (weights or {}).get(k, 1.0)
+            a = fp.get(k)
+            b = current.get(k)
+            if a is None or b is None:
+                continue
+            std = norm[k]['std'] or 1.0
+            tot += w * ((a - b) / std) ** 2
+            wsum += w
+        if wsum == 0:
+            return 0
+        dist = (tot / wsum) ** 0.5
+        return round(100.0 / (1.0 + dist), 0)
+
+    for ep in episodes:
+        ep['match'] = match_score(ep['fingerprint'])
+    ranked = sorted(episodes, key=lambda e: -e['match'])
+
+    return {
+        'id': str(uuid.uuid4()), 'created_at': datetime.datetime.utcnow().isoformat(),
+        'as_of': dates[-1], 'history_from': dates[0],
+        'signals': ANALOG_SIGNALS, 'norm': norm,
+        'current': current, 'episodes': ranked, 'episode_count': len(ranked),
+    }
+
+
+def run_analogs_bg():
+    with _analogs_lock:
+        if _analogs_state['status'] == 'running':
+            return
+        _analogs_state['status'] = 'running'
+    try:
+        data = compute_analogs()
+        today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+        analogs_col.update_one({'_id': today}, {'$set': {'_id': today, 'day': today, 'data': data,
+                               'created_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+        _analogs_state['status'] = 'done'
+    except Exception:  # noqa
+        _analogs_state['status'] = 'error'
+        traceback.print_exc()
+
+
+@app.get('/api/v1/analogs')
+def analogs():
+    today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+    cached = analogs_col.find_one({'_id': today}, {'_id': 0})
+    if cached and cached.get('data'):
+        return {'status': 'ready', **cached['data']}
+    if _analogs_state['status'] != 'running':
+        threading.Thread(target=run_analogs_bg, daemon=True).start()
+    if _analogs_state['status'] == 'error':
         return {'status': 'error', 'error': 'compute_failed'}
     return {'status': 'computing'}
 

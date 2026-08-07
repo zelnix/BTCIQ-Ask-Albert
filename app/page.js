@@ -50,6 +50,8 @@ const SECTIONS = [
     blurb: 'The technical picture behind the score: chart structure and key levels, where Bitcoin sits in its 4-year cycle, and the raw indicators the model reads.' },
   { id: 'crossmarket', label: 'Cross-Market', icon: Globe,
     blurb: 'How this coin stacks up against traditional markets — S&P 500, Nasdaq, Dow, Nikkei, European indices, Gold and the US Dollar. See rebased performance, returns, correlation (is crypto moving with stocks or breaking away?) and volatility.' },
+  { id: 'analogs', label: 'Happening Again', icon: History,
+    blurb: "Finds which past Bitcoin trend episode today's conditions most resemble — using macro rates, the US dollar, equity & gold correlation, volatility, drawdown, momentum and halving-cycle position — then shows what happened next. Adjust the sliders to weight what matters to you. Educational pattern-matching, not a prediction." },
   { id: 'smartmoney', label: 'Smart Money', icon: Waves,
     blurb: 'On-chain "smart money" behaviour — whale wallets, exchange reserves and long-term holders. Shown as clearly-labelled demo values until an on-chain data key is connected.' },
   { id: 'institutional', label: 'Institutional', icon: Landmark,
@@ -97,7 +99,7 @@ const sec = (id) => SECTIONS.find(s => s.id === id)
   || { id, label: id, icon: Info, blurb: '' };
 
 // Sections that are Bitcoin-specific and hidden from the nav when an altcoin is selected.
-const BTC_ONLY_SECTIONS = ['smartmoney', 'institutional', 'macro', 'events', 'timemachine'];
+const BTC_ONLY_SECTIONS = ['smartmoney', 'institutional', 'macro', 'events', 'timemachine', 'analogs'];
 // Sections removed from the app entirely (superseded by the global coin picker).
 const REMOVED_SECTIONS = ['compare'];
 // The currently-selected coin flows through this context so deep components
@@ -3190,6 +3192,175 @@ function reviewCrossMarket(d) {
   return parts.join(' ');
 }
 
+const ANALOG_CAT_COLOR = {
+  Macro: 'text-amber-300 bg-amber-500/15',
+  'Market structure': 'text-sky-300 bg-sky-500/15',
+  'On-chain': 'text-violet-300 bg-violet-500/15',
+  Events: 'text-emerald-300 bg-emerald-500/15',
+};
+
+function scoreAnalog(ep, current, norm, weights) {
+  let tot = 0;
+  let wsum = 0;
+  Object.keys(current || {}).forEach((k) => {
+    const w = weights[k] == null ? 1 : weights[k];
+    const a = ep.fingerprint[k];
+    const b = current[k];
+    if (a == null || b == null) return;
+    const std = (norm[k] && norm[k].std) || 1;
+    tot += w * Math.pow((a - b) / std, 2);
+    wsum += w;
+  });
+  if (!wsum) return 0;
+  return Math.round(100 / (1 + Math.sqrt(tot / wsum)));
+}
+
+function AnalogsSection() {
+  const [data, setData] = React.useState(null);
+  const [status, setStatus] = React.useState('loading');
+  const [weights, setWeights] = React.useState({});
+
+  React.useEffect(() => {
+    let alive = true;
+    const load = () => fetch('/api/v1/analogs', { cache: 'no-store' }).then((r) => r.json()).then((j) => {
+      if (!alive) return;
+      if (j.status === 'ready') {
+        setData(j);
+        setStatus('ready');
+        setWeights((w) => (Object.keys(w).length ? w : Object.fromEntries((j.signals || []).map((s) => [s.key, 1]))));
+      } else if (j.status === 'error') { setStatus('error'); } else { setStatus('computing'); }
+    }).catch(() => { if (alive) setStatus('error'); });
+    load();
+    const id = setInterval(() => setStatus((s) => { if (s !== 'ready') load(); return s; }), 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  const ranked = React.useMemo(() => {
+    if (!data) return [];
+    return data.episodes.map((e) => ({ ...e, match: scoreAnalog(e, data.current, data.norm, weights) })).sort((a, b) => b.match - a.match);
+  }, [data, weights]);
+
+  const sig = (k) => (data ? data.signals.find((s) => s.key === k) : null);
+  const fmtSig = (k, v) => {
+    if (v == null) return '—';
+    const u = sig(k) ? sig(k).unit : '';
+    return `${v}${u ? (u === '%' || u === 'pts' || u === 'mo' ? u : ` ${u}`) : ''}`;
+  };
+  const retColor = (v) => (v == null ? 'text-slate-500' : v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-slate-300');
+  const closeness = (ep, k) => {
+    if (!data) return 2;
+    const a = ep.fingerprint[k];
+    const b = data.current[k];
+    if (a == null || b == null) return null;
+    const std = (data.norm[k] && data.norm[k].std) || 1;
+    const z = Math.abs((a - b) / std);
+    return z < 0.5 ? 0 : z < 1.2 ? 1 : 2;
+  };
+
+  return (
+    <div className="space-y-6">
+      <SectionHead icon={History} title="Happening Again" blurb={sec('analogs').blurb} />
+      <AiReview text={data ? `Today's Bitcoin setup most resembles ${(ranked[0] || {}).label || 'a past episode'} (${(ranked[0] || {}).match || '—'}% match).` : 'Scanning history for the closest analog…'} voice section="analogs" />
+
+      {status !== 'ready' || !data ? (
+        <Card className="border-0 bg-slate-900/60 p-10 text-center ring-1 ring-slate-800">
+          <p className="text-sm text-slate-400">{status === 'error' ? 'Could not load the analog engine. Retrying…' : 'Scanning 10 years of Bitcoin history and building fingerprints…'}</p>
+        </Card>
+      ) : (
+        <>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <Card className="border-0 bg-slate-900/60 p-5 ring-1 ring-slate-800">
+              <h3 className="mb-3 text-sm font-bold text-white">Today&apos;s Bitcoin setup <span className="text-[11px] font-normal text-slate-500">(as of {data.as_of})</span></h3>
+              <div className="space-y-2">
+                {data.signals.map((s) => (
+                  <div key={s.key} className="flex items-center justify-between gap-2 text-sm">
+                    <span className="flex items-center gap-2 text-slate-300">
+                      <span className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${ANALOG_CAT_COLOR[s.cat] || 'bg-slate-700 text-slate-300'}`}>{s.cat}</span>
+                      {s.label}
+                    </span>
+                    <span className="font-semibold text-white">{fmtSig(s.key, data.current[s.key])}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            <Card className="border-0 bg-slate-900/60 p-5 ring-1 ring-slate-800">
+              <div className="mb-3 flex items-center justify-between">
+                <TapInfo text="Drag a slider up to make that signal count more when matching today to the past, or down to ignore it. The ranking below updates instantly.">
+                  <h3 className="pr-5 text-sm font-bold text-white">Tune what matters</h3>
+                </TapInfo>
+                <button onClick={() => setWeights(Object.fromEntries(data.signals.map((s) => [s.key, 1])))} className="text-[11px] text-sky-400 hover:text-sky-300">Reset</button>
+              </div>
+              <div className="space-y-2.5">
+                {data.signals.map((s) => (
+                  <div key={s.key} className="flex items-center gap-3">
+                    <span className="w-40 shrink-0 truncate text-xs text-slate-400">{s.label}</span>
+                    <input type="range" min="0" max="3" step="0.5" value={weights[s.key] == null ? 1 : weights[s.key]}
+                      onChange={(e) => setWeights((w) => ({ ...w, [s.key]: parseFloat(e.target.value) }))}
+                      className="h-1.5 flex-1 cursor-pointer accent-sky-400" />
+                    <span className="w-8 shrink-0 text-right text-xs font-semibold text-slate-300">{(weights[s.key] == null ? 1 : weights[s.key]).toFixed(1)}×</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+
+          <div>
+            <h3 className="mb-3 text-sm font-bold text-white">Closest historical analogs</h3>
+            <div className="grid gap-4 md:grid-cols-2">
+              {ranked.slice(0, 6).map((ep) => {
+                const up = ep.type === 'rally';
+                return (
+                  <Card key={ep.id} className="border-0 bg-slate-900/60 p-4 ring-1 ring-slate-800">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <p className="flex items-center gap-2 font-bold text-white">
+                          <span className={up ? 'text-emerald-400' : 'text-red-400'}>{up ? '▲' : '▼'}</span>{ep.label}
+                        </p>
+                        <p className="text-[11px] text-slate-500">{ep.start} → {ep.end} · {ep.duration_days}d</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-2xl font-black" style={{ color: ep.match >= 70 ? '#34d399' : ep.match >= 50 ? '#38bdf8' : '#94a3b8' }}>{ep.match}%</p>
+                        <p className="text-[9px] uppercase tracking-wider text-slate-500">match</p>
+                      </div>
+                    </div>
+
+                    {ep.tags && ep.tags.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {ep.tags.map((t, i) => (
+                          <span key={i} className={`rounded px-1.5 py-0.5 text-[9px] font-semibold ${ANALOG_CAT_COLOR[t.cat] || 'bg-slate-700 text-slate-300'}`}>{t.label}</span>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="mt-3 grid grid-cols-3 gap-2 rounded-lg bg-slate-950/50 p-2 text-center">
+                      {[['30d', ep.fwd_30], ['90d', ep.fwd_90], ['180d', ep.fwd_180]].map(([lbl, v]) => (
+                        <div key={lbl}>
+                          <p className="text-[9px] uppercase text-slate-500">then +{lbl}</p>
+                          <p className={`text-sm font-bold ${retColor(v)}`}>{v == null ? '—' : `${v > 0 ? '+' : ''}${v}%`}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {data.signals.map((s) => {
+                        const c = closeness(ep, s.key);
+                        const col = c === 0 ? 'bg-emerald-500/20 text-emerald-300' : c === 1 ? 'bg-amber-500/20 text-amber-300' : 'bg-red-500/15 text-red-300';
+                        return <span key={s.key} title={`${s.label}: then ${fmtSig(s.key, ep.fingerprint[s.key])} vs now ${fmtSig(s.key, data.current[s.key])}`} className={`rounded px-1.5 py-0.5 text-[9px] font-medium ${col}`}>{s.label.split(' ')[0]}{c === 0 ? ' ✓' : ''}</span>;
+                      })}
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+            <p className="mt-3 text-[11px] italic text-slate-500">Green = that condition closely matches today; amber = somewhat; red = quite different. Based on ~10 years of data — a small sample. Educational pattern-matching, not a prediction or financial advice.</p>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function CrossMarketSection() {
   const symbol = React.useContext(SymbolContext);
   const [window, setWindow] = React.useState('1y');
@@ -3645,6 +3816,7 @@ export default function DashboardPage() {
     if (active === 'forecasts') return <ForecastsHubSection d={d} />;
     if (active === 'market-intel') return <MarketIntelligenceSection d={d} />;
     if (active === 'crossmarket') return <CrossMarketSection />;
+    if (active === 'analogs') return <AnalogsSection />;
     if (active === 'smartmoney') return <DemoMetricsCard title="Smart Money" icon={Waves} panel={d.smart_money} sectionId="smartmoney" />;
     if (active === 'institutional') return <DemoMetricsCard title="Institutional" icon={Landmark} panel={d.institutional} sectionId="institutional" />;
     if (active === 'macro') return <PolicySection d={d} />;
