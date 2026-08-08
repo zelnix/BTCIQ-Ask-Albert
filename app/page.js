@@ -114,7 +114,7 @@ function ChartTooltip({ active, payload, label }) {
       <p className="mb-1 text-xs font-bold text-slate-400">{label}</p>
       {payload.map((p) => (
         <p key={p.name} className="text-xs" style={{ color: p.color }}>
-          {p.name}: {p.name === 'BTC Price' ? fmtUsd(p.value) : fmtPct(p.value)}
+          {p.name}: {p.name && p.name.includes('Price') ? fmtUsd(p.value) : fmtPct(p.value)}
         </p>
       ))}
     </div>
@@ -499,11 +499,13 @@ function TechnicalBreakdownLink({ d, dec }) {
 function DecisionEngineCard({ d }) {
   const dec = d.decision;
   if (!dec) return null;
+  const coinName = d.coin_name || 'Bitcoin';
+  const sym = d.symbol || 'BTC';
   return (
     <Card className="border-0 bg-gradient-to-br from-amber-500/[0.07] via-violet-500/[0.08] to-slate-900 p-6 ring-1 ring-violet-500/30 shadow-xl shadow-violet-950/30">
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Brain className="h-5 w-5 text-amber-400" />
-        <h3 className="text-lg font-bold text-white">Bitcoin Market State</h3>
+        <h3 className="text-lg font-bold text-white">{coinName} Market State</h3>
         <span className="text-[11px] text-slate-500">Unified Decision Engine · reconciles every signal</span>
         {dec.data_trust && <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${dec.data_trust.faded ? 'border-orange-500/30 text-orange-300' : 'border-emerald-500/25 text-emerald-300'}`}>Data trust {dec.data_trust.score}{dec.odds_faded ? ' · odds faded' : ''}</span>}
         <Badge variant="outline" className={`ml-auto border-slate-700 ${alignColor(dec.alignment)}`}>{dec.alignment}</Badge>
@@ -515,7 +517,7 @@ function DecisionEngineCard({ d }) {
           <p className="mt-1 text-4xl font-black" style={{ color: scoreColor(dec.overall_score) }}>{dec.overall_score}</p>
           <p className="text-sm font-semibold" style={{ color: scoreColor(dec.overall_score) }}>{dec.label}</p>
         </TapInfo>
-        <TapInfo below text="The market character the engine has classified BTC into right now (e.g. trend, range, or volatile) — it sets the playbook for reading every other signal." className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+        <TapInfo below text={`The market character the engine has classified ${sym} into right now (e.g. trend, range, or volatile) — it sets the playbook for reading every other signal.`} className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
           <p className="pr-4 text-[11px] uppercase tracking-wider text-slate-400">Market Regime</p>
           <p className="mt-1 text-lg font-bold leading-tight text-white">{dec.regime}</p>
         </TapInfo>
@@ -548,7 +550,7 @@ function DecisionEngineCard({ d }) {
 
       {/* multi-horizon outlook 24H → 1Y */}
       <div className="mt-5">
-        <p className="mb-2 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Directional Outlook · 24 hours to 1 year<InfoTip text="The model's estimated odds that BTC is higher or lower over each horizon. 'news-adj.' means recent headlines nudged the number. Odds, not promises." /></p>
+        <p className="mb-2 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Directional Outlook · 24 hours to 1 year<InfoTip text={`The model's estimated odds that ${sym} is higher or lower over each horizon. 'news-adj.' means recent headlines nudged the number. Odds, not promises.`} /></p>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
           {dec.outlook.map((o) => {
             const up = o.lean === 'UP';
@@ -901,6 +903,7 @@ function NewsLinkBar({ nl }) {
 }
 
 function ForecastCard({ f }) {
+  const sym = React.useContext(SymbolContext);
   const nl = f.news_link;
   const eff = nl ? nl.higher_adj : f.higher;
   const effLow = nl ? nl.lower_adj : f.lower;
@@ -908,7 +911,7 @@ function ForecastCard({ f }) {
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
       <div className="flex items-center justify-between">
-        <h3 className="flex items-center gap-1 text-lg font-bold text-white">{f.horizon} Forecast<InfoTip text="The model's probability that BTC is higher vs lower at the end of this window, plus bull/base/bear price scenarios. Odds, not a promise." /></h3>
+        <h3 className="flex items-center gap-1 text-lg font-bold text-white">{f.horizon} Forecast<InfoTip text={`The model's probability that ${sym} is higher vs lower at the end of this window, plus bull/base/bear price scenarios. Odds, not a promise.`} /></h3>
         <Badge variant="outline" className={`border-slate-700 ${bullish ? 'text-emerald-400' : 'text-red-400'}`}>{bullish ? 'Leans Up' : 'Leans Down'}</Badge>
       </div>
       <div className="mt-3">
@@ -962,11 +965,23 @@ function ForecastsSection({ d }) {
       </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <div className="mb-3 flex items-center gap-2"><TrendingUp className="h-5 w-5 text-emerald-400" /><h3 className="font-semibold text-slate-100">Why it could go up</h3></div>
+          <div className="mb-3 flex items-center gap-2">
+            <img src="/albert.png" alt="Albert" className="h-8 w-8 shrink-0 rounded-full object-cover ring-2 ring-emerald-500/40" />
+            <div>
+              <h3 className="flex items-center gap-1.5 font-semibold text-slate-100"><TrendingUp className="h-4 w-4 text-emerald-400" />Albert’s Call · Why it could go up</h3>
+              <p className="text-[11px] text-slate-500">Albert’s read of the bullish evidence</p>
+            </div>
+          </div>
           <ul className="space-y-2">{d.factors.bullish.map((t, i) => <li key={i} className="flex gap-2 text-sm text-slate-300"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />{t}</li>)}</ul>
         </Card>
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <div className="mb-3 flex items-center gap-2"><TrendingDown className="h-5 w-5 text-red-400" /><h3 className="font-semibold text-slate-100">Why it could go down</h3></div>
+          <div className="mb-3 flex items-center gap-2">
+            <img src="/albert.png" alt="Albert" className="h-8 w-8 shrink-0 rounded-full object-cover ring-2 ring-red-500/40" />
+            <div>
+              <h3 className="flex items-center gap-1.5 font-semibold text-slate-100"><TrendingDown className="h-4 w-4 text-red-400" />Albert’s Call · Why it could go down</h3>
+              <p className="text-[11px] text-slate-500">Albert’s read of the downside risks</p>
+            </div>
+          </div>
           <ul className="space-y-2">{d.factors.risk.map((t, i) => <li key={i} className="flex gap-2 text-sm text-slate-300"><X className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />{t}</li>)}</ul>
         </Card>
       </div>
@@ -1111,7 +1126,7 @@ function PerformanceSection({ d }) {
       </div>
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <div className="mb-4"><h3 className="flex items-center gap-1 font-semibold text-slate-100">AI Accuracy vs BTC Price<InfoTip below text="The model's 30-day rolling hit-rate (right axis) plotted against BTC spot price (left axis), so you can see how accuracy held up through different market conditions." /></h3><p className="text-sm text-slate-400">30-day rolling accuracy against spot price · {d.first_date} → {d.as_of}</p></div>
+        <div className="mb-4"><h3 className="flex items-center gap-1 font-semibold text-slate-100">AI Accuracy vs {(d.symbol || 'BTC')} Price<InfoTip below text={`The model's 30-day rolling hit-rate (right axis) plotted against ${(d.symbol || 'BTC')} spot price (left axis), so you can see how accuracy held up through different market conditions.`} /></h3><p className="text-sm text-slate-400">30-day rolling accuracy against spot price · {d.first_date} → {d.as_of}</p></div>
         <div className="h-[380px] w-full">
           <ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={d.performance} margin={{ top: 10, right: 10, left: 10, bottom: 10 }}>
@@ -1122,7 +1137,7 @@ function PerformanceSection({ d }) {
               <YAxis yAxisId="right" orientation="right" stroke="#38bdf8" fontSize={11} tickFormatter={(v) => `${v}%`} tickLine={false} domain={[30, 90]} />
               <Tooltip content={<ChartTooltip />} />
               <Legend verticalAlign="top" height={30} wrapperStyle={{ fontSize: 13 }} />
-              <Area yAxisId="left" name="BTC Price" type="monotone" dataKey="btcPrice" stroke="#94a3b8" strokeWidth={1.5} fill="url(#btcFill)" />
+              <Area yAxisId="left" name={`${(d.symbol || 'BTC')} Price`} type="monotone" dataKey="btcPrice" stroke="#94a3b8" strokeWidth={1.5} fill="url(#btcFill)" />
               <Line yAxisId="right" name="AI Accuracy" type="monotone" dataKey="aiAccuracy" stroke="#38bdf8" strokeWidth={2.5} dot={false} activeDot={{ r: 5 }} />
             </ComposedChart>
           </ResponsiveContainer>
@@ -1816,10 +1831,11 @@ function NewsCard({ c }) {
 
 function NewsSection({ news, status, onRefresh, refreshing }) {
   const [filter, setFilter] = React.useState('all');
+  const symbol = React.useContext(SymbolContext);
   if (status !== 'ready' || !news) {
     return (
       <div className="space-y-5">
-        <SectionHead icon={Newspaper} title="BTC News" blurb={sec('news').blurb} />
+        <SectionHead icon={Newspaper} title={`${symbol} News`} blurb={sec('news').blurb} />
         <Card className="flex items-center justify-center gap-3 border-0 bg-slate-900 p-16 ring-1 ring-slate-800">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-700 border-t-sky-400" />
           <span className="text-slate-400">{status === 'error' ? 'News engine error — try refresh.' : 'Gathering headlines & generating AI summaries…'}</span>
@@ -1832,9 +1848,9 @@ function NewsSection({ news, status, onRefresh, refreshing }) {
   const biasColor = b.bias === 'Moderately Bullish' ? 'text-emerald-400' : b.bias === 'Moderately Bearish' ? 'text-red-400' : 'text-amber-400';
   return (
     <div className="space-y-5">
-      <SectionHead icon={Newspaper} title="BTC News" blurb={sec('news').blurb} />
+      <SectionHead icon={Newspaper} title={`${symbol} News`} blurb={sec('news').blurb} />
       <Card className="border-0 bg-gradient-to-br from-violet-500/10 to-slate-900 p-6 ring-1 ring-violet-500/25">
-        <div className="mb-3 flex items-center gap-2"><Sparkles className="h-5 w-5 text-violet-400" /><h3 className="flex items-center gap-1 font-semibold text-slate-100">Daily AI Briefing<InfoTip below text="A plain-English summary of the day's most important Bitcoin news, written by the AI, with the likely market impact of each story." /></h3><span className="ml-auto text-[11px] text-slate-500">{news.model}</span></div>
+        <div className="mb-3 flex items-center gap-2"><Sparkles className="h-5 w-5 text-violet-400" /><h3 className="flex items-center gap-1 font-semibold text-slate-100">Daily AI Briefing<InfoTip below text={`A plain-English summary of the day's most important ${symbol} news, written by the AI, with the likely market impact of each story.`} /></h3><span className="ml-auto text-[11px] text-slate-500">{news.model}</span></div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <div className="rounded-lg bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">Market News Bias</p><p className={`text-lg font-bold ${biasColor}`}>{b.bias}</p></div>
           <div className="rounded-lg bg-slate-950/40 p-3"><p className="text-[11px] text-slate-400">Stories</p><p className="text-lg font-bold text-white">{b.total}</p></div>
