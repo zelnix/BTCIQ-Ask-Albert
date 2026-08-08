@@ -371,7 +371,7 @@ const fBy = (d, h) => (d.forecasts || []).find((x) => x.horizon === h);
 function reviewOverview(d) {
   const f = f24(d);
   const lean = f ? (f.higher >= f.lower ? 'higher' : 'lower') : 'sideways';
-  return `Bitcoin's overall Quant Score is ${d.quant_score}/100 — ${d.quant_label} — and the market is in a "${d.regime.regime}" regime. ${d.regime.description} ${f ? `Over the next 24 hours the model leans ${lean} (${f.higher}% up vs ${f.lower}% down) with ${f.confidence.toLowerCase()} confidence.` : ''} Biggest support: ${d.factors.bullish[0]} Main risk: ${d.factors.risk[0]}`;
+  return `${d.coin_name || 'Bitcoin'}'s overall Quant Score is ${d.quant_score}/100 — ${d.quant_label} — and the market is in a "${d.regime.regime}" regime. ${d.regime.description} ${f ? `Over the next 24 hours the model leans ${lean} (${f.higher}% up vs ${f.lower}% down) with ${f.confidence.toLowerCase()} confidence.` : ''} Biggest support: ${d.factors.bullish[0]} Main risk: ${d.factors.risk[0]}`;
 }
 function reviewForecasts(d) {
   const a = fBy(d, '24H'), b = fBy(d, '7D'), c = fBy(d, '30D');
@@ -691,7 +691,7 @@ function AlbertIntroCard() {
           <h3 className="text-base font-bold text-white">Albert</h3>
           <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-300">BTCIQ’s HuCentAI Quant Analyst</span>
         </div>
-        <p className="mt-1 text-sm text-slate-300">Albert interprets BitMarkAI’s numbers, explains the probabilities in plain language, and helps you understand what may move Bitcoin next. “Let us examine the evidence — probability is not certainty.”</p>
+        <p className="mt-1 text-sm text-slate-300">Albert interprets BitMarkAI’s numbers, explains the probabilities in plain language, and helps you understand what may move the market next. “Let us examine the evidence — probability is not certainty.”</p>
         <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Albert is an original fictional BTCIQ HuCentAI Quant character inspired by the spirit of scientific curiosity. He is not Albert Einstein and does not represent Einstein’s real opinions.</p>
       </div>
     </Card>
@@ -780,7 +780,7 @@ function TradingViewChart({ height = 460 }) {
       <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
         <div className="flex items-center gap-2">
           <CandlestickChart className="h-4 w-4 text-amber-400" />
-          <span className="text-sm font-semibold text-white">{preset.symbol.split(':')[1] || 'BTC/USD'} · Live Chart</span>
+          <span className="text-sm font-semibold text-white">{symbol === 'BTC' ? (preset.symbol.split(':')[1] || 'BTC/USD') : `${symbol}USD`} · Live Chart</span>
           <span className="hidden text-[10px] text-slate-500 sm:inline">TradingView · your saved preset</span>
         </div>
         <div className="flex items-center gap-1.5">
@@ -1240,7 +1240,7 @@ function ChartSection({ d }) {
       <AiReview text={reviewChart(d)} section="chart" />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="flex items-center gap-1 font-semibold text-slate-100">Daily Candles · Auto S/R<InfoTip below text="The last 90 daily candles with automatically detected support (green) and resistance (red) — price levels where BTC has repeatedly reacted." /></h3>
+          <h3 className="flex items-center gap-1 font-semibold text-slate-100">Daily Candles · Auto S/R<InfoTip below text={`The last 90 daily candles with automatically detected support (green) and resistance (red) — price levels where ${(d.symbol || 'BTC')} has repeatedly reacted.`} /></h3>
           <span className="text-xs text-slate-500">last 90 days · <span className="text-emerald-400">support</span> / <span className="text-red-400">resistance</span></span>
         </div>
         <CandleChart ohlc={c.ohlc} sr={c.sr_levels} />
@@ -2448,9 +2448,9 @@ function AskQuantSection({ d }) {
   React.useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
 
   const suggestions = [
-    'Summarise the current Bitcoin market state in plain English.',
+    `Summarise the current ${symbol} market state in plain English.`,
     'Why did the forecast change?',
-    'What is currently moving Bitcoin?',
+    `What is currently moving ${symbol}?`,
     'Which signal carries the greatest risk?',
     'What evidence contradicts the current forecast?',
     'What would invalidate the bullish outlook?',
@@ -2568,7 +2568,7 @@ function RiskSection({ d }) {
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="flex flex-wrap items-center gap-6">
           <div>
-            <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400">Overall Risk Level<InfoTip below text="How turbulent BTC is right now on a 0–100 scale. It measures the size of the swings, not the direction — high risk can happen in both up and down markets." /></p>
+            <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400">Overall Risk Level<InfoTip below text={`How turbulent ${(d.symbol || 'BTC')} is right now on a 0–100 scale. It measures the size of the swings, not the direction — high risk can happen in both up and down markets.`} /></p>
             <p className={`text-4xl font-black ${lvlColor}`}>{r.level}</p>
             <p className="text-xs text-slate-500">score {r.score}/100 · direction-independent</p>
           </div>
@@ -2712,6 +2712,7 @@ function SettingsSection({ onManualRun }) {
 }
 
 function DrawableChart({ ohlc }) {
+  const symbol = React.useContext(SymbolContext);
   const [tool, setTool] = React.useState('cursor');
   const [pending, setPending] = React.useState(null);
   const [hover, setHover] = React.useState(null);
@@ -2818,7 +2819,7 @@ function DrawableChart({ ohlc }) {
     } catch (e) { /* noop */ }
   };
   const fireAlert = (dr, side) => {
-    const msg = `BTC ${side === 'above' ? 'crossed above' : 'dropped below'} ${fUsd(dr.price)}`;
+    const msg = `${symbol} ${side === 'above' ? 'crossed above' : 'dropped below'} ${fUsd(dr.price)}`;
     const id = Date.now() + Math.random();
     setToasts((t) => [...t, { id, msg, up: side === 'above' }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 8000);
@@ -2920,7 +2921,7 @@ function DrawableChart({ ohlc }) {
     fib: pending?.tool === 'fib' ? 'Click the second swing point to place Fibonacci levels.' : 'Click a swing high then a swing low (or vice-versa) for Fibonacci.',
     measure: pending?.tool === 'measure' ? 'Click the end point to measure the move.' : 'Click start then end to measure price & % move.',
     hline: 'Click at a price to drop a horizontal level.', note: 'Click to place a note, then type its text.',
-    alert: 'Click at a price to arm a ruler alert — it pings (sound + banner) when BTC touches it.',
+    alert: `Click at a price to arm a ruler alert — it pings (sound + banner) when ${symbol} touches it.`,
     erase: 'Click near a drawing to remove it.', cursor: 'Pick a tool to annotate. ' }[tool];
   const alertCount = draw.filter((dr) => dr.type === 'alert' && !dr.triggered).length;
 
@@ -2941,7 +2942,7 @@ function DrawableChart({ ohlc }) {
     <Card className={`relative flex flex-col border-0 bg-slate-900 p-4 ring-1 ring-slate-800 ${fs ? 'fixed inset-0 z-[100] overflow-auto rounded-none' : ''}`}>
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <CandlestickChart className="h-4 w-4 text-amber-400" />
-        <h3 className="text-sm font-semibold text-white">Draw Board · BTC {data.length}-day</h3>
+        <h3 className="text-sm font-semibold text-white">Draw Board · {symbol} {data.length}-day</h3>
         <div className="flex items-center gap-1 rounded-md bg-slate-800 px-1.5 py-0.5">
           <Layers className="h-3.5 w-3.5 text-slate-400" />
           <select value={activeLayout} onChange={(e) => switchLayout(e.target.value)} className="max-w-[120px] bg-transparent text-xs font-medium text-slate-200 focus:outline-none" title="Switch drawing layout">
