@@ -3288,6 +3288,31 @@ function AnalogsSection() {
   const [showBand, setShowBand] = React.useState(true);
   const [histThreshold, setHistThreshold] = React.useState(55);
   const [readoutHorizon, setReadoutHorizon] = React.useState(90);
+  const [showModel, setShowModel] = React.useState(true);
+  const [fcPath, setFcPath] = React.useState(null);
+
+  // Today's own model forecast (BitMarkAI base scenario) rebased to 100 at now, so it can be
+  // overlaid against the historical median path.
+  React.useEffect(() => {
+    let alive = true;
+    fetch('/api/v1/dashboard', { cache: 'no-store' }).then((r) => r.json()).then((j) => {
+      if (!alive || j.status !== 'ready') return;
+      const bm = j.bitmark || {};
+      const cp = bm.current_price || j.last_close;
+      if (!cp) return;
+      const map = { '1W': 7, '1M': 30, '3M': 90, '6M': 180 };
+      const anchors = [{ off: 0, v: 100 }];
+      (bm.horizons || []).forEach((h) => {
+        const off = map[h.horizon];
+        if (off == null || h.type !== 'model' || h.base_low == null || h.base_high == null) return;
+        const mid = (h.base_low + h.base_high) / 2;
+        anchors.push({ off, v: Math.round((mid / cp) * 1000) / 10 });
+      });
+      anchors.sort((a, b) => a.off - b.off);
+      if (anchors.length > 1) setFcPath(anchors);
+    }).catch(() => { /* noop */ });
+    return () => { alive = false; };
+  }, []);
 
   React.useEffect(() => {
     try { const t = parseInt(localStorage.getItem('analog_threshold'), 10); if (t) setThreshold(t); } catch (e) { /* noop */ }
@@ -3418,11 +3443,21 @@ function AnalogsSection() {
       const mix = (x, y) => x + (y - x) * t;
       return { b10: mix(a.b10, b.b10), b25: mix(a.b25, b.b25), b50: mix(a.b50, b.b50), b75: mix(a.b75, b.b75), b90: mix(a.b90, b.b90) };
     };
+    const fcInterp = (off) => {
+      if (!showModel || !fcPath || off < 0) return null;
+      const a = fcPath;
+      if (off < a[0].off || off > a[a.length - 1].off) return null;
+      for (let i = 0; i < a.length - 1; i += 1) { if (a[i].off <= off && off <= a[i + 1].off) { const t = (off - a[i].off) / ((a[i + 1].off - a[i].off) || 1); return a[i].v + (a[i + 1].v - a[i].v) * t; } }
+      return a[a.length - 1].v;
+    };
     return overlay.map((row) => {
+      const fc = fcInterp(row.off);
+      const withFc = { modelFc: fc == null ? null : Math.round(fc * 10) / 10 };
       const b = interp(row.off);
-      if (!b) return { ...row, bandBase: null, bandR1: null, bandR2: null, bandR3: null, bandMed: null };
+      if (!b) return { ...row, ...withFc, bandBase: null, bandR1: null, bandR2: null, bandR3: null, bandMed: null };
       return {
         ...row,
+        ...withFc,
         bandBase: Math.round(b.b10 * 10) / 10,
         bandR1: Math.round((b.b25 - b.b10) * 10) / 10,
         bandR2: Math.round((b.b75 - b.b25) * 10) / 10,
@@ -3430,8 +3465,9 @@ function AnalogsSection() {
         bandMed: Math.round(b.b50 * 10) / 10,
       };
     });
-  }, [overlay, band]);
+  }, [overlay, band, fcPath, showModel]);
   const bandActive = showBand && Object.keys(band.byOff).length > 0;
+  const modelActive = showModel && !!fcPath;
 
   const sig = (k) => (data ? data.signals.find((s) => s.key === k) : null);
   const fmtSig = (k, v) => {
@@ -3532,6 +3568,10 @@ function AnalogsSection() {
                   className={`rounded px-2 py-0.5 text-[11px] font-semibold transition ${showBand ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}>
                   Outcome band {showBand ? 'on' : 'off'}
                 </button>
+                <button onClick={() => setShowModel((v) => !v)} disabled={!fcPath}
+                  className={`rounded px-2 py-0.5 text-[11px] font-semibold transition disabled:opacity-40 ${showModel ? 'bg-white/15 text-slate-100 ring-1 ring-white/30' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}>
+                  Model forecast {showModel ? 'on' : 'off'}
+                </button>
                 <div className="flex items-center gap-2 text-[11px] text-slate-400">
                   <Bell className="h-3.5 w-3.5 text-amber-300" />
                   <span>Alert me at ≥</span>
@@ -3558,6 +3598,7 @@ function AnalogsSection() {
                   {overlayEps.map((ep, idx) => (
                     <Line key={ep.id} type="monotone" dataKey={`A${idx}`} stroke={ANALOG_OVERLAY_COLORS[idx % ANALOG_OVERLAY_COLORS.length]} strokeWidth={2} dot={false} connectNulls name={`${ep.label} (${ep.match}%)`} />
                   ))}
+                  {modelActive && <Line type="monotone" dataKey="modelFc" stroke="#f8fafc" strokeWidth={2} strokeDasharray="2 3" dot={false} connectNulls name="Today’s model (base)" />}
                   <Line type="monotone" dataKey="Today" stroke="#38bdf8" strokeWidth={2.6} dot={false} connectNulls name="Bitcoin now" />
                 </ComposedChart>
               </ResponsiveContainer>
@@ -3567,6 +3608,7 @@ function AnalogsSection() {
               {bandActive
                 ? <> The shaded {band.color === '#10b981' ? 'green' : band.color === '#f43f5e' ? 'red' : ''} band shows the spread of ALL {band.n} matching past setups: the darker core is the middle 50% of outcomes, the lighter halo the 10–90% range, and the dashed line the median path.</>
                 : <> Turn on “Outcome band” to shade the range of every past matching setup around these paths.</>}
+              {modelActive && <> The white dotted line is BTCIQ’s own base-case forecast for today — see where the model sits versus what history did.</>}
             </p>
             {bandActive && (
               <div className="mt-2 rounded-lg bg-slate-950/50 px-3 py-2 text-xs text-slate-300 ring-1 ring-slate-800">
