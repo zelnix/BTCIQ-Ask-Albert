@@ -980,7 +980,7 @@ function ForecastCard({ f }) {
 function ForecastsSection({ d }) {
   return (
     <div className="space-y-5">
-      <SectionHead icon={Target} title="Forecasts" blurb={SECTIONS[1].blurb} />
+      <SectionHead icon={Target} title="Forecasts" blurb={SECTIONS[1].blurb} coin={d.symbol || 'BTC'} />
       <AiReview text={reviewForecasts(d)} section="forecasts" />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {(d.forecasts || []).map((f) => <ForecastCard key={f.horizon} f={f} />)}
@@ -1105,7 +1105,7 @@ function PerformanceSection({ d }) {
   const sb = d.scoreboard;
   return (
     <div className="space-y-5">
-      <SectionHead icon={Trophy} title="Performance" blurb={SECTIONS[3].blurb} />
+      <SectionHead icon={Trophy} title="Performance" blurb={SECTIONS[3].blurb} coin={d.symbol || 'BTC'} />
       <AiReview text={reviewPerformance(d)} section="performance" />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -2047,7 +2047,7 @@ function BitMarkSection({ d }) {
   };
   return (
     <div className="space-y-5">
-      <SectionHead icon={Sparkles} title="BitMarkAI" blurb={sec('bitmark').blurb} />
+      <SectionHead icon={Sparkles} title="BitMarkAI" blurb={sec('bitmark').blurb} coin={d.symbol || 'BTC'} />
 
       <Card className="border-0 bg-gradient-to-br from-amber-500/[0.08] via-violet-500/[0.08] to-slate-900 p-6 ring-1 ring-amber-500/25">
         <div className="flex flex-wrap items-center gap-4">
@@ -2594,7 +2594,7 @@ function RiskSection({ d }) {
   const lvlColor = riskStateColor(r.level);
   return (
     <div className="space-y-5">
-      <SectionHead icon={ShieldAlert} title="BTCIQ Risk" blurb={sec('risk').blurb} coin={d.symbol} />
+      <SectionHead icon={ShieldAlert} title="BTCIQ Risk" blurb={sec('risk').blurb} coin={d.symbol || 'BTC'} />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="flex flex-wrap items-center gap-6">
           <div>
@@ -3049,7 +3049,7 @@ function MarketIntelligenceSection({ d }) {
   return (
     <div className="space-y-8">
       <div>
-        <SectionHead icon={CandlestickChart} title="Draw & Annotate" blurb="Your own lightweight chart with trendlines, horizontal levels and notes — everything you draw is saved in this browser and reloads automatically. No account needed." coin={d.symbol} />
+        <SectionHead icon={CandlestickChart} title="Draw & Annotate" blurb="Your own lightweight chart with trendlines, horizontal levels and notes — everything you draw is saved in this browser and reloads automatically. No account needed." coin={d.symbol || 'BTC'} />
         <DrawableChart ohlc={d.chart?.ohlc} />
       </div>
       <ChartSection d={d} />
