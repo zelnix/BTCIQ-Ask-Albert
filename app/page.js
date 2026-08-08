@@ -3223,11 +3223,15 @@ function AnalogsSection() {
   const [weights, setWeights] = React.useState({});
   const [threshold, setThreshold] = React.useState(70);
   const [overlayCount, setOverlayCount] = React.useState(2);
+  const [showBand, setShowBand] = React.useState(true);
+  const [histThreshold, setHistThreshold] = React.useState(55);
 
   React.useEffect(() => {
     try { const t = parseInt(localStorage.getItem('analog_threshold'), 10); if (t) setThreshold(t); } catch (e) { /* noop */ }
+    try { const h = parseInt(localStorage.getItem('analog_hist_threshold'), 10); if (h) setHistThreshold(h); } catch (e) { /* noop */ }
   }, []);
   React.useEffect(() => { try { localStorage.setItem('analog_threshold', String(threshold)); } catch (e) { /* noop */ } }, [threshold]);
+  React.useEffect(() => { try { localStorage.setItem('analog_hist_threshold', String(histThreshold)); } catch (e) { /* noop */ } }, [histThreshold]);
 
   React.useEffect(() => {
     let alive = true;
@@ -3271,7 +3275,7 @@ function AnalogsSection() {
     if (!data || !data.day_fingerprints) return { rows: [], stats: null };
     const scored = data.day_fingerprints
       .map((d) => ({ ...d, match: scoreAnalog({ fingerprint: d.fp }, data.current, data.norm, weights) }))
-      .filter((d) => d.match >= threshold)
+      .filter((d) => d.match >= histThreshold)
       .sort((a, b) => (a.date < b.date ? -1 : 1));
     const filtered = [];
     scored.forEach((d) => {
@@ -3292,7 +3296,65 @@ function AnalogsSection() {
       avg180: avg(resolved.map((d) => d.fwd_180)),
     };
     return { rows: filtered.slice().sort((a, b) => b.match - a.match), stats };
-  }, [data, weights, threshold]);
+  }, [data, weights, histThreshold]);
+
+  // Analog Confidence Band — across all matching Setup-History days, gather each day's rebased
+  // forward path and compute per-offset percentiles (p10/p25/median/p75/p90). This shades the
+  // spread of past outcomes around the overlay so you can see the range at a glance.
+  const band = React.useMemo(() => {
+    const rows = setupHistory.rows || [];
+    if (!showBand || rows.length < 4) return { byOff: {}, color: '#38bdf8', n: rows.length, finalMed: null };
+    const pct = (arr, p) => {
+      if (!arr.length) return null;
+      const s = arr.slice().sort((a, b) => a - b);
+      const idx = (s.length - 1) * p;
+      const lo = Math.floor(idx); const hi = Math.ceil(idx);
+      return lo === hi ? s[lo] : s[lo] + (s[hi] - s[lo]) * (idx - lo);
+    };
+    const offSet = new Set();
+    rows.forEach((r) => (r.fwd_path || []).forEach((p) => { if (p.v != null) offSet.add(p.off); }));
+    const byOff = {};
+    Array.from(offSet).forEach((off) => {
+      const vals = [];
+      rows.forEach((r) => { const p = (r.fwd_path || []).find((x) => x.off === off); if (p && p.v != null) vals.push(p.v); });
+      if (vals.length < 4) return;
+      byOff[off] = { b10: pct(vals, 0.1), b25: pct(vals, 0.25), b50: pct(vals, 0.5), b75: pct(vals, 0.75), b90: pct(vals, 0.9), n: vals.length };
+    });
+    const offs = Object.keys(byOff).map(Number).sort((a, b) => a - b);
+    const finalMed = offs.length ? byOff[offs[offs.length - 1]].b50 : null;
+    const color = finalMed == null ? '#38bdf8' : finalMed >= 100 ? '#10b981' : '#f43f5e';
+    return { byOff, color, n: rows.length, finalMed };
+  }, [setupHistory, showBand]);
+
+  // Merge the overlay analog paths with the confidence-band stack fields for the ComposedChart.
+  // Band percentiles are stored on a coarse grid (every 12d); we linearly interpolate them onto
+  // every chart offset so the stacked areas render as a smooth, gap-free band.
+  const chartData = React.useMemo(() => {
+    const offs = Object.keys(band.byOff).map(Number).sort((a, b) => a - b);
+    const minOff = offs[0]; const maxOff = offs[offs.length - 1];
+    const interp = (off) => {
+      if (!offs.length || off < minOff || off > maxOff) return null;
+      if (band.byOff[off]) return band.byOff[off];
+      let lo = offs[0]; let hi = offs[offs.length - 1];
+      for (let i = 0; i < offs.length - 1; i += 1) { if (offs[i] <= off && off <= offs[i + 1]) { lo = offs[i]; hi = offs[i + 1]; break; } }
+      const a = band.byOff[lo]; const b = band.byOff[hi]; const t = (off - lo) / (hi - lo || 1);
+      const mix = (x, y) => x + (y - x) * t;
+      return { b10: mix(a.b10, b.b10), b25: mix(a.b25, b.b25), b50: mix(a.b50, b.b50), b75: mix(a.b75, b.b75), b90: mix(a.b90, b.b90) };
+    };
+    return overlay.map((row) => {
+      const b = interp(row.off);
+      if (!b) return { ...row, bandBase: null, bandR1: null, bandR2: null, bandR3: null, bandMed: null };
+      return {
+        ...row,
+        bandBase: Math.round(b.b10 * 10) / 10,
+        bandR1: Math.round((b.b25 - b.b10) * 10) / 10,
+        bandR2: Math.round((b.b75 - b.b25) * 10) / 10,
+        bandR3: Math.round((b.b90 - b.b75) * 10) / 10,
+        bandMed: Math.round(b.b50 * 10) / 10,
+      };
+    });
+  }, [overlay, band]);
+  const bandActive = showBand && Object.keys(band.byOff).length > 0;
 
   const sig = (k) => (data ? data.signals.find((s) => s.key === k) : null);
   const fmtSig = (k, v) => {
@@ -3389,6 +3451,10 @@ function AnalogsSection() {
                     </button>
                   ))}
                 </div>
+                <button onClick={() => setShowBand((v) => !v)}
+                  className={`rounded px-2 py-0.5 text-[11px] font-semibold transition ${showBand ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}>
+                  Outcome band {showBand ? 'on' : 'off'}
+                </button>
                 <div className="flex items-center gap-2 text-[11px] text-slate-400">
                   <Bell className="h-3.5 w-3.5 text-amber-300" />
                   <span>Alert me at ≥</span>
@@ -3399,33 +3465,47 @@ function AnalogsSection() {
             </div>
             <div className="h-72 w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={overlay} margin={{ top: 6, right: 12, left: -14, bottom: 0 }}>
+                <ComposedChart data={chartData} margin={{ top: 6, right: 12, left: -14, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                  <XAxis dataKey="off" stroke="#64748b" fontSize={11} tickFormatter={(v) => `${v > 0 ? '+' : ''}${v}d`} />
+                  <XAxis dataKey="off" type="number" domain={['dataMin', 'dataMax']} stroke="#64748b" fontSize={11} tickFormatter={(v) => `${v > 0 ? '+' : ''}${v}d`} />
                   <YAxis stroke="#64748b" fontSize={11} domain={['auto', 'auto']} tickFormatter={(v) => Math.round(v)} />
                   <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} labelFormatter={(v) => `${v > 0 ? '+' : ''}${v} days from setup`} />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <ReferenceLine x={0} stroke="#64748b" strokeDasharray="4 4" />
                   <ReferenceLine y={100} stroke="#334155" strokeDasharray="3 3" />
+                  {bandActive && <Area dataKey="bandBase" stackId="band" stroke="none" fill="transparent" connectNulls isAnimationActive={false} legendType="none" tooltipType="none" activeDot={false} />}
+                  {bandActive && <Area dataKey="bandR1" stackId="band" stroke="none" fill={band.color} fillOpacity={0.08} connectNulls isAnimationActive={false} name="Past range (10–90%)" activeDot={false} />}
+                  {bandActive && <Area dataKey="bandR2" stackId="band" stroke="none" fill={band.color} fillOpacity={0.2} connectNulls isAnimationActive={false} name="Middle 50% of outcomes" activeDot={false} />}
+                  {bandActive && <Area dataKey="bandR3" stackId="band" stroke="none" fill={band.color} fillOpacity={0.08} connectNulls isAnimationActive={false} legendType="none" tooltipType="none" activeDot={false} />}
+                  {bandActive && <Line type="monotone" dataKey="bandMed" stroke={band.color} strokeWidth={1.6} strokeDasharray="5 4" dot={false} connectNulls name="Median past outcome" />}
                   {overlayEps.map((ep, idx) => (
                     <Line key={ep.id} type="monotone" dataKey={`A${idx}`} stroke={ANALOG_OVERLAY_COLORS[idx % ANALOG_OVERLAY_COLORS.length]} strokeWidth={2} dot={false} connectNulls name={`${ep.label} (${ep.match}%)`} />
                   ))}
                   <Line type="monotone" dataKey="Today" stroke="#38bdf8" strokeWidth={2.6} dot={false} connectNulls name="Bitcoin now" />
-                </LineChart>
+                </ComposedChart>
               </ResponsiveContainer>
             </div>
-            <p className="mt-2 text-[11px] text-slate-500">Each line is rebased to 100 at its own “now / setup” point (day 0). Left of 0 = the lead-in shapes; right of 0 = how each analog played out afterward.</p>
+            <p className="mt-2 text-[11px] text-slate-500">
+              Each line is rebased to 100 at its own “now / setup” point (day 0). Left of 0 = the lead-in shapes; right of 0 = how each analog played out afterward.
+              {bandActive
+                ? <> The shaded {band.color === '#10b981' ? 'green' : band.color === '#f43f5e' ? 'red' : ''} band shows the spread of ALL {band.n} matching past setups: the darker core is the middle 50% of outcomes, the lighter halo the 10–90% range, and the dashed line the median path.</>
+                : <> Turn on “Outcome band” to shade the range of every past matching setup around these paths.</>}
+            </p>
           </Card>
 
           <Card className="border-0 bg-slate-900/60 p-5 ring-1 ring-slate-800">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <TapInfo text="A backtest of today's setup: every past day whose conditions matched today (above your alert threshold, using the same slider weights) is listed here with what Bitcoin did next. The win rate is the share of those days that were higher 90 days later.">
+              <TapInfo text="A backtest of today's setup: every past day whose conditions matched today (at or above the match level below, using the same slider weights) is listed here with what Bitcoin did next. The win rate is the share of those days that were higher 90 days later.">
                 <h3 className="pr-5 text-sm font-bold text-white">Setup history · when this happened before</h3>
               </TapInfo>
-              <span className="text-[11px] text-slate-500">days with ≥{threshold}% match</span>
+              <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                <span>Match ≥</span>
+                <input type="range" min="40" max="80" step="5" value={histThreshold} onChange={(e) => setHistThreshold(parseInt(e.target.value, 10))} className="h-1.5 w-24 cursor-pointer accent-sky-400" />
+                <span className="w-8 font-semibold text-sky-300">{histThreshold}%</span>
+              </div>
             </div>
             {setupHistory.rows.length === 0 ? (
-              <p className="py-6 text-center text-sm text-slate-500">No past days cross the {threshold}% match threshold. Lower the threshold or ease the slider weights to surface looser analogs.</p>
+              <p className="py-6 text-center text-sm text-slate-500">No past days reach the {histThreshold}% match level. Lower the “Match ≥” level or ease the slider weights to surface looser analogs.</p>
             ) : (
               <>
                 <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">

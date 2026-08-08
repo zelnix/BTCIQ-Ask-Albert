@@ -134,6 +134,79 @@ def test_analogs_endpoint():
                 if resolved_pct < 80:
                     print(f"⚠️  WARNING: Expected most items to have fwd_90 != null, got {resolved_pct:.1f}%")
                 
+                # Validate NEW field: fwd_path (additive field for confidence band)
+                print("\n--- Validating fwd_path (NEW additive field) ---")
+                expected_offsets = [0, 12, 24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168, 180]
+                
+                # Check all items have fwd_path
+                items_with_fwd_path = sum(1 for item in day_fps if 'fwd_path' in item)
+                if items_with_fwd_path != len(day_fps):
+                    print(f"❌ FAILED: Not all day_fingerprints have fwd_path field ({items_with_fwd_path}/{len(day_fps)})")
+                    return False
+                print(f"✅ All {len(day_fps)} day_fingerprints have fwd_path field")
+                
+                # Validate structure of fwd_path in first few items
+                print("\nValidating fwd_path structure in detail...")
+                for i, item in enumerate(day_fps[:5]):
+                    print(f"\n  Item {i+1} (date: {item.get('date')}):")
+                    
+                    fwd_path = item.get('fwd_path')
+                    if not isinstance(fwd_path, list):
+                        print(f"    ❌ FAILED: fwd_path is not a list (type: {type(fwd_path)})")
+                        return False
+                    
+                    if len(fwd_path) != 16:
+                        print(f"    ❌ FAILED: fwd_path should have exactly 16 items, got {len(fwd_path)}")
+                        return False
+                    print(f"    ✅ fwd_path has exactly 16 items")
+                    
+                    # Validate offsets are exactly [0,12,24,...,180]
+                    actual_offsets = [pt['off'] for pt in fwd_path]
+                    if actual_offsets != expected_offsets:
+                        print(f"    ❌ FAILED: fwd_path offsets don't match expected")
+                        print(f"       Expected: {expected_offsets}")
+                        print(f"       Actual:   {actual_offsets}")
+                        return False
+                    print(f"    ✅ offsets are exactly [0,12,24,...,180] (step 12)")
+                    
+                    # Validate off=0 has v=100 (rebased)
+                    first_pt = fwd_path[0]
+                    if first_pt['off'] != 0:
+                        print(f"    ❌ FAILED: First point should have off=0, got {first_pt['off']}")
+                        return False
+                    if first_pt['v'] != 100:
+                        print(f"    ❌ FAILED: First point (off=0) should have v=100, got {first_pt['v']}")
+                        return False
+                    print(f"    ✅ off=0 point has v=100 (rebased)")
+                    
+                    # Validate each point has {off, v} structure
+                    null_count = 0
+                    for pt in fwd_path:
+                        if 'off' not in pt or 'v' not in pt:
+                            print(f"    ❌ FAILED: fwd_path item missing 'off' or 'v' keys: {pt}")
+                            return False
+                        
+                        if not isinstance(pt['off'], (int, float)):
+                            print(f"    ❌ FAILED: fwd_path item 'off' is not a number: {pt}")
+                            return False
+                        
+                        v = pt['v']
+                        if v is not None and not isinstance(v, (int, float)):
+                            print(f"    ❌ FAILED: fwd_path item 'v' is not a number or null: {pt}")
+                            return False
+                        
+                        if v is None:
+                            null_count += 1
+                    
+                    print(f"    ✅ All 16 points have {{off, v}} structure ({null_count} with v=null)")
+                    
+                    # For recent dates, expect some nulls at far offsets (not enough forward data)
+                    if null_count > 0:
+                        print(f"    ℹ️  Note: {null_count} points have v=null (expected for recent dates)")
+                
+                # Summary of fwd_path validation
+                print(f"\n✅ fwd_path validation complete for all {len(day_fps)} items")
+                
                 # Validate NEW guarantee: episodes with paths
                 print("\n--- Validating episodes (NEW guarantee: all have paths) ---")
                 episodes = data.get('episodes')

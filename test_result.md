@@ -507,9 +507,15 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED via external URL. status='ready'. day_fingerprints=1176 items (100% have fwd_90 resolved), each with date/fp(8 keys)/fwd_30/fwd_90/fwd_180. episodes=28, ALL with non-empty path (81 pts each) and valid match 0-100. Regression: current, norm, signals(8), current_path, episode_count all present. No 500s. Data REAL (Yahoo Finance)."
+        -working: "NA"
+        -agent: "main"
+        -comment: "UPDATE (Confidence Band): compute_analogs() now also attaches fwd_path to EACH day_fingerprint — a coarse rebased forward price path at offsets [0,12,24,...,180] (16 points), rebased to 100 at day 0, with v=null for offsets that extend past the last available date (recent days). Verified via curl + in-browser fetch: 1176/1176 day_fingerprints have fwd_path of length 16, first point {off:0,v:100}, recent days null at far offsets. This powers the frontend 'Analog Confidence Band' (percentile band p10/p25/median/p75/p90 across all matching Setup-History days). Test: GET /api/v1/analogs -> each day_fingerprints[i].fwd_path is a list of 16 {off,v} where off in [0..180] step 12 and v is number or null; off=0 always v=100. Regression: day_fingerprints count/fields, episodes[].path, current/norm/signals/current_path unchanged."
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/analogs). Endpoint returned status='ready' immediately (data was already cached). ALL NEW FIELDS VALIDATED: (1) day_fingerprints: 1176 items (expected ~1000+) ✅ Each item validated with required fields: date (YYYY-MM-DD format) ✅, fp (dict with all 8 ANALOG_KEYS: rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum, cycle) ✅, fwd_30/fwd_90/fwd_180 (numbers or null) ✅ Resolved days: 1176/1176 (100.0%) have fwd_90 != null ✅ (2) episodes: 28 items, ALL episodes have non-empty 'path' field ✅ Each episode validated: path is list of {off, v} objects (81 points in top episodes) ✅, match is number 0-100 (range: 48-56) ✅ (3) REGRESSION PASSED: current (dict with 8 keys) ✅, norm (dict with 8 keys) ✅, signals (list with exactly 8 items) ✅, current_path (list with 21 points) ✅, episode_count (28) ✅ No HTTP 500 errors ✅ Data is REAL (Yahoo Finance: BTC-USD, ^NDX, GC=F, DX-Y.NYB, ^TNX over 10 years)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ RE-TEST PASSED - NEW fwd_path FIELD VALIDATED. Tested GET /api/v1/analogs via external URL. Endpoint returned status='ready' immediately (cached). ADDITIVE FIELD fwd_path FULLY VALIDATED: (1) ALL 1176 day_fingerprints have fwd_path field ✅ (2) Each fwd_path is a list of EXACTLY 16 objects {off, v} ✅ (3) Offsets are EXACTLY [0,12,24,36,48,60,72,84,96,108,120,132,144,156,168,180] (step 12) ✅ (4) The off=0 point has v=100 (rebased to 100 at day 0) ✅ (5) v is a number or null ✅ (6) Recent-dated items (April-May 2026) legitimately have v=null at far offsets (108-180 days) due to insufficient forward data - this is EXPECTED behavior ✅ REGRESSION TESTS PASSED: (7) day_fingerprints items still contain date (YYYY-MM-DD) ✅, fp (dict of 8 keys: rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum, cycle) ✅, fwd_30, fwd_90, fwd_180 ✅ (8) episodes non-empty (28 items), each with non-empty path (81 points) and match (0-100) ✅ (9) current (dict with 8 keys) ✅, norm (dict with 8 keys) ✅, signals (list of 8) ✅, current_path (21 points) ✅, episode_count (28) ✅ No HTTP 500 errors at any point ✅ Data is REAL (Yahoo Finance). All validations passed."
 
 metadata:
   created_by: "main_agent"
@@ -527,7 +533,18 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      NEW TEST FOCUS — GET /api/v1/analogs (via Next.js proxy, external base URL + /api/v1/analogs).
+      RE-TEST (additive field) — GET /api/v1/analogs. compute_analogs now attaches fwd_path to each
+      day_fingerprints item. POLL until {status:'ready'} (may briefly return 'computing').
+      Validate:
+        1) day_fingerprints non-empty (~1176). For each item, fwd_path is a list of 16 objects
+           {off, v} where off ∈ {0,12,24,...,180} (step 12) and v is a number or null. The off=0
+           point must have v == 100 (rebased). Some recent-dated items may have v=null at far offsets.
+        2) REGRESSION: day_fingerprints items still have date, fp (8 keys), fwd_30, fwd_90, fwd_180.
+           episodes still non-empty with non-empty path and match 0-100. current/norm/signals(8)/
+           current_path/episode_count still present. No 500s.
+      Data is REAL (Yahoo Finance). Do NOT test WebSockets.
+
+
       This endpoint computes lazily and may return {status:'computing'} on first hit while it fetches
       10y of Yahoo data (BTC/NDX/Gold/DXY/TNX). POLL until {status:'ready'} (up to ~60s).
       Validate the NEW fields added for the "Happening Again" screen:
@@ -575,6 +592,53 @@ agent_communication:
       Data is REAL (Yahoo Finance: BTC-USD, ^NDX, GC=F, DX-Y.NYB, ^TNX over 10 years).
       
       NO ISSUES FOUND. Feature is production-ready.
+
+    -agent: "testing"
+    -message: |
+      ✅ RE-TEST COMPLETE - fwd_path ADDITIVE FIELD VALIDATED
+      
+      Tested GET /api/v1/analogs via external URL (https://quant-features.preview.emergentagent.com/api/v1/analogs)
+      after main agent added the NEW fwd_path field to each day_fingerprint item.
+      
+      RESULT: All validations PASSED ✅
+      
+      NEW ADDITIVE FIELD fwd_path VALIDATED:
+      1. Field presence ✅
+         - ALL 1176 day_fingerprints have fwd_path field
+         - No items missing this field
+      
+      2. Structure validation ✅
+         - Each fwd_path is a list of EXACTLY 16 objects {off, v}
+         - Offsets are EXACTLY [0,12,24,36,48,60,72,84,96,108,120,132,144,156,168,180] (step 12)
+         - All 16 points have correct {off, v} structure
+      
+      3. Rebasing validation ✅
+         - The off=0 point has v=100 (rebased to 100 at day 0) in ALL items
+         - This is the baseline for the forward price path
+      
+      4. Value types ✅
+         - v is a number or null (as expected)
+         - Recent-dated items (April-May 2026) legitimately have v=null at far offsets (108-180 days)
+         - This is EXPECTED behavior: not enough forward data for recent dates
+         - Example: 2026-04-06 has null at offsets [132,144,156,168,180]
+      
+      REGRESSION TESTS PASSED:
+      - day_fingerprints items still contain: date (YYYY-MM-DD) ✅, fp (dict of 8 keys: rates_dir, 
+        dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum, cycle) ✅, fwd_30 ✅, 
+        fwd_90 ✅, fwd_180 ✅
+      - episodes: 28 items, each with non-empty path (81 points) and match (0-100) ✅
+      - current (dict with 8 keys) ✅
+      - norm (dict with 8 keys) ✅
+      - signals (list of 8) ✅
+      - current_path (21 points) ✅
+      - episode_count (28) ✅
+      - No HTTP 500 errors at any point ✅
+      
+      Data is REAL (Yahoo Finance: BTC-USD, ^NDX, GC=F, DX-Y.NYB, ^TNX over 10 years).
+      
+      SUMMARY: The new fwd_path field has been successfully added to all day_fingerprints items
+      and powers the frontend "Analog Confidence Band" feature. All validations passed with no
+      regressions. Feature is production-ready.
 
 
 

@@ -4031,6 +4031,29 @@ def compute_analogs():
     # each with its fingerprint + forward returns. The frontend scores every day against today's
     # setup using the live slider weights and lists all days above the alert threshold with their
     # win/loss outcome — a mini backtest of how the current setup has played out in the past.
+    # We also attach a coarse forward price path (rebased to 100 at day 0) so the frontend can
+    # build a percentile "confidence band" showing the spread of past outcomes.
+    fwd_offsets = list(range(0, 181, 12))
+    _date_ts = pd.to_datetime(pd.Index(dates)).values  # sorted ascending datetime64[ns]
+    _prices = np.array(vals, dtype=float)
+    _last_ts = _date_ts[-1]
+
+    def fwd_path_arr(i):
+        base = _prices[i]
+        if base <= 0:
+            return []
+        out = []
+        for off in fwd_offsets:
+            target = _date_ts[i] + np.timedelta64(int(off), 'D')
+            if target > _last_ts:
+                out.append({'off': int(off), 'v': None})
+                continue
+            j = int(np.searchsorted(_date_ts, target, side='right')) - 1
+            if j < i:
+                j = i
+            out.append({'off': int(off), 'v': round(float(_prices[j]) / base * 100, 1)})
+        return out
+
     day_fingerprints = []
     last_dt = pd.to_datetime(dates[-1])
     for i in range(0, len(df), 3):
@@ -4043,6 +4066,7 @@ def compute_analogs():
         day_fingerprints.append({
             'date': d, 'fp': fp,
             'fwd_30': fwd_ret(d, 30), 'fwd_90': fwd_ret(d, 90), 'fwd_180': fwd_ret(d, 180),
+            'fwd_path': fwd_path_arr(i),
         })
 
     return {
