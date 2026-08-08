@@ -3667,7 +3667,8 @@ function AnalogsSection() {
                 )}
                 {modelActive && verdict && (
                   <p className="mt-2 border-t border-slate-800 pt-2 text-slate-300">
-                    <span className="font-semibold text-white">Verdict:</span> BTCIQ’s model (base{' '}
+                    <span className="font-semibold text-white">Verdict</span><InfoTip below={false} text={`We take BTCIQ's own base-case price for ${verdict.H} days out, rebase it to 100 like the chart, and see where it ranks among the ${verdict.n} matching past setups' actual ${verdict.H}-day outcomes. "More bearish than X%" means the model projects a lower result than X% of those look-alikes did.`} />:{' '}
+                    BTCIQ’s model (base{' '}
                     <b className={verdict.modelRet >= 0 ? 'text-emerald-400' : 'text-red-400'}>{verdict.modelRet > 0 ? '+' : ''}{verdict.modelRet}%</b> at {verdict.H}d) is{' '}
                     {verdict.pctBelow >= 50
                       ? <>more <b className="text-emerald-400">bullish</b> than {verdict.pctBelow}%</>
