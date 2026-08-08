@@ -3484,21 +3484,21 @@ function AnalogsSection() {
   const bandActive = showBand && Object.keys(band.byOff).length > 0;
   const modelActive = showModel && !!fcPath;
 
-  // Model vs History verdict — where today's model projection sits within the distribution of
-  // past look-alike outcomes at the selected horizon (30/90/180d).
-  const verdict = React.useMemo(() => {
+  // Model vs History verdicts — where today's model projection sits within the distribution of
+  // past look-alike outcomes at 30 / 90 / 180 days (shown as at-a-glance chips).
+  const verdicts = React.useMemo(() => {
     const rows = (setupHistory.rows || []);
-    if (!fcPath || rows.length < 4) return null;
-    const H = readoutHorizon;
-    const mv = pathValueAt(fcPath, H);
-    if (mv == null) return null;
-    const outs = [];
-    rows.forEach((r) => { const v = pathValueAt(r.fwd_path, H); if (v != null) outs.push(v); });
-    if (outs.length < 4) return null;
-    const below = outs.filter((v) => v < mv).length;
-    const pctBelow = Math.round((below / outs.length) * 100);
-    return { H, pctBelow, n: outs.length, modelRet: Math.round((mv - 100) * 10) / 10 };
-  }, [fcPath, setupHistory, readoutHorizon]);
+    if (!fcPath || rows.length < 4) return [];
+    return [30, 90, 180].map((H) => {
+      const mv = pathValueAt(fcPath, H);
+      if (mv == null) return { H, ok: false };
+      const outs = [];
+      rows.forEach((r) => { const v = pathValueAt(r.fwd_path, H); if (v != null) outs.push(v); });
+      if (outs.length < 4) return { H, ok: false };
+      const below = outs.filter((v) => v < mv).length;
+      return { H, ok: true, pctBelow: Math.round((below / outs.length) * 100), n: outs.length, modelRet: Math.round((mv - 100) * 10) / 10 };
+    });
+  }, [fcPath, setupHistory]);
 
   const sig = (k) => (data ? data.signals.find((s) => s.key === k) : null);
   const fmtSig = (k, v) => {
@@ -3665,16 +3665,26 @@ function AnalogsSection() {
                 ) : (
                   <p className="text-slate-500">Not enough resolved history at {readoutHorizon} days for this setup — try a shorter horizon or a looser match level.</p>
                 )}
-                {modelActive && verdict && (
-                  <p className="mt-2 border-t border-slate-800 pt-2 text-slate-300">
-                    <span className="font-semibold text-white">Verdict</span><InfoTip below={false} text={`We take BTCIQ's own base-case price for ${verdict.H} days out, rebase it to 100 like the chart, and see where it ranks among the ${verdict.n} matching past setups' actual ${verdict.H}-day outcomes. "More bearish than X%" means the model projects a lower result than X% of those look-alikes did.`} />:{' '}
-                    BTCIQ’s model (base{' '}
-                    <b className={verdict.modelRet >= 0 ? 'text-emerald-400' : 'text-red-400'}>{verdict.modelRet > 0 ? '+' : ''}{verdict.modelRet}%</b> at {verdict.H}d) is{' '}
-                    {verdict.pctBelow >= 50
-                      ? <>more <b className="text-emerald-400">bullish</b> than {verdict.pctBelow}%</>
-                      : <>more <b className="text-red-400">bearish</b> than {100 - verdict.pctBelow}%</>}{' '}
-                    of the {verdict.n} past look-alikes at {verdict.H} days.
-                  </p>
+                {modelActive && verdicts.length > 0 && (
+                  <div className="mt-2 border-t border-slate-800 pt-2">
+                    <span className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold text-white">
+                      Model vs history
+                      <InfoTip below={false} text="For each horizon we take BTCIQ's own base-case price, rebase it to 100 like the chart, and rank it against the matching past setups' actual outcomes at that horizon. “bearish X%” means the model projects a lower result than X% of those look-alikes; “bullish X%” means higher than X% of them." />
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      {verdicts.map((v) => (v.ok ? (
+                        <div key={v.H} className="flex items-center gap-1.5 rounded-lg bg-slate-900/80 px-2.5 py-1 ring-1 ring-slate-800">
+                          <span className="text-[11px] font-bold text-slate-400">{v.H}d</span>
+                          <span className={`text-[11px] font-semibold ${v.modelRet >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{v.modelRet > 0 ? '+' : ''}{v.modelRet}%</span>
+                          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${v.pctBelow >= 50 ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'}`}>
+                            {v.pctBelow >= 50 ? `bullish ${v.pctBelow}%` : `bearish ${100 - v.pctBelow}%`}
+                          </span>
+                        </div>
+                      ) : (
+                        <div key={v.H} className="flex items-center gap-1.5 rounded-lg bg-slate-900/50 px-2.5 py-1 text-[11px] text-slate-600 ring-1 ring-slate-800">{v.H}d · n/a</div>
+                      )))}
+                    </div>
+                  </div>
                 )}
               </div>
             )}
