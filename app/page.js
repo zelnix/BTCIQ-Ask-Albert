@@ -344,11 +344,11 @@ function AiReview({ text, voice, section, footer }) {
   );
 }
 
-const SectionHead = ({ icon: Icon, title, blurb }) => {
+const SectionHead = ({ icon: Icon, title, blurb, coin }) => {
   const [open, setOpen] = React.useState(false);
   return (
     <div className="flex items-center gap-2">
-      <Icon className="h-6 w-6 text-sky-400" />
+      {coin ? <CoinIcon symbol={coin} size={28} className="ring-1 ring-slate-700" /> : <Icon className="h-6 w-6 text-sky-400" />}
       <h1 className="text-2xl font-bold tracking-tight text-white">{title}</h1>
       {blurb && (
         <div className="relative">
@@ -2594,7 +2594,7 @@ function RiskSection({ d }) {
   const lvlColor = riskStateColor(r.level);
   return (
     <div className="space-y-5">
-      <SectionHead icon={ShieldAlert} title="BTCIQ Risk" blurb={sec('risk').blurb} />
+      <SectionHead icon={ShieldAlert} title="BTCIQ Risk" blurb={sec('risk').blurb} coin={d.symbol} />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="flex flex-wrap items-center gap-6">
           <div>
@@ -3894,7 +3894,7 @@ function CrossMarketSection() {
 
   return (
     <div className="space-y-6">
-      <SectionHead icon={Globe} title="Cross-Market" blurb={sec('crossmarket').blurb} />
+      <SectionHead icon={Globe} title="Cross-Market" blurb={sec('crossmarket').blurb} coin={symbol} />
       <AiReview text={reviewCrossMarket(data)} voice section="crossmarket" />
 
       <div className="flex flex-wrap items-center gap-2">
@@ -4211,6 +4211,21 @@ export default function DashboardPage() {
     setActive((a) => (!btc && BTC_ONLY_SECTIONS.includes(a) ? 'overview' : a));
     if (btc) setCompareOpen(false);
   }, [symbol]);
+
+  // Reflect the selected coin in the browser tab (favicon + title).
+  useEffect(() => {
+    const coin = coins.find((c) => c.symbol === symbol);
+    const name = (coin && coin.name) || (data && data.coin_name) || symbol;
+    const price = ticker && ticker.price;
+    document.title = price ? `${symbol} ${fmtUsd(price)} · BTCIQ` : `${name} · BTCIQ`;
+    try {
+      const href = `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/${symbol.toLowerCase()}.png`;
+      const links = document.querySelectorAll("link[rel~='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']");
+      if (links.length) { links.forEach((l) => { l.href = href; }); }
+      else { const l = document.createElement('link'); l.rel = 'icon'; l.href = href; document.head.appendChild(l); }
+    } catch (e) { /* noop */ }
+  }, [symbol, ticker, coins, data]);
+
 
   const symQs = (base) => (symbol === 'BTC' ? base : `${base}${base.includes('?') ? '&' : '?'}symbol=${encodeURIComponent(symbol)}`);
 
