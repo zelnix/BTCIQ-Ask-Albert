@@ -1857,7 +1857,7 @@ function NewsSection({ news, status, onRefresh, refreshing }) {
   if (status !== 'ready' || !news) {
     return (
       <div className="space-y-5">
-        <SectionHead icon={Newspaper} title={`${symbol} News`} blurb={sec('news').blurb} />
+        <SectionHead icon={Newspaper} title={`${symbol} News`} blurb={sec('news').blurb} coin={symbol} />
         <Card className="flex items-center justify-center gap-3 border-0 bg-slate-900 p-16 ring-1 ring-slate-800">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-700 border-t-sky-400" />
           <span className="text-slate-400">{status === 'error' ? 'News engine error — try refresh.' : 'Gathering headlines & generating AI summaries…'}</span>
@@ -1870,7 +1870,7 @@ function NewsSection({ news, status, onRefresh, refreshing }) {
   const biasColor = b.bias === 'Moderately Bullish' ? 'text-emerald-400' : b.bias === 'Moderately Bearish' ? 'text-red-400' : 'text-amber-400';
   return (
     <div className="space-y-5">
-      <SectionHead icon={Newspaper} title={`${symbol} News`} blurb={sec('news').blurb} />
+      <SectionHead icon={Newspaper} title={`${symbol} News`} blurb={sec('news').blurb} coin={symbol} />
       <Card className="border-0 bg-gradient-to-br from-violet-500/10 to-slate-900 p-6 ring-1 ring-violet-500/25">
         <div className="mb-3 flex items-center gap-2"><Sparkles className="h-5 w-5 text-violet-400" /><h3 className="flex items-center gap-1 font-semibold text-slate-100">Daily AI Briefing<InfoTip below text={`A plain-English summary of the day's most important ${symbol} news, written by the AI, with the likely market impact of each story.`} /></h3><span className="ml-auto text-[11px] text-slate-500">{news.model}</span></div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -3049,7 +3049,7 @@ function MarketIntelligenceSection({ d }) {
   return (
     <div className="space-y-8">
       <div>
-        <SectionHead icon={CandlestickChart} title="Draw & Annotate" blurb="Your own lightweight chart with trendlines, horizontal levels and notes — everything you draw is saved in this browser and reloads automatically. No account needed." />
+        <SectionHead icon={CandlestickChart} title="Draw & Annotate" blurb="Your own lightweight chart with trendlines, horizontal levels and notes — everything you draw is saved in this browser and reloads automatically. No account needed." coin={d.symbol} />
         <DrawableChart ohlc={d.chart?.ohlc} />
       </div>
       <ChartSection d={d} />
