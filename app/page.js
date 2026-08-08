@@ -25,6 +25,21 @@ const fmtUsd = (v) =>
 const fmtAud = (v) => 'A$' + new Intl.NumberFormat('en-AU', { maximumFractionDigits: 0 }).format(v ?? 0);
 const fmtPct = (v) => `${Number(v).toFixed(1)}%`;
 
+// Real coin logo (keyless jsDelivr CDN). Falls back to a text badge if the image is missing.
+function CoinIcon({ symbol, size = 24, className = '' }) {
+  const [err, setErr] = React.useState(false);
+  const sym = (symbol || '').toUpperCase();
+  React.useEffect(() => { setErr(false); }, [symbol]);
+  if (err || !symbol) {
+    return (
+      <span className={`flex items-center justify-center rounded-full bg-gradient-to-br from-amber-400/30 to-sky-500/30 font-black text-sky-200 ring-1 ring-sky-500/40 ${className}`} style={{ width: size, height: size, fontSize: size * 0.36 }}>{sym.slice(0, 3)}</span>
+    );
+  }
+  return (
+    <img src={`https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/${sym.toLowerCase()}.png`} alt={sym} onError={() => setErr(true)} className={`rounded-full ${className}`} style={{ width: size, height: size }} />
+  );
+}
+
 const CAT_COLORS = {
   Trend: 'text-sky-400 bg-sky-500/10 border-sky-500/30',
   Momentum: 'text-violet-400 bg-violet-500/10 border-violet-500/30',
@@ -642,12 +657,15 @@ function MarketStateHero({ d, ticker }) {
       </div>
 
       <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
-        <div>
-          <p className="text-[10px] uppercase tracking-wider text-slate-500">{sym} Live Price</p>
-          <p className="text-4xl font-black text-white">{fmtUsd(ticker?.price ?? d.last_close)}</p>
-          <p className={`text-sm font-semibold ${ch >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-            {ch >= 0 ? '▲' : '▼'} {ch}% (24h){ticker?.price_aud ? ` · ≈ ${fmtAud(ticker.price_aud)}` : ''}
-          </p>
+        <div className="flex items-center gap-3">
+          <CoinIcon symbol={sym} size={44} className="shadow-lg" />
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-slate-500">{sym} Live Price</p>
+            <p className="text-4xl font-black text-white">{fmtUsd(ticker?.price ?? d.last_close)}</p>
+            <p className={`text-sm font-semibold ${ch >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {ch >= 0 ? '▲' : '▼'} {ch}% (24h){ticker?.price_aud ? ` · ≈ ${fmtAud(ticker.price_aud)}` : ''}
+            </p>
+          </div>
         </div>
         <div>
           <p className="text-[10px] uppercase tracking-wider text-slate-500">Market Regime</p>
@@ -910,6 +928,10 @@ function ForecastCard({ f }) {
   const bullish = eff >= 50;
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+      <div className="mb-2 flex items-center gap-1.5">
+        <img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-sky-500/50" />
+        <span className="text-[10px] font-bold uppercase tracking-wider text-sky-300">Albert’s Call</span>
+      </div>
       <div className="flex items-center justify-between">
         <h3 className="flex items-center gap-1 text-lg font-bold text-white">{f.horizon} Forecast<InfoTip text={`The model's probability that ${sym} is higher vs lower at the end of this window, plus bull/base/bear price scenarios. Odds, not a promise.`} /></h3>
         <Badge variant="outline" className={`border-slate-700 ${bullish ? 'text-emerald-400' : 'text-red-400'}`}>{bullish ? 'Leans Up' : 'Leans Down'}</Badge>
@@ -1889,6 +1911,10 @@ function BmHorizonCard({ h }) {
   const [vc, vp] = bmVol(h.expected_volatility);
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+      <div className="mb-2 flex items-center gap-1.5">
+        <img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-sky-500/50" />
+        <span className="text-[10px] font-bold uppercase tracking-wider text-sky-300">Albert’s Call</span>
+      </div>
       <div className="flex items-center justify-between">
         <div><h3 className="text-base font-bold text-white">{h.label}</h3><p className="text-[11px] text-slate-500">{h.horizon} horizon</p></div>
         <Badge variant="outline" className={`border-slate-700 ${up ? 'text-emerald-400' : 'text-red-400'}`}>{up ? 'Leans Up' : 'Leans Down'}</Badge>
@@ -1927,6 +1953,10 @@ function BmHorizonCard({ h }) {
 function BmScenarioCard({ h }) {
   return (
     <Card className="border-0 bg-gradient-to-br from-violet-500/[0.06] to-slate-900 p-5 ring-1 ring-violet-500/20">
+      <div className="mb-2 flex items-center gap-1.5">
+        <img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-violet-500/50" />
+        <span className="text-[10px] font-bold uppercase tracking-wider text-violet-300">Albert’s Call</span>
+      </div>
       <div className="flex items-center justify-between">
         <div><h3 className="text-base font-bold text-white">{h.label}</h3><p className="text-[11px] text-slate-500">{h.horizon} · broad scenarios, not a single target</p></div>
         <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${bmConfColor(h.model_confidence)} border-slate-700`}>Confidence {h.model_confidence}</span>
@@ -4119,7 +4149,7 @@ function CoinPicker({ coins, symbol, onSelect }) {
     <div className="relative">
       <button onClick={() => setOpen((o) => !o)} title="Switch coin — the whole dashboard follows"
         className={`flex items-center gap-2 rounded-xl border px-3 py-1.5 text-sm font-semibold text-white transition-colors ${open ? 'border-sky-500/60 bg-slate-800' : 'border-slate-700 bg-slate-900 hover:border-sky-500/50'}`}>
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-gradient-to-br from-amber-400/30 to-sky-500/30 text-[10px] font-black text-sky-200 ring-1 ring-sky-500/40">{current.symbol}</span>
+        <CoinIcon symbol={current.symbol} size={24} />
         <span className="hidden sm:inline">{current.name}</span>
         <ChevronDown className={`h-4 w-4 text-slate-400 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -4131,7 +4161,7 @@ function CoinPicker({ coins, symbol, onSelect }) {
             {coins.map((c) => (
               <button key={c.symbol} onClick={() => { onSelect(c.symbol); setOpen(false); }}
                 className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${c.symbol === symbol ? 'bg-sky-500/15 text-sky-200' : 'text-slate-300 hover:bg-slate-800'}`}>
-                <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-800 text-[10px] font-black text-sky-300">{c.symbol}</span>
+                <CoinIcon symbol={c.symbol} size={24} />
                 <span className="flex-1">{c.name}</span>
                 {c.symbol === 'BTC' && <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-bold text-amber-300">FULL</span>}
                 {c.symbol === symbol && <Check className="h-3.5 w-3.5 text-sky-300" />}
