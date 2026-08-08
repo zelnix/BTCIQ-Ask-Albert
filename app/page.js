@@ -3223,6 +3223,21 @@ const ANALOG_CAT_COLOR = {
 
 const ANALOG_OVERLAY_COLORS = ['#f7931a', '#a855f7', '#22d3ee'];
 
+// Interpolate a rebased forward path (list of {off,v}) at a given day; null if unresolved there.
+function pathValueAt(fp, day) {
+  const a = (fp || []).filter((p) => p.v != null);
+  if (!a.length) return null;
+  if (day <= a[0].off) return a[0].v;
+  if (day > a[a.length - 1].off) return null;
+  for (let i = 0; i < a.length - 1; i += 1) {
+    if (a[i].off <= day && day <= a[i + 1].off) {
+      const t = (day - a[i].off) / ((a[i + 1].off - a[i].off) || 1);
+      return a[i].v + (a[i + 1].v - a[i].v) * t;
+    }
+  }
+  return a[a.length - 1].v;
+}
+
 // Tiny inline win/loss forward mini-chart for each Setup History row, with hover readout.
 function OutcomeSpark({ points, color }) {
   const [hover, setHover] = React.useState(null);
@@ -3469,6 +3484,22 @@ function AnalogsSection() {
   const bandActive = showBand && Object.keys(band.byOff).length > 0;
   const modelActive = showModel && !!fcPath;
 
+  // Model vs History verdict — where today's model projection sits within the distribution of
+  // past look-alike outcomes at the selected horizon (30/90/180d).
+  const verdict = React.useMemo(() => {
+    const rows = (setupHistory.rows || []);
+    if (!fcPath || rows.length < 4) return null;
+    const H = readoutHorizon;
+    const mv = pathValueAt(fcPath, H);
+    if (mv == null) return null;
+    const outs = [];
+    rows.forEach((r) => { const v = pathValueAt(r.fwd_path, H); if (v != null) outs.push(v); });
+    if (outs.length < 4) return null;
+    const below = outs.filter((v) => v < mv).length;
+    const pctBelow = Math.round((below / outs.length) * 100);
+    return { H, pctBelow, n: outs.length, modelRet: Math.round((mv - 100) * 10) / 10 };
+  }, [fcPath, setupHistory, readoutHorizon]);
+
   const sig = (k) => (data ? data.signals.find((s) => s.key === k) : null);
   const fmtSig = (k, v) => {
     if (v == null) return '—';
@@ -3633,6 +3664,16 @@ function AnalogsSection() {
                   </p>
                 ) : (
                   <p className="text-slate-500">Not enough resolved history at {readoutHorizon} days for this setup — try a shorter horizon or a looser match level.</p>
+                )}
+                {modelActive && verdict && (
+                  <p className="mt-2 border-t border-slate-800 pt-2 text-slate-300">
+                    <span className="font-semibold text-white">Verdict:</span> BTCIQ’s model (base{' '}
+                    <b className={verdict.modelRet >= 0 ? 'text-emerald-400' : 'text-red-400'}>{verdict.modelRet > 0 ? '+' : ''}{verdict.modelRet}%</b> at {verdict.H}d) is{' '}
+                    {verdict.pctBelow >= 50
+                      ? <>more <b className="text-emerald-400">bullish</b> than {verdict.pctBelow}%</>
+                      : <>more <b className="text-red-400">bearish</b> than {100 - verdict.pctBelow}%</>}{' '}
+                    of the {verdict.n} past look-alikes at {verdict.H} days.
+                  </p>
                 )}
               </div>
             )}
