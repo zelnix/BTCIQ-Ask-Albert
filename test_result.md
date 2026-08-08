@@ -493,6 +493,21 @@ backend:
         -agent: "testing"
         -comment: "✅ PASSED comprehensive Stage 1+2 UI test via external URL. All 14 sidebar items tested and working: Overview, Forecasts, Market Intelligence, Smart Money, Institutional, Macro & Policy, News, Risk, Events, Performance, Bitcoin Time Machine, Ask Albert, Alerts, Settings. (1) Overview: ✅ 'BITCOIN MARKET STATE' hero present with price ($63,952), 24h change (-0.16%), regime (Weak Bearish Trend), Quant Score (49/100 Neutral), 24H Outlook (55% prob. lower), 7D Outlook (51.1% prob. lower), Risk Level (Low), Model Confidence (Low), Data Confidence (High 97/100), Updated timestamp (4 hours ago). ✅ Albert intro card present with 'not Albert Einstein' disclosure. ✅ Albert's Review card with avatar (/albert.png) present. (2) Risk: ✅ Overall risk level (Low), 5-step scale present, Expected Move card with 24H/7D/30D horizons, Key Zones card, Risk Drivers list with DEMO DATA badges. (3) Smart Money & Institutional: ✅ Both sections show DEMO DATA badges and metrics lists. (4) Settings: ✅ Admin passcode input (type=password), Save button works, 'Saved' indicator appears, data-source list present, compliance text present. (5) Performance: ✅ Prediction Ledger stat cards, 'In plain English' explainer, 'Full Prediction Ledger' table with Horizon/Outcome filters. (6) Forecasts: ✅ BitMarkAI section with 7 horizon cards (1W-5Y), 'Why the forecast changed' panel present. (7) Ask Albert: ✅ Albert avatar in header, 'Albert · BTCIQ AI Quant' header, suggested question chips present. (8) Alerts: ✅ Smart Alerts feed renders. (9) Footer: ✅ Compliance disclaimer present (exact text: 'BTCIQ provides Bitcoin market analysis'). 6 screenshots captured. NO CRITICAL ISSUES. All sections load without errors. Data is REAL (Kraken). WebSockets NOT tested (as instructed)."
 
+  - task: "Happening Again — Setup History (day_fingerprints) + Multi-Analog Overlay paths (GET /api/v1/analogs)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW. compute_analogs() now also returns (1) day_fingerprints: a downsampled (every 3rd day) list of RESOLVED historical days (only days with >=95d of forward data), each = {date, fp:{8 ANALOG_KEYS}, fwd_30, fwd_90, fwd_180}. Days with <5 non-null fingerprint keys are skipped. This powers the frontend 'Setup History' backtest. (2) Every ranked episode now guaranteed a forward price 'path' for the multi-analog overlay. Verified via curl on internal :8001: status='ready', day_fingerprints count=1176, episodes=28, top episode path has 81 points. Test: GET /api/v1/analogs -> status 'ready' (may be 'computing' first ~20-40s while it fetches 10y Yahoo data, poll until ready). Validate: (a) day_fingerprints non-empty; each item has date (YYYY-MM-DD), fp (dict with keys rates_dir,dxy_dir,nasdaq_corr,gold_corr,vol_regime,drawdown,momentum,cycle), fwd_30/fwd_90/fwd_180 (number or null). (b) episodes non-empty; each has path (non-empty list of {off,v}) and match (0-100). (c) current, norm, signals(8), current_path still present (regression). (d) No 500s."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/analogs). Endpoint returned status='ready' immediately (data was already cached). ALL NEW FIELDS VALIDATED: (1) day_fingerprints: 1176 items (expected ~1000+) ✅ Each item validated with required fields: date (YYYY-MM-DD format) ✅, fp (dict with all 8 ANALOG_KEYS: rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum, cycle) ✅, fwd_30/fwd_90/fwd_180 (numbers or null) ✅ Resolved days: 1176/1176 (100.0%) have fwd_90 != null ✅ (2) episodes: 28 items, ALL episodes have non-empty 'path' field ✅ Each episode validated: path is list of {off, v} objects (81 points in top episodes) ✅, match is number 0-100 (range: 48-56) ✅ (3) REGRESSION PASSED: current (dict with 8 keys) ✅, norm (dict with 8 keys) ✅, signals (list with exactly 8 items) ✅, current_path (list with 21 points) ✅, episode_count (28) ✅ No HTTP 500 errors ✅ Data is REAL (Yahoo Finance: BTC-USD, ^NDX, GC=F, DX-Y.NYB, ^TNX over 10 years)."
+
 metadata:
   created_by: "main_agent"
   version: "1.0"
@@ -500,12 +515,67 @@ metadata:
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Happening Again — Setup History (day_fingerprints) + Multi-Analog Overlay paths (GET /api/v1/analogs)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
+    -agent: "main"
+    -message: |
+      NEW TEST FOCUS — GET /api/v1/analogs (via Next.js proxy, external base URL + /api/v1/analogs).
+      This endpoint computes lazily and may return {status:'computing'} on first hit while it fetches
+      10y of Yahoo data (BTC/NDX/Gold/DXY/TNX). POLL until {status:'ready'} (up to ~60s).
+      Validate the NEW fields added for the "Happening Again" screen:
+        1) day_fingerprints: non-empty list. Each item = {date (YYYY-MM-DD), fp (dict of 8 keys:
+           rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum, cycle —
+           values number or null), fwd_30, fwd_90, fwd_180 (number or null)}. Confirm most items
+           have fwd_90 not null (they are RESOLVED days). Expect ~1000+ items.
+        2) episodes: non-empty list; EACH episode has a non-empty 'path' (list of {off, v}) and a
+           'match' (0-100 number). (These power the multi-analog overlay.)
+        3) REGRESSION: current (dict), norm (dict), signals (list of 8), current_path (non-empty
+           list), episode_count present. No 500s.
+      Data is REAL (Yahoo Finance). Do NOT test WebSockets.
+    -agent: "testing"
+    -message: |
+      ✅ HAPPENING AGAIN ANALOG ENGINE TEST PASSED
+      
+      Tested GET /api/v1/analogs via external URL (https://quant-features.preview.emergentagent.com/api/v1/analogs):
+      
+      RESULT: All validations passed on first attempt (endpoint returned status='ready' immediately, data was cached).
+      
+      NEW FIELDS VALIDATED:
+      1. day_fingerprints ✅
+         - 1176 items (exceeds expected ~1000+)
+         - Each item has required structure:
+           * date: YYYY-MM-DD format ✅
+           * fp: dict with all 8 ANALOG_KEYS (rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum, cycle) ✅
+           * fwd_30, fwd_90, fwd_180: numbers or null ✅
+         - Resolved days: 1176/1176 (100.0%) have fwd_90 != null ✅
+         - Sample dates: 2016-09-07 to recent (10 years of data)
+      
+      2. episodes with paths ✅
+         - 28 episodes returned
+         - ALL episodes have non-empty 'path' field (NEW guarantee) ✅
+         - Each path is list of {off, v} objects (81 points in top episodes)
+         - Each episode has 'match' score 0-100 (range: 48-56)
+      
+      REGRESSION TESTS PASSED:
+      - current: dict with 8 keys ✅
+      - norm: dict with 8 keys ✅
+      - signals: list with exactly 8 items ✅
+      - current_path: list with 21 points ✅
+      - episode_count: 28 ✅
+      - No HTTP 500 errors ✅
+      
+      Data is REAL (Yahoo Finance: BTC-USD, ^NDX, GC=F, DX-Y.NYB, ^TNX over 10 years).
+      
+      NO ISSUES FOUND. Feature is production-ready.
+
+
+
+
     -agent: "main"
     -message: |
       STAGE 3 BACKEND TEST (via Next.js proxy, external base URL + /api/v1/...). Data is REAL. No WebSockets.

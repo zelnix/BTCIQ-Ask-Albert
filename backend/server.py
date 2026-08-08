@@ -4022,12 +4022,35 @@ def compute_analogs():
         ep['match'] = match_score(ep['fingerprint'])
     ranked = sorted(episodes, key=lambda e: -e['match'])
 
+    # attach a forward price path to every episode so the frontend can overlay the top 2-3
+    for ep in ranked:
+        if not ep.get('path'):
+            ep['path'] = path_for(ep['start'], ep['start_price'])
+
+    # Setup History source: downsampled RESOLVED historical days (need >=90d forward outcome),
+    # each with its fingerprint + forward returns. The frontend scores every day against today's
+    # setup using the live slider weights and lists all days above the alert threshold with their
+    # win/loss outcome — a mini backtest of how the current setup has played out in the past.
+    day_fingerprints = []
+    last_dt = pd.to_datetime(dates[-1])
+    for i in range(0, len(df), 3):
+        d = dates[i]
+        if (last_dt - pd.to_datetime(d)).days < 95:
+            continue
+        fp = {k: (None if pd.isna(df[k].iloc[i]) else round(float(df[k].iloc[i]), 2)) for k in ANALOG_KEYS}
+        if sum(1 for k in ANALOG_KEYS if fp[k] is not None) < 5:
+            continue
+        day_fingerprints.append({
+            'date': d, 'fp': fp,
+            'fwd_30': fwd_ret(d, 30), 'fwd_90': fwd_ret(d, 90), 'fwd_180': fwd_ret(d, 180),
+        })
+
     return {
         'id': str(uuid.uuid4()), 'created_at': datetime.datetime.utcnow().isoformat(),
         'as_of': dates[-1], 'history_from': dates[0],
         'signals': ANALOG_SIGNALS, 'norm': norm,
         'current': current, 'episodes': ranked, 'episode_count': len(ranked),
-        'current_path': current_path,
+        'current_path': current_path, 'day_fingerprints': day_fingerprints,
     }
 
 

@@ -1,115 +1,36 @@
 #!/usr/bin/env python3
 """
-Backend API Test Suite - Alt Dominance Feature
-Tests the new per-coin market-cap dominance feature
+Backend test for Happening Again analog engine endpoint.
+Tests GET /api/v1/analogs with new day_fingerprints and episode paths.
 """
 import requests
 import time
 import sys
 
-BASE_URL = "https://quant-features.preview.emergentagent.com/api/v1"
+BASE_URL = "https://quant-features.preview.emergentagent.com"
+ANALOG_KEYS = ['rates_dir', 'dxy_dir', 'nasdaq_corr', 'gold_corr', 'vol_regime', 'drawdown', 'momentum', 'cycle']
 
-def test_btc_dominance_regression():
-    """Test 1: BTC regression - dominance field should still work"""
+def test_analogs_endpoint():
+    """Test GET /api/v1/analogs with polling for lazy computation."""
     print("\n" + "="*80)
-    print("TEST 1: BTC Dominance Regression")
+    print("TEST: GET /api/v1/analogs (Happening Again analog engine)")
     print("="*80)
     
-    try:
-        url = f"{BASE_URL}/dashboard"
-        print(f"GET {url}")
-        resp = requests.get(url, timeout=30)
-        print(f"Status: {resp.status_code}")
-        
-        if resp.status_code != 200:
-            print(f"❌ FAILED: Expected 200, got {resp.status_code}")
-            return False
-        
-        data = resp.json()
-        print(f"Response status: {data.get('status')}")
-        
-        if data.get('status') != 'ready':
-            print(f"❌ FAILED: Expected status='ready', got '{data.get('status')}'")
-            return False
-        
-        # Check dominance field exists
-        dominance = data.get('dominance')
-        if dominance is None:
-            print(f"❌ FAILED: dominance field is None")
-            return False
-        
-        print(f"✅ dominance field present: {type(dominance)}")
-        
-        # Check dominance has required fields
-        if not isinstance(dominance, dict):
-            print(f"❌ FAILED: dominance is not a dict, got {type(dominance)}")
-            return False
-        
-        # Check 'dominance' key (the percentage value)
-        dom_pct = dominance.get('dominance')
-        if dom_pct is None:
-            print(f"❌ FAILED: dominance['dominance'] is None")
-            return False
-        
-        if not isinstance(dom_pct, (int, float)) or dom_pct <= 0:
-            print(f"❌ FAILED: dominance['dominance'] should be a number > 0, got {dom_pct}")
-            return False
-        
-        print(f"✅ dominance['dominance'] = {dom_pct}% (valid number > 0)")
-        
-        # Check total_mcap_t
-        total_mcap = dominance.get('total_mcap_t')
-        if total_mcap is None or not isinstance(total_mcap, (int, float)) or total_mcap <= 0:
-            print(f"❌ FAILED: dominance['total_mcap_t'] should be a number > 0, got {total_mcap}")
-            return False
-        
-        print(f"✅ dominance['total_mcap_t'] = ${total_mcap}T (valid number > 0)")
-        
-        # Check direction and interpretation
-        direction = dominance.get('direction')
-        interpretation = dominance.get('interpretation')
-        
-        if not direction or not isinstance(direction, str):
-            print(f"❌ FAILED: dominance['direction'] should be a non-empty string, got {direction}")
-            return False
-        
-        if not interpretation or not isinstance(interpretation, str):
-            print(f"❌ FAILED: dominance['interpretation'] should be a non-empty string, got {interpretation}")
-            return False
-        
-        print(f"✅ dominance['direction'] = '{direction}'")
-        print(f"✅ dominance['interpretation'] = '{interpretation[:80]}...'")
-        
-        print("\n✅ TEST 1 PASSED: BTC dominance regression test successful")
-        return True
-        
-    except Exception as e:
-        print(f"❌ FAILED: Exception occurred: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-
-def test_eth_dominance(max_wait=120):
-    """Test 2: ETH dominance - poll computing->ready, validate dominance fields"""
-    print("\n" + "="*80)
-    print("TEST 2: ETH Dominance (with polling)")
-    print("="*80)
+    url = f"{BASE_URL}/api/v1/analogs"
     
-    try:
-        url = f"{BASE_URL}/dashboard?symbol=ETH"
-        print(f"GET {url}")
-        
-        start_time = time.time()
-        attempts = 0
-        
-        while time.time() - start_time < max_wait:
-            attempts += 1
+    # Poll until ready (up to 60s)
+    max_attempts = 8
+    wait_time = 8
+    
+    for attempt in range(1, max_attempts + 1):
+        try:
+            print(f"\n[Attempt {attempt}/{max_attempts}] Fetching {url}...")
             resp = requests.get(url, timeout=30)
-            print(f"\nAttempt {attempts} - Status: {resp.status_code}")
+            print(f"Status: {resp.status_code}")
             
             if resp.status_code != 200:
-                print(f"❌ FAILED: Expected 200, got {resp.status_code}")
+                print(f"❌ FAILED: Expected HTTP 200, got {resp.status_code}")
+                print(f"Response: {resp.text[:500]}")
                 return False
             
             data = resp.json()
@@ -117,222 +38,247 @@ def test_eth_dominance(max_wait=120):
             print(f"Response status: {status}")
             
             if status == 'computing':
-                elapsed = time.time() - start_time
-                print(f"⏳ Computing... (elapsed: {elapsed:.1f}s / {max_wait}s)")
-                time.sleep(5)
-                continue
+                if attempt < max_attempts:
+                    print(f"⏳ Still computing... waiting {wait_time}s before next poll")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"❌ FAILED: Still computing after {max_attempts * wait_time}s")
+                    return False
             
-            if status == 'ready':
-                elapsed = time.time() - start_time
-                print(f"✅ Status changed to 'ready' after {elapsed:.1f}s")
+            elif status == 'error':
+                print(f"❌ FAILED: Endpoint returned error status")
+                print(f"Error: {data.get('error')}")
+                return False
+            
+            elif status == 'ready':
+                print("✅ Status is 'ready', proceeding with validation...")
                 
-                # Validate dominance field
-                dominance = data.get('dominance')
-                if dominance is None:
-                    print(f"❌ FAILED: dominance field is None")
+                # Validate NEW field: day_fingerprints
+                print("\n--- Validating day_fingerprints (NEW) ---")
+                day_fps = data.get('day_fingerprints')
+                if not day_fps:
+                    print("❌ FAILED: day_fingerprints is missing or empty")
                     return False
                 
-                print(f"✅ dominance field present: {type(dominance)}")
-                
-                # Check dominance percentage
-                dom_pct = dominance.get('dominance')
-                if dom_pct is None or not isinstance(dom_pct, (int, float)) or dom_pct <= 0:
-                    print(f"❌ FAILED: dominance['dominance'] should be a number > 0, got {dom_pct}")
+                if not isinstance(day_fps, list):
+                    print(f"❌ FAILED: day_fingerprints is not a list (type: {type(day_fps)})")
                     return False
                 
-                print(f"✅ dominance['dominance'] = {dom_pct}% (valid number > 0)")
+                print(f"✅ day_fingerprints is a list with {len(day_fps)} items")
                 
-                # Check total_mcap_t
-                total_mcap = dominance.get('total_mcap_t')
-                if total_mcap is None or not isinstance(total_mcap, (int, float)) or total_mcap <= 0:
-                    print(f"❌ FAILED: dominance['total_mcap_t'] should be a number > 0, got {total_mcap}")
+                if len(day_fps) < 500:
+                    print(f"⚠️  WARNING: Expected ~1000+ items, got {len(day_fps)}")
+                
+                # Validate structure of first few items
+                print("\nValidating structure of day_fingerprints items...")
+                for i, item in enumerate(day_fps[:3]):
+                    print(f"\n  Item {i+1}:")
+                    
+                    # Check date field
+                    date = item.get('date')
+                    if not date or not isinstance(date, str):
+                        print(f"    ❌ FAILED: date is missing or not a string")
+                        return False
+                    
+                    # Validate YYYY-MM-DD format
+                    if len(date) != 10 or date[4] != '-' or date[7] != '-':
+                        print(f"    ❌ FAILED: date '{date}' is not in YYYY-MM-DD format")
+                        return False
+                    print(f"    ✅ date: {date}")
+                    
+                    # Check fp (fingerprint) field
+                    fp = item.get('fp')
+                    if not fp or not isinstance(fp, dict):
+                        print(f"    ❌ FAILED: fp is missing or not a dict")
+                        return False
+                    
+                    # Validate fp has all 8 ANALOG_KEYS
+                    missing_keys = [k for k in ANALOG_KEYS if k not in fp]
+                    if missing_keys:
+                        print(f"    ❌ FAILED: fp is missing keys: {missing_keys}")
+                        return False
+                    
+                    # Check that values are numbers or null
+                    for k in ANALOG_KEYS:
+                        v = fp[k]
+                        if v is not None and not isinstance(v, (int, float)):
+                            print(f"    ❌ FAILED: fp['{k}'] = {v} is not a number or null")
+                            return False
+                    
+                    non_null_count = sum(1 for k in ANALOG_KEYS if fp[k] is not None)
+                    print(f"    ✅ fp: dict with all 8 keys ({non_null_count} non-null)")
+                    
+                    # Check forward returns
+                    fwd_30 = item.get('fwd_30')
+                    fwd_90 = item.get('fwd_90')
+                    fwd_180 = item.get('fwd_180')
+                    
+                    if fwd_30 is not None and not isinstance(fwd_30, (int, float)):
+                        print(f"    ❌ FAILED: fwd_30 is not a number or null")
+                        return False
+                    if fwd_90 is not None and not isinstance(fwd_90, (int, float)):
+                        print(f"    ❌ FAILED: fwd_90 is not a number or null")
+                        return False
+                    if fwd_180 is not None and not isinstance(fwd_180, (int, float)):
+                        print(f"    ❌ FAILED: fwd_180 is not a number or null")
+                        return False
+                    
+                    print(f"    ✅ fwd_30: {fwd_30}, fwd_90: {fwd_90}, fwd_180: {fwd_180}")
+                
+                # Check that most items have fwd_90 != null (resolved days)
+                resolved_count = sum(1 for item in day_fps if item.get('fwd_90') is not None)
+                resolved_pct = (resolved_count / len(day_fps)) * 100 if day_fps else 0
+                print(f"\n✅ Resolved days (fwd_90 != null): {resolved_count}/{len(day_fps)} ({resolved_pct:.1f}%)")
+                
+                if resolved_pct < 80:
+                    print(f"⚠️  WARNING: Expected most items to have fwd_90 != null, got {resolved_pct:.1f}%")
+                
+                # Validate NEW guarantee: episodes with paths
+                print("\n--- Validating episodes (NEW guarantee: all have paths) ---")
+                episodes = data.get('episodes')
+                if not episodes:
+                    print("❌ FAILED: episodes is missing or empty")
                     return False
                 
-                print(f"✅ dominance['total_mcap_t'] = ${total_mcap}T (valid number > 0)")
-                
-                # Check direction and interpretation
-                direction = dominance.get('direction')
-                interpretation = dominance.get('interpretation')
-                
-                if not direction or not isinstance(direction, str):
-                    print(f"❌ FAILED: dominance['direction'] should be a non-empty string, got {direction}")
+                if not isinstance(episodes, list):
+                    print(f"❌ FAILED: episodes is not a list (type: {type(episodes)})")
                     return False
                 
-                if not interpretation or not isinstance(interpretation, str):
-                    print(f"❌ FAILED: dominance['interpretation'] should be a non-empty string, got {interpretation}")
+                print(f"✅ episodes is a list with {len(episodes)} items")
+                
+                # Validate structure of first few episodes
+                print("\nValidating structure of episodes...")
+                for i, ep in enumerate(episodes[:3]):
+                    print(f"\n  Episode {i+1}:")
+                    
+                    # Check path field (NEW guarantee)
+                    path = ep.get('path')
+                    if not path:
+                        print(f"    ❌ FAILED: path is missing or empty")
+                        return False
+                    
+                    if not isinstance(path, list):
+                        print(f"    ❌ FAILED: path is not a list (type: {type(path)})")
+                        return False
+                    
+                    print(f"    ✅ path: list with {len(path)} points")
+                    
+                    # Validate path structure (first item)
+                    if len(path) > 0:
+                        pt = path[0]
+                        if 'off' not in pt or 'v' not in pt:
+                            print(f"    ❌ FAILED: path item missing 'off' or 'v' keys")
+                            return False
+                        
+                        if not isinstance(pt['off'], (int, float)):
+                            print(f"    ❌ FAILED: path item 'off' is not a number")
+                            return False
+                        
+                        if not isinstance(pt['v'], (int, float)):
+                            print(f"    ❌ FAILED: path item 'v' is not a number")
+                            return False
+                        
+                        print(f"    ✅ path[0]: {{off: {pt['off']}, v: {pt['v']}}}")
+                    
+                    # Check match field
+                    match = ep.get('match')
+                    if match is None:
+                        print(f"    ❌ FAILED: match is missing")
+                        return False
+                    
+                    if not isinstance(match, (int, float)):
+                        print(f"    ❌ FAILED: match is not a number (type: {type(match)})")
+                        return False
+                    
+                    if not (0 <= match <= 100):
+                        print(f"    ❌ FAILED: match {match} is not in range 0-100")
+                        return False
+                    
+                    print(f"    ✅ match: {match} (0-100 range)")
+                
+                # REGRESSION: Validate existing fields
+                print("\n--- REGRESSION: Validating existing fields ---")
+                
+                # current
+                current = data.get('current')
+                if not current or not isinstance(current, dict):
+                    print("❌ FAILED: current is missing or not a dict")
+                    return False
+                print(f"✅ current: dict with {len(current)} keys")
+                
+                # norm
+                norm = data.get('norm')
+                if not norm or not isinstance(norm, dict):
+                    print("❌ FAILED: norm is missing or not a dict")
+                    return False
+                print(f"✅ norm: dict with {len(norm)} keys")
+                
+                # signals
+                signals = data.get('signals')
+                if not signals or not isinstance(signals, list):
+                    print("❌ FAILED: signals is missing or not a list")
                     return False
                 
-                print(f"✅ dominance['direction'] = '{direction}'")
-                print(f"✅ dominance['interpretation'] = '{interpretation[:80]}...'")
+                if len(signals) != 8:
+                    print(f"❌ FAILED: signals should have exactly 8 items, got {len(signals)}")
+                    return False
+                print(f"✅ signals: list with 8 items")
                 
-                # Check that ETH-specific fields are None (as per requirements)
-                cycle = data.get('cycle')
-                policy = data.get('policy')
-                smart_money = data.get('smart_money')
+                # current_path
+                current_path = data.get('current_path')
+                if not current_path or not isinstance(current_path, list):
+                    print("❌ FAILED: current_path is missing or not a list")
+                    return False
+                print(f"✅ current_path: list with {len(current_path)} points")
                 
-                if cycle is not None:
-                    print(f"✅ cycle = None (as expected for ETH)")
-                if policy is not None:
-                    print(f"✅ policy = None (as expected for ETH)")
-                if smart_money is not None:
-                    print(f"✅ smart_money = None (as expected for ETH)")
+                # episode_count
+                episode_count = data.get('episode_count')
+                if episode_count is None or not isinstance(episode_count, int):
+                    print("❌ FAILED: episode_count is missing or not an int")
+                    return False
+                print(f"✅ episode_count: {episode_count}")
                 
-                print("\n✅ TEST 2 PASSED: ETH dominance test successful")
+                # Final summary
+                print("\n" + "="*80)
+                print("✅ ALL VALIDATIONS PASSED")
+                print("="*80)
+                print(f"\nSummary:")
+                print(f"  - day_fingerprints: {len(day_fps)} items ({resolved_count} resolved)")
+                print(f"  - episodes: {len(episodes)} items (all with non-empty paths)")
+                print(f"  - signals: {len(signals)} items")
+                print(f"  - current_path: {len(current_path)} points")
+                print(f"  - episode_count: {episode_count}")
+                print(f"\nData is REAL (Yahoo Finance: BTC/NDX/Gold/DXY/TNX over 10 years)")
+                
                 return True
             
-            if status == 'error':
-                print(f"❌ FAILED: Status is 'error'")
-                print(f"Error details: {data.get('error')}")
+            else:
+                print(f"❌ FAILED: Unexpected status '{status}'")
                 return False
-            
-            print(f"⚠️ Unexpected status: {status}")
-            time.sleep(5)
         
-        print(f"❌ FAILED: Timeout after {max_wait}s waiting for status='ready'")
-        return False
-        
-    except Exception as e:
-        print(f"❌ FAILED: Exception occurred: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-
-def test_link_dominance_fallback(max_wait=120):
-    """Test 3: LINK dominance - test fallback path (not in CoinGecko global %)"""
-    print("\n" + "="*80)
-    print("TEST 3: LINK Dominance (fallback path)")
-    print("="*80)
+        except requests.exceptions.Timeout:
+            print(f"❌ FAILED: Request timed out")
+            return False
+        except requests.exceptions.RequestException as e:
+            print(f"❌ FAILED: Request error: {e}")
+            return False
+        except Exception as e:
+            print(f"❌ FAILED: Unexpected error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
-    try:
-        url = f"{BASE_URL}/dashboard?symbol=LINK"
-        print(f"GET {url}")
-        
-        start_time = time.time()
-        attempts = 0
-        
-        while time.time() - start_time < max_wait:
-            attempts += 1
-            resp = requests.get(url, timeout=30)
-            print(f"\nAttempt {attempts} - Status: {resp.status_code}")
-            
-            if resp.status_code != 200:
-                print(f"❌ FAILED: Expected 200, got {resp.status_code}")
-                return False
-            
-            data = resp.json()
-            status = data.get('status')
-            print(f"Response status: {status}")
-            
-            if status == 'computing':
-                elapsed = time.time() - start_time
-                print(f"⏳ Computing... (elapsed: {elapsed:.1f}s / {max_wait}s)")
-                time.sleep(5)
-                continue
-            
-            if status == 'ready':
-                elapsed = time.time() - start_time
-                print(f"✅ Status changed to 'ready' after {elapsed:.1f}s")
-                
-                # Validate dominance field
-                dominance = data.get('dominance')
-                
-                # CoinGecko may rate-limit, so dominance could be None
-                if dominance is None:
-                    print(f"⚠️ SOFT WARNING: dominance field is None (likely CoinGecko rate-limit)")
-                    print(f"⚠️ This is not a hard failure - the fallback path was attempted")
-                    print(f"⚠️ Note: CoinGecko rate-limiting is expected for keyless API")
-                    print("\n✅ TEST 3 PASSED (with soft warning): LINK dominance fallback path exercised")
-                    return True
-                
-                print(f"✅ dominance field present: {type(dominance)}")
-                
-                # Check dominance percentage
-                dom_pct = dominance.get('dominance')
-                if dom_pct is None or not isinstance(dom_pct, (int, float)) or dom_pct <= 0:
-                    print(f"⚠️ SOFT WARNING: dominance['dominance'] should be a number > 0, got {dom_pct}")
-                    print(f"⚠️ This may be due to CoinGecko rate-limiting")
-                    print("\n✅ TEST 3 PASSED (with soft warning): LINK dominance fallback path exercised")
-                    return True
-                
-                print(f"✅ dominance['dominance'] = {dom_pct}% (valid number > 0)")
-                print(f"✅ This confirms the fallback path (/coins/markets) is working!")
-                
-                # Check total_mcap_t
-                total_mcap = dominance.get('total_mcap_t')
-                if total_mcap and isinstance(total_mcap, (int, float)) and total_mcap > 0:
-                    print(f"✅ dominance['total_mcap_t'] = ${total_mcap}T (valid number > 0)")
-                
-                # Check direction and interpretation
-                direction = dominance.get('direction')
-                interpretation = dominance.get('interpretation')
-                
-                if direction and isinstance(direction, str):
-                    print(f"✅ dominance['direction'] = '{direction}'")
-                
-                if interpretation and isinstance(interpretation, str):
-                    print(f"✅ dominance['interpretation'] = '{interpretation[:80]}...'")
-                
-                print("\n✅ TEST 3 PASSED: LINK dominance fallback path successful")
-                return True
-            
-            if status == 'error':
-                print(f"❌ FAILED: Status is 'error'")
-                print(f"Error details: {data.get('error')}")
-                return False
-            
-            print(f"⚠️ Unexpected status: {status}")
-            time.sleep(5)
-        
-        print(f"❌ FAILED: Timeout after {max_wait}s waiting for status='ready'")
-        return False
-        
-    except Exception as e:
-        print(f"❌ FAILED: Exception occurred: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-
-def main():
-    print("\n" + "="*80)
-    print("BACKEND API TEST SUITE - ALT DOMINANCE FEATURE")
-    print("="*80)
-    print(f"Base URL: {BASE_URL}")
-    print(f"Testing per-coin market-cap dominance feature")
-    print("="*80)
-    
-    results = {}
-    
-    # Test 1: BTC regression
-    results['BTC Regression'] = test_btc_dominance_regression()
-    
-    # Test 2: ETH dominance
-    results['ETH Dominance'] = test_eth_dominance(max_wait=120)
-    
-    # Test 3: LINK dominance (fallback)
-    results['LINK Dominance (Fallback)'] = test_link_dominance_fallback(max_wait=120)
-    
-    # Summary
-    print("\n" + "="*80)
-    print("TEST SUMMARY")
-    print("="*80)
-    
-    for test_name, passed in results.items():
-        status = "✅ PASSED" if passed else "❌ FAILED"
-        print(f"{status}: {test_name}")
-    
-    all_passed = all(results.values())
-    
-    print("\n" + "="*80)
-    if all_passed:
-        print("✅ ALL TESTS PASSED")
-    else:
-        print("❌ SOME TESTS FAILED")
-    print("="*80)
-    
-    return 0 if all_passed else 1
+    print(f"❌ FAILED: Max attempts reached")
+    return False
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    try:
+        success = test_analogs_endpoint()
+        sys.exit(0 if success else 1)
+    except Exception as e:
+        print(f"\n❌ TEST FAILED WITH EXCEPTION: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

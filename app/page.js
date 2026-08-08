@@ -3199,6 +3199,8 @@ const ANALOG_CAT_COLOR = {
   Events: 'text-emerald-300 bg-emerald-500/15',
 };
 
+const ANALOG_OVERLAY_COLORS = ['#f7931a', '#a855f7', '#22d3ee'];
+
 function scoreAnalog(ep, current, norm, weights) {
   let tot = 0;
   let wsum = 0;
@@ -3220,6 +3222,7 @@ function AnalogsSection() {
   const [status, setStatus] = React.useState('loading');
   const [weights, setWeights] = React.useState({});
   const [threshold, setThreshold] = React.useState(70);
+  const [overlayCount, setOverlayCount] = React.useState(2);
 
   React.useEffect(() => {
     try { const t = parseInt(localStorage.getItem('analog_threshold'), 10); if (t) setThreshold(t); } catch (e) { /* noop */ }
@@ -3247,13 +3250,49 @@ function AnalogsSection() {
   }, [data, weights]);
 
   const topEp = ranked[0];
+  const overlayEps = React.useMemo(() => ranked.slice(0, overlayCount), [ranked, overlayCount]);
   const overlay = React.useMemo(() => {
-    if (!data || !topEp) return [];
+    if (!data || !overlayEps.length) return [];
     const cur = Object.fromEntries((data.current_path || []).map((p) => [p.off, p.v]));
-    const ana = Object.fromEntries((topEp.path || []).map((p) => [p.off, p.v]));
-    const offs = Array.from(new Set([...Object.keys(cur), ...Object.keys(ana)].map(Number))).sort((a, b) => a - b);
-    return offs.map((o) => ({ off: o, Today: cur[o] == null ? null : cur[o], Analog: ana[o] == null ? null : ana[o] }));
-  }, [data, topEp]);
+    const maps = overlayEps.map((ep) => Object.fromEntries((ep.path || []).map((p) => [p.off, p.v])));
+    const offsSet = new Set(Object.keys(cur).map(Number));
+    maps.forEach((m) => Object.keys(m).forEach((o) => offsSet.add(Number(o))));
+    const offs = Array.from(offsSet).sort((a, b) => a - b);
+    return offs.map((o) => {
+      const row = { off: o, Today: cur[o] == null ? null : cur[o] };
+      maps.forEach((m, idx) => { row[`A${idx}`] = m[o] == null ? null : m[o]; });
+      return row;
+    });
+  }, [data, overlayEps]);
+
+  // Setup History — score every past resolved day against today's setup (respecting live slider
+  // weights), keep all above the alert threshold, dedupe nearby clusters, and grade each outcome.
+  const setupHistory = React.useMemo(() => {
+    if (!data || !data.day_fingerprints) return { rows: [], stats: null };
+    const scored = data.day_fingerprints
+      .map((d) => ({ ...d, match: scoreAnalog({ fingerprint: d.fp }, data.current, data.norm, weights) }))
+      .filter((d) => d.match >= threshold)
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+    const filtered = [];
+    scored.forEach((d) => {
+      const last = filtered[filtered.length - 1];
+      if (last && Math.abs(new Date(d.date) - new Date(last.date)) < 21 * 864e5) {
+        if (d.match > last.match) filtered[filtered.length - 1] = d;
+      } else filtered.push(d);
+    });
+    const resolved = filtered.filter((d) => d.fwd_90 != null);
+    const wins = resolved.filter((d) => d.fwd_90 > 0);
+    const avg = (arr) => { const a = arr.filter((v) => v != null); return a.length ? Math.round((a.reduce((s, v) => s + v, 0) / a.length) * 10) / 10 : null; };
+    const stats = {
+      n: filtered.length,
+      nResolved: resolved.length,
+      winRate: resolved.length ? Math.round((wins.length / resolved.length) * 100) : null,
+      avg30: avg(resolved.map((d) => d.fwd_30)),
+      avg90: avg(resolved.map((d) => d.fwd_90)),
+      avg180: avg(resolved.map((d) => d.fwd_180)),
+    };
+    return { rows: filtered.slice().sort((a, b) => b.match - a.match), stats };
+  }, [data, weights, threshold]);
 
   const sig = (k) => (data ? data.signals.find((s) => s.key === k) : null);
   const fmtSig = (k, v) => {
@@ -3337,14 +3376,25 @@ function AnalogsSection() {
 
           <Card className="border-0 bg-slate-900/60 p-5 ring-1 ring-slate-800">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <TapInfo text="Overlays the closest past episode's price path (rebased to 100 at its setup point) with Bitcoin's recent path (rebased to 100 at today). The overlap left of 0 shows how similar the lead-ins are; the analog line right of 0 shows what happened next in that episode.">
-                <h3 className="pr-5 text-sm font-bold text-white">Shape overlay · today vs {topEp ? topEp.label : 'top analog'}</h3>
+              <TapInfo text="Overlays the top past episodes' price paths (each rebased to 100 at its own setup point) with Bitcoin's recent path (rebased to 100 at today). Left of 0 shows how similar the lead-ins are; each analog line right of 0 shows what happened next.">
+                <h3 className="pr-5 text-sm font-bold text-white">Shape overlay · today vs top {overlayCount} analogs</h3>
               </TapInfo>
-              <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                <Bell className="h-3.5 w-3.5 text-amber-300" />
-                <span>Alert me at ≥</span>
-                <input type="range" min="50" max="90" step="5" value={threshold} onChange={(e) => setThreshold(parseInt(e.target.value, 10))} className="h-1.5 w-24 cursor-pointer accent-amber-400" />
-                <span className="w-8 font-semibold text-amber-300">{threshold}%</span>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-1 text-[11px] text-slate-400">
+                  <span>Overlay</span>
+                  {[2, 3].map((n) => (
+                    <button key={n} onClick={() => setOverlayCount(n)}
+                      className={`rounded px-2 py-0.5 text-[11px] font-semibold transition ${overlayCount === n ? 'bg-sky-500/25 text-sky-300 ring-1 ring-sky-500/40' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}>
+                      Top {n}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                  <Bell className="h-3.5 w-3.5 text-amber-300" />
+                  <span>Alert me at ≥</span>
+                  <input type="range" min="50" max="90" step="5" value={threshold} onChange={(e) => setThreshold(parseInt(e.target.value, 10))} className="h-1.5 w-24 cursor-pointer accent-amber-400" />
+                  <span className="w-8 font-semibold text-amber-300">{threshold}%</span>
+                </div>
               </div>
             </div>
             <div className="h-72 w-full">
@@ -3357,12 +3407,80 @@ function AnalogsSection() {
                   <Legend wrapperStyle={{ fontSize: 11 }} />
                   <ReferenceLine x={0} stroke="#64748b" strokeDasharray="4 4" />
                   <ReferenceLine y={100} stroke="#334155" strokeDasharray="3 3" />
-                  <Line type="monotone" dataKey="Analog" stroke="#f7931a" strokeWidth={2} dot={false} connectNulls name={topEp ? topEp.label : 'Analog'} />
-                  <Line type="monotone" dataKey="Today" stroke="#38bdf8" strokeWidth={2.4} dot={false} connectNulls name="Bitcoin now" />
+                  {overlayEps.map((ep, idx) => (
+                    <Line key={ep.id} type="monotone" dataKey={`A${idx}`} stroke={ANALOG_OVERLAY_COLORS[idx % ANALOG_OVERLAY_COLORS.length]} strokeWidth={2} dot={false} connectNulls name={`${ep.label} (${ep.match}%)`} />
+                  ))}
+                  <Line type="monotone" dataKey="Today" stroke="#38bdf8" strokeWidth={2.6} dot={false} connectNulls name="Bitcoin now" />
                 </LineChart>
               </ResponsiveContainer>
             </div>
-            <p className="mt-2 text-[11px] text-slate-500">Both rebased to 100 at the “now / setup” line (day 0). Left of 0 = the lead-in shapes; right of 0 = how the analog played out afterward.</p>
+            <p className="mt-2 text-[11px] text-slate-500">Each line is rebased to 100 at its own “now / setup” point (day 0). Left of 0 = the lead-in shapes; right of 0 = how each analog played out afterward.</p>
+          </Card>
+
+          <Card className="border-0 bg-slate-900/60 p-5 ring-1 ring-slate-800">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <TapInfo text="A backtest of today's setup: every past day whose conditions matched today (above your alert threshold, using the same slider weights) is listed here with what Bitcoin did next. The win rate is the share of those days that were higher 90 days later.">
+                <h3 className="pr-5 text-sm font-bold text-white">Setup history · when this happened before</h3>
+              </TapInfo>
+              <span className="text-[11px] text-slate-500">days with ≥{threshold}% match</span>
+            </div>
+            {setupHistory.rows.length === 0 ? (
+              <p className="py-6 text-center text-sm text-slate-500">No past days cross the {threshold}% match threshold. Lower the threshold or ease the slider weights to surface looser analogs.</p>
+            ) : (
+              <>
+                <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <div className="rounded-lg bg-slate-950/50 p-3 text-center">
+                    <p className="text-2xl font-black text-white">{setupHistory.stats.n}</p>
+                    <p className="text-[9px] uppercase tracking-wider text-slate-500">matching days</p>
+                  </div>
+                  <div className="rounded-lg bg-slate-950/50 p-3 text-center">
+                    <p className="text-2xl font-black" style={{ color: setupHistory.stats.winRate == null ? '#94a3b8' : setupHistory.stats.winRate >= 50 ? '#34d399' : '#f87171' }}>{setupHistory.stats.winRate == null ? '—' : `${setupHistory.stats.winRate}%`}</p>
+                    <p className="text-[9px] uppercase tracking-wider text-slate-500">higher after 90d</p>
+                  </div>
+                  <div className="rounded-lg bg-slate-950/50 p-3 text-center">
+                    <p className={`text-2xl font-black ${retColor(setupHistory.stats.avg90)}`}>{setupHistory.stats.avg90 == null ? '—' : `${setupHistory.stats.avg90 > 0 ? '+' : ''}${setupHistory.stats.avg90}%`}</p>
+                    <p className="text-[9px] uppercase tracking-wider text-slate-500">avg 90d move</p>
+                  </div>
+                  <div className="rounded-lg bg-slate-950/50 p-3 text-center">
+                    <p className={`text-2xl font-black ${retColor(setupHistory.stats.avg180)}`}>{setupHistory.stats.avg180 == null ? '—' : `${setupHistory.stats.avg180 > 0 ? '+' : ''}${setupHistory.stats.avg180}%`}</p>
+                    <p className="text-[9px] uppercase tracking-wider text-slate-500">avg 180d move</p>
+                  </div>
+                </div>
+                <div className="max-h-72 overflow-y-auto rounded-lg ring-1 ring-slate-800">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-slate-900/95 text-[10px] uppercase tracking-wider text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-semibold">Date</th>
+                        <th className="px-3 py-2 text-right font-semibold">Match</th>
+                        <th className="px-3 py-2 text-right font-semibold">+30d</th>
+                        <th className="px-3 py-2 text-right font-semibold">+90d</th>
+                        <th className="px-3 py-2 text-right font-semibold">+180d</th>
+                        <th className="px-3 py-2 text-right font-semibold">Outcome</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {setupHistory.rows.map((r) => {
+                        const win = r.fwd_90 == null ? null : r.fwd_90 > 0;
+                        return (
+                          <tr key={r.date} className="border-t border-slate-800/70">
+                            <td className="px-3 py-2 text-slate-300">{r.date}</td>
+                            <td className="px-3 py-2 text-right font-semibold" style={{ color: r.match >= 80 ? '#34d399' : r.match >= 70 ? '#38bdf8' : '#94a3b8' }}>{r.match}%</td>
+                            <td className={`px-3 py-2 text-right ${retColor(r.fwd_30)}`}>{r.fwd_30 == null ? '—' : `${r.fwd_30 > 0 ? '+' : ''}${r.fwd_30}%`}</td>
+                            <td className={`px-3 py-2 text-right ${retColor(r.fwd_90)}`}>{r.fwd_90 == null ? '—' : `${r.fwd_90 > 0 ? '+' : ''}${r.fwd_90}%`}</td>
+                            <td className={`px-3 py-2 text-right ${retColor(r.fwd_180)}`}>{r.fwd_180 == null ? '—' : `${r.fwd_180 > 0 ? '+' : ''}${r.fwd_180}%`}</td>
+                            <td className="px-3 py-2 text-right">
+                              {win == null ? <span className="text-slate-500">open</span>
+                                : <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold ${win ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300'}`}>{win ? 'WIN' : 'LOSS'}</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="mt-3 text-[11px] italic text-slate-500">“Win” = Bitcoin was higher 90 days later. Sampled from ~10 years of daily data (a small sample) and de-duplicated so clustered days count once. Educational pattern-matching, not a prediction or financial advice.</p>
+              </>
+            )}
           </Card>
 
           <div>
