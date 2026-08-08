@@ -3223,8 +3223,9 @@ const ANALOG_CAT_COLOR = {
 
 const ANALOG_OVERLAY_COLORS = ['#f7931a', '#a855f7', '#22d3ee'];
 
-// Tiny inline win/loss forward mini-chart for each Setup History row.
+// Tiny inline win/loss forward mini-chart for each Setup History row, with hover readout.
 function OutcomeSpark({ points, color }) {
+  const [hover, setHover] = React.useState(null);
   const pts = (points || []).filter((p) => p.v != null);
   if (pts.length < 2) return <span className="text-slate-600">—</span>;
   const w = 92; const h = 26; const pad = 2;
@@ -3234,14 +3235,31 @@ function OutcomeSpark({ points, color }) {
   const sx = (x) => pad + ((x - minX) / ((maxX - minX) || 1)) * (w - 2 * pad);
   const sy = (y) => h - pad - ((y - minY) / ((maxY - minY) || 1)) * (h - 2 * pad);
   const d = pts.map((p, i) => `${i ? 'L' : 'M'}${sx(p.off).toFixed(1)},${sy(p.v).toFixed(1)}`).join(' ');
-  const baseY = sy(100);
-  const end = pts[pts.length - 1];
+  const baseY = sy(100); const end = pts[pts.length - 1];
+  const onMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    let best = 0; let bd = Infinity;
+    pts.forEach((p, i) => { const dd = Math.abs(sx(p.off) - px); if (dd < bd) { bd = dd; best = i; } });
+    setHover(best);
+  };
+  const hp = hover == null ? null : pts[hover];
+  const ret = hp ? Math.round((hp.v - 100) * 10) / 10 : null;
   return (
-    <svg width={w} height={h} className="inline-block align-middle" preserveAspectRatio="none">
-      <line x1={pad} y1={baseY} x2={w - pad} y2={baseY} stroke="#334155" strokeWidth="1" strokeDasharray="2 2" />
-      <path d={d} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
-      <circle cx={sx(end.off)} cy={sy(end.v)} r="1.8" fill={color} />
-    </svg>
+    <span className="inline-flex items-center gap-1.5" onMouseLeave={() => setHover(null)}>
+      <svg width={w} height={h} className="inline-block align-middle" onMouseMove={onMove}>
+        <line x1={pad} y1={baseY} x2={w - pad} y2={baseY} stroke="#334155" strokeWidth="1" strokeDasharray="2 2" />
+        <path d={d} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+        {hp && <line x1={sx(hp.off)} y1={pad} x2={sx(hp.off)} y2={h - pad} stroke={color} strokeOpacity="0.45" strokeWidth="1" />}
+        <circle cx={sx(end.off)} cy={sy(end.v)} r="1.8" fill={color} />
+        {hp && <circle cx={sx(hp.off)} cy={sy(hp.v)} r="2.6" fill={color} stroke="#0f172a" strokeWidth="1" />}
+      </svg>
+      <span className="w-[68px] text-left text-[10px] font-semibold tabular-nums leading-tight">
+        {hp
+          ? <span>+{hp.off}d <span className={ret >= 0 ? 'text-emerald-400' : 'text-red-400'}>{ret > 0 ? '+' : ''}{ret}%</span></span>
+          : <span className="text-slate-600">hover</span>}
+      </span>
+    </span>
   );
 }
 
@@ -3269,6 +3287,7 @@ function AnalogsSection() {
   const [overlayCount, setOverlayCount] = React.useState(2);
   const [showBand, setShowBand] = React.useState(true);
   const [histThreshold, setHistThreshold] = React.useState(55);
+  const [readoutHorizon, setReadoutHorizon] = React.useState(90);
 
   React.useEffect(() => {
     try { const t = parseInt(localStorage.getItem('analog_threshold'), 10); if (t) setThreshold(t); } catch (e) { /* noop */ }
@@ -3378,8 +3397,10 @@ function AnalogsSection() {
       return { b25: mix(a.b25, b.b25), b50: mix(a.b50, b.b50), b75: mix(a.b75, b.b75) };
     };
     const r90 = atDay(90);
+    const mkReadout = (day) => { const r = atDay(day); return r ? { lo: Math.round((r.b25 - 100) * 10) / 10, med: Math.round((r.b50 - 100) * 10) / 10, hi: Math.round((r.b75 - 100) * 10) / 10 } : null; };
+    const readouts = { 30: mkReadout(30), 90: mkReadout(90), 180: mkReadout(180) };
     const readout = r90 ? { lo: Math.round((r90.b25 - 100) * 10) / 10, med: Math.round((r90.b50 - 100) * 10) / 10, hi: Math.round((r90.b75 - 100) * 10) / 10 } : null;
-    return { byOff, color, n: rows.length, finalMed, readout };
+    return { byOff, color, n: rows.length, finalMed, readout, readouts };
   }, [setupHistory, showBand]);
 
   // Merge the overlay analog paths with the confidence-band stack fields for the ComposedChart.
@@ -3547,13 +3568,31 @@ function AnalogsSection() {
                 ? <> The shaded {band.color === '#10b981' ? 'green' : band.color === '#f43f5e' ? 'red' : ''} band shows the spread of ALL {band.n} matching past setups: the darker core is the middle 50% of outcomes, the lighter halo the 10–90% range, and the dashed line the median path.</>
                 : <> Turn on “Outcome band” to shade the range of every past matching setup around these paths.</>}
             </p>
-            {bandActive && band.readout && (
-              <p className="mt-2 rounded-lg bg-slate-950/50 px-3 py-2 text-xs text-slate-300 ring-1 ring-slate-800">
-                <span className="font-semibold text-white">In plain English:</span> across the {band.n} past setups like today, the middle 50% landed between{' '}
-                <b className={band.readout.lo >= 0 ? 'text-emerald-400' : 'text-red-400'}>{band.readout.lo > 0 ? '+' : ''}{band.readout.lo}%</b> and{' '}
-                <b className={band.readout.hi >= 0 ? 'text-emerald-400' : 'text-red-400'}>{band.readout.hi > 0 ? '+' : ''}{band.readout.hi}%</b> at 90 days (median{' '}
-                <b className={band.readout.med >= 0 ? 'text-emerald-400' : 'text-red-400'}>{band.readout.med > 0 ? '+' : ''}{band.readout.med}%</b>).
-              </p>
+            {bandActive && (
+              <div className="mt-2 rounded-lg bg-slate-950/50 px-3 py-2 text-xs text-slate-300 ring-1 ring-slate-800">
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <span className="font-semibold text-white">In plain English</span>
+                  <div className="flex items-center gap-1 text-[11px] text-slate-400">
+                    <span>at</span>
+                    {[30, 90, 180].map((hz) => (
+                      <button key={hz} onClick={() => setReadoutHorizon(hz)}
+                        className={`rounded px-1.5 py-0.5 font-semibold transition ${readoutHorizon === hz ? 'bg-sky-500/25 text-sky-300 ring-1 ring-sky-500/40' : 'bg-slate-800 text-slate-400 hover:text-slate-200'}`}>
+                        {hz}d
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {band.readouts[readoutHorizon] ? (
+                  <p>
+                    Across the {band.n} past setups like today, the middle 50% landed between{' '}
+                    <b className={band.readouts[readoutHorizon].lo >= 0 ? 'text-emerald-400' : 'text-red-400'}>{band.readouts[readoutHorizon].lo > 0 ? '+' : ''}{band.readouts[readoutHorizon].lo}%</b> and{' '}
+                    <b className={band.readouts[readoutHorizon].hi >= 0 ? 'text-emerald-400' : 'text-red-400'}>{band.readouts[readoutHorizon].hi > 0 ? '+' : ''}{band.readouts[readoutHorizon].hi}%</b> at {readoutHorizon} days (median{' '}
+                    <b className={band.readouts[readoutHorizon].med >= 0 ? 'text-emerald-400' : 'text-red-400'}>{band.readouts[readoutHorizon].med > 0 ? '+' : ''}{band.readouts[readoutHorizon].med}%</b>).
+                  </p>
+                ) : (
+                  <p className="text-slate-500">Not enough resolved history at {readoutHorizon} days for this setup — try a shorter horizon or a looser match level.</p>
+                )}
+              </div>
             )}
           </Card>
 
