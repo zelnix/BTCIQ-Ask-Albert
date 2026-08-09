@@ -12,6 +12,7 @@ Exposed under /api/v1/* and proxied by the Next.js /api layer.
 """
 import os
 import re
+import time
 import uuid
 import math
 import json
@@ -20,6 +21,8 @@ import threading
 import datetime
 import traceback
 import urllib.request
+
+import requests
 
 import ccxt
 import numpy as np
@@ -61,6 +64,9 @@ coin_news_col = db['coin_news']  # cache for per-coin news (altcoins)
 coin_dom_col = db['coin_dominance_hist']  # per-coin market-cap dominance history
 markets_col = db['markets_cache']  # per-coin vs traditional-markets comparison, cached daily
 analogs_col = db['analogs_cache']  # historical-analog engine (Bitcoin), cached daily
+glassnode_col = db['glassnode_cache']  # cached Glassnode on-chain metrics (Smart Money panel)
+# Glassnode on-chain data (Smart Money panel). Advanced Light tier: 14d daily history, low call budget.
+GLASSNODE_API_KEY = os.environ.get('GLASSNODE_API_KEY')
 # Admin passcode gate for manual forecast runs (Stage-1: passcode instead of full auth)
 ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', 'btciq-admin')
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
@@ -1515,6 +1521,151 @@ def compute_institutional_demo(last_close):
     }
 
 
+# =====================================================================
+# GLASSNODE ON-CHAIN (REAL) — powers the Smart Money panel for BTC
+# Advanced Light tier: 14d daily history, tight call budget -> fetch a small
+# entitled metric set in the background, cache in Mongo, reuse for ~6h.
+# =====================================================================
+GLASSNODE_BASE = 'https://api.glassnode.com/v1/metrics'
+GLASSNODE_TTL_SEC = 6 * 3600
+# Only metrics entitled on the Light tier (verified). ETF/entity/net-position are Professional-only.
+GN_SMART_METRICS = {
+    'mvrv': 'market/mvrv',
+    'sopr': 'indicators/sopr',
+    'exch_balance': 'distribution/balance_exchanges',
+    'active': 'addresses/active_count',
+    'accum': 'indicators/accumulation_trend_score',
+    'lth': 'supply/lth_sum',
+}
+_gn_state = {'running': False}
+
+
+def _gn_point_val(pt):
+    if not isinstance(pt, dict):
+        return None
+    v = pt.get('v')
+    if v is None and isinstance(pt.get('o'), dict):
+        v = pt['o'].get('score', pt['o'].get('price'))
+    return v
+
+
+def _gn_val(series):
+    if not series:
+        return None
+    return _gn_point_val(series[-1])
+
+
+def _gn_change_pct(series):
+    if not series or len(series) < 2:
+        return None
+    a = _gn_point_val(series[0])
+    b = _gn_point_val(series[-1])
+    if a in (None, 0) or b is None:
+        return None
+    try:
+        return round((float(b) - float(a)) / abs(float(a)) * 100, 2)
+    except Exception:  # noqa
+        return None
+
+
+def build_smart_money_from_glassnode(series):
+    mvrv = _gn_val(series.get('mvrv'))
+    sopr = _gn_val(series.get('sopr'))
+    accum = _gn_val(series.get('accum'))
+    exch_chg = _gn_change_pct(series.get('exch_balance'))
+    active_chg = _gn_change_pct(series.get('active'))
+    lth_chg = _gn_change_pct(series.get('lth'))
+    metrics, tally = [], {'b': 0, 'r': 0}
+
+    def add(name, value, s):
+        if s == 'Bullish':
+            tally['b'] += 1
+        elif s == 'Bearish':
+            tally['r'] += 1
+        metrics.append({'name': name, 'value': value, 'signal': s})
+
+    if mvrv is not None:
+        s = 'Bullish' if mvrv < 1 else 'Bearish' if mvrv > 3.5 else 'Neutral'
+        add('MVRV ratio', f'{float(mvrv):.2f}', s)
+    if exch_chg is not None:
+        s = 'Bullish' if exch_chg < -0.3 else 'Bearish' if exch_chg > 0.3 else 'Neutral'
+        add('Exchange balance (14d)', f'{"+" if exch_chg >= 0 else ""}{exch_chg}%', s)
+    if accum is not None:
+        s = 'Bullish' if accum >= 0.6 else 'Bearish' if accum <= 0.4 else 'Neutral'
+        add('Accumulation trend score', f'{float(accum):.2f}', s)
+    if lth_chg is not None:
+        s = 'Bullish' if lth_chg > 0.1 else 'Bearish' if lth_chg < -0.1 else 'Neutral'
+        add('Long-term holder supply (14d)', f'{"+" if lth_chg >= 0 else ""}{lth_chg}%', s)
+    if sopr is not None:
+        s = 'Bullish' if sopr < 0.98 else 'Bearish' if sopr > 1.03 else 'Neutral'
+        add('SOPR', f'{float(sopr):.3f}', s)
+    if active_chg is not None:
+        s = 'Bullish' if active_chg > 2 else 'Bearish' if active_chg < -5 else 'Neutral'
+        add('Active addresses (14d)', f'{"+" if active_chg >= 0 else ""}{active_chg}%', s)
+
+    if not metrics:
+        return None
+    net = tally['b'] - tally['r']
+    headline = ('On-chain smart money accumulating' if net >= 2
+                else 'On-chain smart money distributing' if net <= -2
+                else 'On-chain smart money mixed / neutral')
+    return {'demo': False, 'source': 'Glassnode (on-chain · BTC)', 'headline': headline,
+            'metrics': metrics, 'as_of': datetime.datetime.utcnow().isoformat()}
+
+
+def _gn_get(path):
+    try:
+        r = requests.get(f'{GLASSNODE_BASE}/{path}', params={'a': 'BTC', 'i': '24h', 'f': 'json'},
+                         headers={'X-Api-Key': GLASSNODE_API_KEY, 'Accept': 'application/json'}, timeout=20)
+        if r.status_code == 200:
+            return r.json()
+        # 401 (bad key) / 403 (tier) / 429 (rate) -> skip; keep last-good value
+    except Exception:  # noqa
+        traceback.print_exc()
+    return None
+
+
+def _refresh_glassnode_bg():
+    if not GLASSNODE_API_KEY or _gn_state.get('running'):
+        return
+    _gn_state['running'] = True
+    try:
+        cache = glassnode_col.find_one({'_id': 'smart_money_btc'}) or {}
+        series = dict(cache.get('series') or {})
+        fetched_any = False
+        for k, path in GN_SMART_METRICS.items():
+            js = _gn_get(path)
+            if js:
+                series[k] = js
+                fetched_any = True
+            time.sleep(9)  # respect the Light-tier burst limit
+        if series:
+            data = build_smart_money_from_glassnode(series)
+            if data:
+                glassnode_col.update_one(
+                    {'_id': 'smart_money_btc'},
+                    {'$set': {'_id': 'smart_money_btc',
+                              'fetched_ts': time.time() if fetched_any else cache.get('fetched_ts', 0),
+                              'fetched_at': datetime.datetime.utcnow().isoformat(),
+                              'series': series, 'data': data}}, upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+    finally:
+        _gn_state['running'] = False
+
+
+def get_smart_money_panel():
+    """Return the cached real Glassnode Smart Money panel, kicking off a background
+    refresh when stale. Returns None if no key or no data yet (caller falls back to DEMO)."""
+    if not GLASSNODE_API_KEY:
+        return None
+    cache = glassnode_col.find_one({'_id': 'smart_money_btc'}) or {}
+    now = time.time()
+    if (not cache.get('data')) or (now - cache.get('fetched_ts', 0) >= GLASSNODE_TTL_SEC):
+        threading.Thread(target=_refresh_glassnode_bg, daemon=True).start()
+    return cache.get('data')
+
+
 
 CHAT_SYSTEM = (
     "You are 'Albert', the friendly HuCentAI Quant analyst built into the BTCIQ Bitcoin dashboard "
@@ -2610,7 +2761,7 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
     try:
-        smart_money = compute_smart_money_demo(last_close, quant['regime']['regime'])
+        smart_money = get_smart_money_panel() or compute_smart_money_demo(last_close, quant['regime']['regime'])
         institutional = compute_institutional_demo(last_close)
     except Exception:  # noqa
         traceback.print_exc()
