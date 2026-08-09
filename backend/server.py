@@ -213,12 +213,32 @@ def _passcode_ok(supplied):
     return hmac.compare_digest(str(supplied), str(expected))
 
 
+def _retry_after_secs(request, bucket, per_min):
+    """Estimate seconds until this client can retry (when enough hits age out of the 60s window)."""
+    key = f'{bucket}:{_client_key(request)}'
+    try:
+        now_dt = datetime.datetime.utcnow()
+        minute_ago = now_dt - datetime.timedelta(seconds=60)
+        docs = list(rate_col.find({'key': key, 'ts': {'$gte': minute_ago}}, {'ts': 1}).sort('ts', 1))
+        n = len(docs)
+        if n <= per_min:
+            return 1
+        # After the oldest (n - per_min) hits age out, the count drops to per_min (allowed).
+        idx = n - per_min - 1
+        free_at = docs[idx]['ts'] + datetime.timedelta(seconds=60)
+        secs = (free_at - now_dt).total_seconds()
+        return max(1, min(60, int(secs) + 1))
+    except Exception:  # noqa
+        return 30
+
+
 def _too_many(request, bucket, per_min=15, per_day=300):
     """Return a JSONResponse(429) if rate-limited, else None."""
     if _rate_limited(request, bucket, per_min=per_min, per_day=per_day):
+        retry = _retry_after_secs(request, bucket, per_min)
         return JSONResponse(
             status_code=429,
-            content={'status': 'rate_limited',
+            content={'status': 'rate_limited', 'retry_in': retry,
                      'error': 'Too many requests — please slow down and try again shortly.'},
         )
     return None

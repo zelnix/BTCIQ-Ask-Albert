@@ -3027,10 +3027,20 @@ function AskQuantSection({ d }) {
   const [messages, setMessages] = React.useState([]);
   const [input, setInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
-  const [rateNotice, setRateNotice] = React.useState('');
+  const [rateUntil, setRateUntil] = React.useState(0);
+  const [, setRateTick] = React.useState(0);
   const endRef = React.useRef(null);
 
   React.useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
+  React.useEffect(() => {
+    if (!rateUntil) return;
+    const id = setInterval(() => {
+      if (Date.now() >= rateUntil) setRateUntil(0);
+      else setRateTick((t) => t + 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [rateUntil]);
+  const rateSecondsLeft = rateUntil ? Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)) : 0;
 
   const suggestions = [
     `Summarise the current ${symbol} market state in plain English.`,
@@ -3055,23 +3065,24 @@ function AskQuantSection({ d }) {
         body: JSON.stringify({ session_id: sessionId, message: msg, symbol }),
       });
       if (r.status === 429) {
+        const j = await r.json().catch(() => ({}));
+        const secs = Math.max(1, Math.min(120, Number(j.retry_in) || 30));
         setLoading(false);
         setMessages((m) => m.slice(0, -1));
         setInput(msg);
-        setRateNotice("You're chatting a little fast — Albert takes up to 10 messages a minute. Give it a few seconds, then try again.");
-        setTimeout(() => setRateNotice(''), 12000);
+        setRateUntil(Date.now() + secs * 1000);
         return;
       }
       const j = await r.json();
       if (j && j.status === 'rate_limited') {
+        const secs = Math.max(1, Math.min(120, Number(j.retry_in) || 30));
         setLoading(false);
         setMessages((m) => m.slice(0, -1));
         setInput(msg);
-        setRateNotice("You're chatting a little fast — please wait a few seconds and try again.");
-        setTimeout(() => setRateNotice(''), 12000);
+        setRateUntil(Date.now() + secs * 1000);
         return;
       }
-      setRateNotice('');
+      setRateUntil(0);
       setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.' }]);
     } catch (e) {
       setMessages((m) => [...m, { role: 'assistant', text: 'Network error — please try again.' }]);
@@ -3134,10 +3145,10 @@ function AskQuantSection({ d }) {
           <div ref={endRef} />
         </div>
         <div className="border-t border-slate-800 p-3">
-          {rateNotice && (
+          {rateSecondsLeft > 0 && (
             <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-snug text-amber-300">
               <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>{rateNotice}</span>
+              <span>You're chatting a little fast — Albert takes up to 10 messages a minute. Try again in <span className="font-semibold tabular-nums">{rateSecondsLeft}s</span>.</span>
             </div>
           )}
           <div className="flex items-end gap-2">
@@ -3149,7 +3160,7 @@ function AskQuantSection({ d }) {
               placeholder="Ask Albert about the score, forecasts, news impact, risks…"
               className="max-h-32 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-sky-500/50 focus:outline-none"
             />
-            <Button onClick={() => send()} disabled={loading || !input.trim()} className="gap-1.5 bg-sky-500 hover:bg-sky-400"><Send className="h-4 w-4" />Send</Button>
+            <Button onClick={() => send()} disabled={loading || !input.trim() || rateSecondsLeft > 0} className="gap-1.5 bg-sky-500 hover:bg-sky-400"><Send className="h-4 w-4" />Send</Button>
           </div>
           <p className="mt-2 text-center text-[10px] text-slate-600">Albert is an educational research assistant · not financial advice · grounded in live data but can still be imperfect.</p>
         </div>
@@ -3174,7 +3185,8 @@ function FloatingAlbert({ active, symbol, onExpand }) {
   const [messages, setMessages] = React.useState([]);
   const [input, setInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
-  const [rateNotice, setRateNotice] = React.useState('');
+  const [rateUntil, setRateUntil] = React.useState(0);
+  const [, setRateTick] = React.useState(0);
   const endRef = React.useRef(null);
   const isOverview = !active || active === 'overview';
   const scopeLabel = SECTION_LABELS[active] || 'all things BTCIQ';
@@ -3182,6 +3194,15 @@ function FloatingAlbert({ active, symbol, onExpand }) {
   React.useEffect(() => { if (open) endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading, open]);
   // Reset the mini-thread when the user switches screens so context stays relevant.
   React.useEffect(() => { setMessages([]); }, [active]);
+  React.useEffect(() => {
+    if (!rateUntil) return;
+    const id = setInterval(() => {
+      if (Date.now() >= rateUntil) setRateUntil(0);
+      else setRateTick((t) => t + 1);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [rateUntil]);
+  const rateSecondsLeft = rateUntil ? Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)) : 0;
 
   const suggestions = isOverview
     ? ['Give me the 10-second read on Bitcoin right now.', 'What is the biggest risk today?', "What's moving the market?"]
@@ -3199,23 +3220,24 @@ function FloatingAlbert({ active, symbol, onExpand }) {
         body: JSON.stringify({ session_id: sessionId, message: msg, symbol, section: active }),
       });
       if (r.status === 429) {
+        const j = await r.json().catch(() => ({}));
+        const secs = Math.max(1, Math.min(120, Number(j.retry_in) || 30));
         setLoading(false);
         setMessages((m) => m.slice(0, -1));
         setInput(msg);
-        setRateNotice("You're chatting a little fast — Albert takes up to 10 messages a minute. Give it a few seconds, then try again.");
-        setTimeout(() => setRateNotice(''), 12000);
+        setRateUntil(Date.now() + secs * 1000);
         return;
       }
       const j = await r.json();
       if (j && j.status === 'rate_limited') {
+        const secs = Math.max(1, Math.min(120, Number(j.retry_in) || 30));
         setLoading(false);
         setMessages((m) => m.slice(0, -1));
         setInput(msg);
-        setRateNotice("You're chatting a little fast — please wait a few seconds and try again.");
-        setTimeout(() => setRateNotice(''), 12000);
+        setRateUntil(Date.now() + secs * 1000);
         return;
       }
-      setRateNotice('');
+      setRateUntil(0);
       setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.' }]);
     } catch (e) {
       setMessages((m) => [...m, { role: 'assistant', text: 'Network error — please try again.' }]);
@@ -3276,10 +3298,10 @@ function FloatingAlbert({ active, symbol, onExpand }) {
             <div ref={endRef} />
           </div>
           <div className="border-t border-slate-800 p-2.5">
-            {rateNotice && (
+            {rateSecondsLeft > 0 && (
               <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-300">
                 <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                <span>{rateNotice}</span>
+                <span>Chatting a little fast — try again in <span className="font-semibold tabular-nums">{rateSecondsLeft}s</span>.</span>
               </div>
             )}
             <div className="flex items-end gap-2">
@@ -3287,7 +3309,7 @@ function FloatingAlbert({ active, symbol, onExpand }) {
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
                 rows={1} placeholder={isOverview ? 'Ask about Bitcoin…' : `Ask about ${scopeLabel}…`}
                 className="max-h-24 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-[13px] text-slate-100 placeholder-slate-500 focus:border-sky-500/50 focus:outline-none" />
-              <Button onClick={() => send()} disabled={loading || !input.trim()} size="sm" className="bg-sky-500 hover:bg-sky-400"><Send className="h-4 w-4" /></Button>
+              <Button onClick={() => send()} disabled={loading || !input.trim() || rateSecondsLeft > 0} size="sm" className="bg-sky-500 hover:bg-sky-400"><Send className="h-4 w-4" /></Button>
             </div>
           </div>
         </div>
