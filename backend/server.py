@@ -923,7 +923,7 @@ def fire_news_alerts(cards):
             smart_alerts_col.update_one(
                 {'_id': key},
                 {'$setOnInsert': {
-                    '_id': key, 'id': key, 'ts': now_iso, 'as_of': as_of,
+                    '_id': key, 'id': key, 'ts': now_iso, 'as_of': as_of, 'symbol': 'BTC',
                     'category': 'News', 'severity': sev,
                     'title': c.get('title', 'High-impact story')[:120],
                     'message': msg[:400], 'seen': False,
@@ -2082,15 +2082,16 @@ def compute_smart_alerts(doc, prev_doc):
     """Compare the new run against the previous run and log meaningful state changes."""
     as_of = doc.get('as_of')
     now_iso = datetime.datetime.utcnow().isoformat()
+    sym = (doc.get('symbol') or 'BTC').upper()
     fired = []
 
     def fire(category, severity, title, message, sig):
-        key = f"{as_of}_{category}_{sig}"
+        key = f"{as_of}_{category}_{sig}" if sym == 'BTC' else f"{sym}_{as_of}_{category}_{sig}"
         try:
             res = smart_alerts_col.update_one(
                 {'_id': key},
                 {'$setOnInsert': {
-                    '_id': key, 'id': key, 'ts': now_iso, 'as_of': as_of,
+                    '_id': key, 'id': key, 'ts': now_iso, 'as_of': as_of, 'symbol': sym,
                     'category': category, 'severity': severity,
                     'title': title, 'message': message, 'seen': False,
                 }}, upsert=True)
@@ -2163,10 +2164,53 @@ def fmt_usd_srv(v):
         return str(v)
 
 
-def get_smart_alerts(limit=50):
-    items = list(smart_alerts_col.find({}, {'_id': 0}).sort('ts', -1).limit(limit))
-    unseen = smart_alerts_col.count_documents({'seen': False})
-    return {'alerts': items, 'unseen': unseen, 'total': smart_alerts_col.count_documents({})}
+def _alert_symbol_filter(symbol):
+    """Build a Mongo filter for coin-scoped alerts.
+    - None / 'ALL' -> every alert (no symbol constraint)
+    - 'BTC'        -> BTC alerts + legacy alerts that predate the symbol field
+    - other        -> that coin's alerts only
+    """
+    sym = (symbol or '').strip().upper()
+    if not sym or sym == 'ALL':
+        return {}
+    if sym == 'BTC':
+        return {'$or': [{'symbol': 'BTC'}, {'symbol': {'$exists': False}}, {'symbol': None}]}
+    return {'symbol': sym}
+
+
+def backfill_alert_symbols():
+    """One-time idempotent migration: tag legacy alerts (created before the symbol
+    field existed) so coin filtering stays clean. Analog/Setup alert ids encode the
+    coin (analog_<date>_<SYM>_...); everything else defaults to BTC."""
+    try:
+        legacy = list(smart_alerts_col.find(
+            {'$or': [{'symbol': {'$exists': False}}, {'symbol': None}]}, {'_id': 1, 'id': 1}))
+        for a in legacy:
+            aid = a.get('id') or a.get('_id') or ''
+            sym = 'BTC'
+            if isinstance(aid, str) and aid.startswith('analog_'):
+                parts = aid.split('_')
+                # analog_<YYYY-MM-DD>_<SYM>_<hash>
+                if len(parts) >= 3 and parts[2].isalpha():
+                    sym = parts[2].upper()
+            smart_alerts_col.update_one({'_id': a['_id']}, {'$set': {'symbol': sym}})
+        if legacy:
+            print(f'[alerts] backfilled symbol on {len(legacy)} legacy alert(s)')
+    except Exception:  # noqa
+        traceback.print_exc()
+
+
+try:
+    backfill_alert_symbols()
+except Exception:  # noqa
+    pass
+
+
+def get_smart_alerts(limit=50, symbol=None):
+    flt = _alert_symbol_filter(symbol)
+    items = list(smart_alerts_col.find(flt, {'_id': 0}).sort('ts', -1).limit(limit))
+    unseen = smart_alerts_col.count_documents({**flt, 'seen': False})
+    return {'alerts': items, 'unseen': unseen, 'total': smart_alerts_col.count_documents(flt)}
 
 
 # ---------------------------- Time Machine (historical replay) ----------------------------
@@ -2837,9 +2881,9 @@ def scorecard():
 
 
 @app.get('/api/v1/alerts')
-def alerts_feed(limit: int = 50):
+def alerts_feed(limit: int = 50, symbol: str = None):
     try:
-        return {'status': 'ready', **get_smart_alerts(limit)}
+        return {'status': 'ready', **get_smart_alerts(limit, symbol)}
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error', 'alerts': [], 'unseen': 0}
@@ -2848,12 +2892,15 @@ def alerts_feed(limit: int = 50):
 @app.post('/api/v1/alerts/ack')
 def alerts_ack(payload: dict = Body(default={})):
     ids = (payload or {}).get('ids')
+    symbol = (payload or {}).get('symbol')
+    flt = _alert_symbol_filter(symbol)
     try:
         if ids:
             smart_alerts_col.update_many({'id': {'$in': ids}}, {'$set': {'seen': True}})
         else:
-            smart_alerts_col.update_many({'seen': False}, {'$set': {'seen': True}})
-        return {'status': 'ok', 'unseen': smart_alerts_col.count_documents({'seen': False})}
+            # Mark all unseen for the selected coin scope as read.
+            smart_alerts_col.update_many({**flt, 'seen': False}, {'$set': {'seen': True}})
+        return {'status': 'ok', 'unseen': smart_alerts_col.count_documents({**flt, 'seen': False})}
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error'}
@@ -4136,7 +4183,7 @@ def run_analogs_bg(symbol='BTC'):
                 smart_alerts_col.update_one(
                     {'_id': aid},
                     {'$setOnInsert': {
-                        '_id': aid, 'id': aid,
+                        '_id': aid, 'id': aid, 'symbol': symbol,
                         'ts': now_iso, 'as_of': data.get('as_of'), 'category': 'Setup', 'severity': sev,
                         'title': f"Strong {symbol} setup forming ({top['match']}% match)",
                         'message': f"Today's {symbol} conditions closely resemble {top['label']} ({top['start']}→{top['end']}), which then moved {top.get('fwd_90')}% over 90 days. Educational pattern-match, not a prediction.",

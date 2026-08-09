@@ -1444,10 +1444,11 @@ function PolicySection({ d }) {
   );
 }
 
-function AlertsSection({ d, alertsData, onAck }) {
+function AlertsSection({ d, alertsData, onAck, filter = 'BTC', onFilter, coins = [] }) {
   const smart = (alertsData && alertsData.alerts) || [];
   const unseen = (alertsData && alertsData.unseen) || 0;
   const live = d.alerts || [];
+  const filterCoins = ['ALL', 'BTC', ...coins.map((c) => c.symbol).filter((s) => s && s !== 'BTC')];
   const sevStyle = (s) => s === 'high' ? 'border-red-500/30 bg-red-500/5' : s === 'warning' ? 'border-amber-500/30 bg-amber-500/5' : s === 'success' ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-sky-500/25 bg-sky-500/5';
   const sevDot = (s) => s === 'high' ? 'bg-red-400' : s === 'warning' ? 'bg-amber-400' : s === 'success' ? 'bg-emerald-400' : 'bg-sky-400';
   const catStyle = (c) => ({ Regime: 'text-violet-300 bg-violet-500/10 border-violet-500/25',
@@ -1456,7 +1457,8 @@ function AlertsSection({ d, alertsData, onAck }) {
     'Data Trust': 'text-amber-300 bg-amber-500/10 border-amber-500/25',
     'Event Risk': 'text-orange-300 bg-orange-500/10 border-orange-500/25',
     Volatility: 'text-red-300 bg-red-500/10 border-red-500/25',
-    News: 'text-violet-300 bg-violet-500/10 border-violet-500/25' }[c] || 'text-slate-300 bg-slate-800/40 border-slate-700');
+    News: 'text-violet-300 bg-violet-500/10 border-violet-500/25',
+    Setup: 'text-amber-300 bg-amber-500/10 border-amber-500/25' }[c] || 'text-slate-300 bg-slate-800/40 border-slate-700');
   const styleFor = (lvl) => lvl === 'danger' ? 'border-red-500/30 bg-red-500/5' : lvl === 'warning' ? 'border-amber-500/30 bg-amber-500/5' : lvl === 'success' ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800 bg-slate-950/40';
   const dot = (lvl) => lvl === 'danger' ? 'bg-red-400' : lvl === 'warning' ? 'bg-amber-400' : lvl === 'success' ? 'bg-emerald-400' : 'bg-sky-400';
   const fmtTs = (iso) => { try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return iso; } };
@@ -1465,16 +1467,29 @@ function AlertsSection({ d, alertsData, onAck }) {
       <SectionHead icon={Bell} title="Smart Alerts" blurb={sec('alerts').blurb} coin={d.symbol || 'BTC'} />
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <div className="mb-4 flex items-center gap-2">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
           <ShieldAlert className="h-5 w-5 text-violet-400" />
           <h3 className="flex items-center gap-1 font-semibold text-slate-100">What Just Changed<InfoTip below text="The most recent shifts the engine flagged — new signals, regime changes or notable moves — so you can catch what's different since you last looked." /></h3>
           {unseen > 0 && <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-xs font-bold text-red-300 ring-1 ring-red-500/30">{unseen} new</span>}
           <span className="ml-auto text-xs text-slate-500">{smart.length} logged</span>
           {unseen > 0 && <Button size="sm" variant="outline" onClick={() => onAck && onAck()} className="h-7 gap-1.5 border-slate-700 text-xs text-slate-300 hover:bg-slate-800">Mark all read</Button>}
         </div>
+        <div className="mb-4 flex flex-wrap items-center gap-1.5">
+          <span className="mr-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Coin</span>
+          {filterCoins.map((c) => (
+            <button
+              key={c}
+              onClick={() => onFilter && onFilter(c)}
+              className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold transition ${filter === c ? 'border-sky-500/50 bg-sky-500/15 text-sky-200' : 'border-slate-700 bg-slate-800/40 text-slate-400 hover:bg-slate-800'}`}
+            >
+              {c !== 'ALL' && <CoinIcon symbol={c} size={14} />}
+              {c === 'ALL' ? 'All Coins' : c}
+            </button>
+          ))}
+        </div>
         <p className="mb-4 text-xs text-slate-500">State-change intelligence — non-price events triggered when the market regime, unified decision, data trust, quant score or event risk shifts between runs.</p>
         {smart.length === 0 ? (
-          <p className="text-sm text-slate-500">No state changes logged yet. Alerts appear here automatically when the market’s regime, decision, trust or event risk changes.</p>
+          <p className="text-sm text-slate-500">No state changes logged{filter !== 'ALL' ? ` for ${filter}` : ''} yet. Alerts appear here automatically when the market’s regime, decision, trust or event risk changes.</p>
         ) : (
           <div className="space-y-2">
             {smart.map((a, i) => (
@@ -1482,6 +1497,7 @@ function AlertsSection({ d, alertsData, onAck }) {
                 <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${sevDot(a.severity)}`} />
                 <div className="flex-1">
                   <div className="flex flex-wrap items-center gap-2">
+                    <CoinIcon symbol={a.symbol || 'BTC'} size={16} />
                     <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${catStyle(a.category)}`}>{a.category}</span>
                     <span className="text-sm font-semibold text-slate-100">{a.title}</span>
                     {!a.seen && <span className="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-sky-300">new</span>}
@@ -4193,6 +4209,7 @@ export default function DashboardPage() {
   const [newsStatus, setNewsStatus] = useState(__newsCache ? 'ready' : 'loading');
   const [newsRefreshing, setNewsRefreshing] = useState(false);
   const [alertsData, setAlertsData] = useState(__alertsCache);
+  const [alertFilter, setAlertFilter] = useState('BTC');
   const [compareOpen, setCompareOpen] = useState(false);
   const firstSym = React.useRef(true);
 
@@ -4218,6 +4235,9 @@ export default function DashboardPage() {
     if (btc) setCompareOpen(false);
   }, [symbol]);
 
+  // Keep the Alerts feed scoped to the coin the user is viewing (they can still switch to All/other coins in the Alerts screen).
+  useEffect(() => { setAlertFilter(symbol); }, [symbol]);
+
   // Reflect the selected coin in the browser tab (favicon + title).
   useEffect(() => {
     const coin = coins.find((c) => c.symbol === symbol);
@@ -4237,18 +4257,20 @@ export default function DashboardPage() {
 
   const loadAlerts = useCallback(async () => {
     try {
-      const r = await fetch('/api/v1/alerts', { cache: 'no-store' });
+      const q = alertFilter && alertFilter !== 'ALL' ? `?symbol=${encodeURIComponent(alertFilter)}` : '';
+      const r = await fetch(`/api/v1/alerts${q}`, { cache: 'no-store' });
       const j = await r.json();
       if (j.status === 'ready') { __alertsCache = j; setAlertsData(j); }
     } catch (e) { /* noop */ }
-  }, []);
+  }, [alertFilter]);
 
   const ackAlerts = useCallback(async (ids) => {
     try {
-      await fetch('/api/v1/alerts/ack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ids ? { ids } : {}) });
+      const body = ids ? { ids } : (alertFilter && alertFilter !== 'ALL' ? { symbol: alertFilter } : {});
+      await fetch('/api/v1/alerts/ack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       loadAlerts();
     } catch (e) { /* noop */ }
-  }, [loadAlerts]);
+  }, [loadAlerts, alertFilter]);
 
   useEffect(() => {
     loadAlerts();
@@ -4351,7 +4373,7 @@ export default function DashboardPage() {
     if (active === 'performance') return <PerformanceHubSection d={d} />;
     if (active === 'timemachine') return <TimeMachineSection />;
     if (active === 'ask') return <AskQuantSection d={d} />;
-    if (active === 'alerts') return <AlertsSection d={d} alertsData={alertsData} onAck={ackAlerts} />;
+    if (active === 'alerts') return <AlertsSection d={d} alertsData={alertsData} onAck={ackAlerts} filter={alertFilter} onFilter={setAlertFilter} coins={coins} />;
     if (active === 'settings') return <SettingsSection />;
     return <ComingSoonSection section={activeSection} />;
   };
