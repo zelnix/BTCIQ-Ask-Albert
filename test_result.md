@@ -576,6 +576,20 @@ metadata:
   test_sequence: 8
   run_ui: false
 
+frontend:
+  - task: "Whale Intelligence UI — ETF Flows card, Whale Impact card, Large-Tx feed, per-whale balance history chart"
+    implemented: true
+    working: "NA"
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW Whale Intelligence frontend (Phases 1-3). (1) EtfFlowsCard rendered in the Institutional section (BTC only): net 1d/7d/window tiles, a daily net-flow bar chart (green/red by sign via Recharts), and a per-issuer window-total leaderboard. Institutional blurb + Settings data-source row updated from 'Inactive' to Live (Farside/bitbo). (2) WhaleImpactCard at top of Whale Watch: 30d net flow, trend (Accumulation/Distribution/Neutral), holder vs exchange balances, biggest-mover contributors (from /api/v1/whales/impact — first load can take 30-60s). (3) WhaleTxFeed at bottom of Whale Watch: labeled large-transaction feed with min-BTC toggle (50/100/500/1000), entity+category, amount, USD, impact tag, links to explorer (from /api/v1/whales/transactions). (4) WhaleHistoryChart inside each expanded whale row: real reconstructed balance-over-time step line + 30d/90d change (from /api/v1/whales/history). Compiles cleanly (1760 modules). Selector-verified in browser: Institutional nav + 'US Spot Bitcoin ETF Flows' card heading render. NOT yet run through frontend testing agent (awaiting user permission)."
+
+
 test_plan:
   current_focus:
     - "Whale Intelligence Phase 1 — ETF Flows (GET /api/v1/etf-flows + institutional panel ETF line REAL)"

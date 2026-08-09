@@ -72,7 +72,7 @@ const SECTIONS = [
   { id: 'whales', label: 'Whale Watch', icon: Fish,
     blurb: 'Live balances of the largest, publicly-labeled Bitcoin wallets — major exchanges, ETF/treasury custody, governments and famous whales. Track who is accumulating or distributing, with balances fetched live on-chain. Names are curated from public labels.' },
   { id: 'institutional', label: 'Institutional & Derivatives', icon: Landmark,
-    blurb: 'Institutional & derivatives footprint — futures open interest, funding, long/short positioning and taker flow (live via OKX). Spot-ETF net flows are marked Inactive until a paid ETF feed is connected.' },
+    blurb: 'Institutional & derivatives footprint — futures open interest, funding, long/short positioning and taker flow (live via OKX), plus REAL US spot Bitcoin ETF net flows (live via Farside/bitbo).' },
   { id: 'macro', label: 'Macro & Policy', icon: Globe,
     blurb: 'Are global money conditions helping or hurting Bitcoin? Central-bank policy, a liquidity gauge, cross-market correlations and a regulation tracker.' },
   { id: 'news', label: 'News', icon: Newspaper,
@@ -2803,6 +2803,233 @@ function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
   );
 }
 
+/* ---------------- Whale Intelligence: ETF Flows / Impact / Tx feed / History ---------------- */
+const fMln = (v) => (v == null ? '—' : (v >= 0 ? '+$' : '-$') + Math.abs(Number(v)).toLocaleString(undefined, { maximumFractionDigits: 0 }) + 'M');
+const shortDate = (iso) => { try { return new Date(iso + (iso.length <= 10 ? 'T00:00:00Z' : '')).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' }); } catch { return iso; } };
+
+function EtfFlowsCard() {
+  const [d, setD] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    let alive = true;
+    fetch('/api/v1/etf-flows', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => { if (alive) { setD(j); setLoading(false); } })
+      .catch(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+  const daily = (d && d.daily) || [];
+  const bars = [...daily].reverse().map((x) => ({ date: shortDate(x.date), total: x.total }));
+  const lead = (d && d.leaderboard) || [];
+  const maxLead = Math.max(1, ...lead.map((l) => Math.abs(l.window_total || 0)));
+  const netColor = (v) => (v == null ? 'text-slate-300' : v >= 0 ? 'text-emerald-400' : 'text-red-400');
+  return (
+    <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <Landmark className="h-5 w-5 text-sky-400" />
+        <h3 className="flex items-center gap-1 font-semibold text-white">US Spot Bitcoin ETF Flows<InfoTip below text="Daily net creations/redemptions across US spot Bitcoin ETFs, in USD millions. Sustained net inflows mean funds are buying BTC to back new shares (demand); net outflows mean the opposite." /></h3>
+        <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Live</span>
+        <span className="ml-auto text-[11px] text-slate-500">{d && d.source}</span>
+      </div>
+      {loading ? (
+        <p className="text-sm text-slate-500">Loading ETF flow data…</p>
+      ) : !daily.length ? (
+        <p className="text-sm text-slate-500">ETF flow data is refreshing — check back in a moment.</p>
+      ) : (
+        <>
+          <div className="mb-4 grid grid-cols-3 gap-3">
+            {[['Net flow (1d)', d.net_1d], ['Net flow (7d)', d.net_7d], ['Net flow (window)', d.net_30d]].map(([lab, v], i) => (
+              <div key={i} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                <div className="text-[11px] text-slate-500">{lab}</div>
+                <div className={`text-lg font-semibold ${netColor(v)}`}>{fMln(v)}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Daily net flow ($M)</div>
+          <div className="h-40 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={bars} margin={{ top: 5, right: 5, left: -18, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#64748b' }} tickLine={false} axisLine={{ stroke: '#1e293b' }} />
+                <YAxis tick={{ fontSize: 10, fill: '#64748b' }} tickLine={false} axisLine={false} />
+                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} formatter={(v) => [fMln(v), 'Net flow']} />
+                <ReferenceLine y={0} stroke="#475569" />
+                <Bar dataKey="total" radius={[3, 3, 0, 0]}>
+                  {bars.map((b, i) => <Cell key={i} fill={b.total >= 0 ? '#34d399' : '#f87171'} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="mt-4 mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">By issuer (window total)</div>
+          <div className="space-y-1.5">
+            {lead.slice(0, 8).map((l, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs">
+                <span className="w-14 font-mono font-semibold text-slate-200">{l.ticker}</span>
+                <div className="relative h-3 flex-1 overflow-hidden rounded bg-slate-800/50">
+                  <div className={`absolute top-0 h-3 rounded ${l.window_total >= 0 ? 'left-1/2 bg-emerald-500/60' : 'right-1/2 bg-red-500/60'}`} style={{ width: `${(Math.abs(l.window_total) / maxLead) * 50}%` }} />
+                  <div className="absolute left-1/2 top-0 h-3 w-px bg-slate-600" />
+                </div>
+                <span className={`w-16 text-right font-mono ${netColor(l.window_total)}`}>{fMln(l.window_total)}</span>
+              </div>
+            ))}
+          </div>
+          <p className="mt-4 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.05] p-3 text-[11px] text-emerald-200/80">
+            Real US spot Bitcoin ETF daily net flows (USD millions) via {d.source}. Farside is the canonical source; we read a live mirror because Farside blocks automated access. Latest data: {d.latest_date}.
+          </p>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function WhaleImpactCard() {
+  const [d, setD] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    let alive = true;
+    fetch('/api/v1/whales/impact', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => { if (alive) { setD(j); setLoading(false); } })
+      .catch(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+  const fBtc = (v) => (v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' BTC');
+  const fChg = (v) => (v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }));
+  const trendColor = (t) => t === 'Accumulation' ? 'text-emerald-400' : t === 'Distribution' ? 'text-red-400' : 'text-slate-300';
+  const contribs = (d && d.contributors) || [];
+  return (
+    <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <Waves className="h-5 w-5 text-sky-400" />
+        <h3 className="flex items-center gap-1 font-semibold text-white">Whale Impact (30-day)<InfoTip below text="Aggregate accumulation vs distribution across the tracked whales over ~30 days, reconstructed from real on-chain transactions. Exchange OUTFLOWS count as bullish (supply leaving exchanges); holder accumulation counts as bullish." /></h3>
+        <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Live</span>
+      </div>
+      {loading ? (
+        <p className="text-sm text-slate-500">Reconstructing whale balance history (this can take a moment on first load)…</p>
+      ) : !d || d.status !== 'ready' ? (
+        <p className="text-sm text-slate-500">Impact data is computing — check back shortly.</p>
+      ) : (
+        <>
+          <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">30d net flow</div><div className={`text-lg font-semibold ${trendColor(d.trend)}`}>{fChg(d.net_flow_30d)} BTC</div></div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">Trend</div><div className={`text-lg font-semibold ${trendColor(d.trend)}`}>{d.trend}</div></div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">Held by holders</div><div className="text-lg font-semibold text-white">{fBtc(d.holder_balance)}</div></div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">On exchanges</div><div className="text-lg font-semibold text-white">{fBtc(d.exchange_balance)}</div></div>
+          </div>
+          {contribs.length > 0 && (
+            <>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Biggest movers (30d)</div>
+              <div className="space-y-1.5">
+                {contribs.map((c, i) => (
+                  <div key={i} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 text-sm">
+                    <span className="flex-1 truncate text-slate-200">{c.name} <span className="text-[10px] text-slate-500">· {c.category}</span></span>
+                    <span className={`font-mono ${c.delta_30d >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fChg(c.delta_30d)} BTC</span>
+                    <span className={`w-16 text-right text-xs font-semibold ${sigColor(c.signal)}`}>{c.signal}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          <p className="mt-4 text-[11px] text-slate-500">{d.note}</p>
+        </>
+      )}
+    </Card>
+  );
+}
+
+function WhaleTxFeed() {
+  const [d, setD] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  const [minBtc, setMinBtc] = React.useState(50);
+  React.useEffect(() => {
+    let alive = true; setLoading(true);
+    fetch(`/api/v1/whales/transactions?min_btc=${minBtc}&limit=40`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => { if (alive) { setD(j); setLoading(false); } })
+      .catch(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [minBtc]);
+  const feed = (d && d.feed) || [];
+  const fUsd = (v) => (v == null ? '' : '$' + (v >= 1e9 ? (v / 1e9).toFixed(2) + 'B' : (v / 1e6).toFixed(1) + 'M'));
+  const dt = (iso) => { try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return iso; } };
+  return (
+    <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <Activity className="h-5 w-5 text-sky-400" />
+        <h3 className="flex items-center gap-1 font-semibold text-white">Large Transactions<InfoTip below text="A live, time-sorted feed of notable on-chain moves across the tracked whales, each labelled with the known entity. Exchange inflows hint at potential selling; outflows and holder accumulation read bullish." /></h3>
+        <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Live</span>
+        <div className="ml-auto flex items-center gap-1 text-[11px] text-slate-400">
+          <span>min</span>
+          {[50, 100, 500, 1000].map((v) => (
+            <button key={v} onClick={() => setMinBtc(v)} className={`rounded px-1.5 py-0.5 font-semibold ${minBtc === v ? 'bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/40' : 'text-slate-500 hover:text-slate-300'}`}>{v}</button>
+          ))}
+          <span>BTC</span>
+        </div>
+      </div>
+      {loading ? (
+        <p className="text-sm text-slate-500">Scanning recent large transfers…</p>
+      ) : !feed.length ? (
+        <p className="text-sm text-slate-500">No transfers ≥ {minBtc} BTC found in the recent window for the tracked whales.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {feed.map((e, i) => (
+            <a key={i} href={`https://mempool.space/tx/${e.txid}`} target="_blank" rel="noreferrer" className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs hover:border-slate-700">
+              {e.direction === 'in' ? <ArrowDownRight className="h-4 w-4 text-emerald-400" /> : <ArrowUpRight className="h-4 w-4 text-red-400" />}
+              <span className="min-w-[120px] flex-1 font-semibold text-slate-100">{e.entity} <span className="text-[10px] font-normal text-slate-500">· {e.category}</span></span>
+              <span className="font-mono text-slate-200">{Number(e.amount).toLocaleString(undefined, { maximumFractionDigits: 1 })} BTC</span>
+              <span className="w-20 text-right text-slate-500">{fUsd(e.amount_usd)}</span>
+              <span className={`w-40 text-right text-[11px] font-semibold ${sigColor(e.signal)}`}>{e.impact}</span>
+              <span className="w-28 text-right text-slate-500">{dt(e.date)}</span>
+            </a>
+          ))}
+        </div>
+      )}
+      <p className="mt-4 text-[11px] text-slate-500">{d && d.source} · Tap any row to open the transaction in a block explorer. Only wallets with public labels are named — deep clustering of unknown wallets needs a paid provider.</p>
+    </Card>
+  );
+}
+
+function WhaleHistoryChart({ address }) {
+  const [d, setD] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    let alive = true; setLoading(true);
+    fetch(`/api/v1/whales/history?address=${address}`, { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => { if (alive) { setD(j); setLoading(false); } })
+      .catch(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [address]);
+  if (loading) return <p className="text-xs text-slate-500">Reconstructing balance history from on-chain transactions…</p>;
+  const pts = (d && d.points) || [];
+  if (!pts.length) return <p className="text-xs text-slate-500">Not enough on-chain history to chart this wallet.</p>;
+  const chart = pts.map((p) => ({ date: p.date, bal: p.bal }));
+  const fChg = (v) => (v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' BTC');
+  return (
+    <div>
+      <div className="mb-2 flex flex-wrap items-center gap-3 text-[11px]">
+        <span className="font-semibold uppercase tracking-wide text-slate-500">Balance history</span>
+        <span className="text-slate-400">30d <span className={d.change_30d >= 0 ? 'text-emerald-400' : 'text-red-400'}>{fChg(d.change_30d)}</span></span>
+        <span className="text-slate-400">90d <span className={d.change_90d >= 0 ? 'text-emerald-400' : 'text-red-400'}>{fChg(d.change_90d)}</span></span>
+        <span className="ml-auto text-slate-600">{d.span_from} → {d.span_to}</span>
+      </div>
+      <div className="h-32 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chart} margin={{ top: 4, right: 6, left: -14, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+            <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} tickLine={false} axisLine={{ stroke: '#1e293b' }} minTickGap={30} tickFormatter={shortDate} />
+            <YAxis tick={{ fontSize: 9, fill: '#64748b' }} tickLine={false} axisLine={false} width={48} domain={['auto', 'auto']} tickFormatter={(v) => (v >= 1000 ? (v / 1000).toFixed(0) + 'k' : v)} />
+            <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} formatter={(v) => [Number(v).toLocaleString() + ' BTC', 'Balance']} />
+            <Line type="stepAfter" dataKey="bal" stroke="#38bdf8" strokeWidth={1.6} dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <p className="mt-1 text-[10px] text-slate-600">Reconstructed from this address's real on-chain transactions (mempool.space). Depth depends on how active the wallet is.</p>
+    </div>
+  );
+}
+
+
 function WhaleWatch() {
   const [data, setData] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
@@ -2843,6 +3070,7 @@ function WhaleWatch() {
   return (
     <div className="space-y-5">
       <SectionHead icon={Fish} title="Whale Watch" blurb={sec('whales').blurb} coin="BTC" />
+      <WhaleImpactCard />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <Fish className="h-5 w-5 text-sky-400" />
@@ -2890,6 +3118,9 @@ function WhaleWatch() {
                   </button>
                   {isOpen && (
                     <div className="border-t border-slate-800 p-3">
+                      <div className="mb-3 rounded-lg border border-slate-800/70 bg-slate-900/40 p-3">
+                        <WhaleHistoryChart address={w.address} />
+                      </div>
                       <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                         <Activity className="h-3.5 w-3.5" /> Recent activity {act && act.notable_only && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] normal-case text-slate-400">notable moves ≥ 0.1 BTC</span>}
                       </div>
@@ -2925,6 +3156,7 @@ function WhaleWatch() {
           </>
         )}
       </Card>
+      <WhaleTxFeed />
     </div>
   );
 }
@@ -2946,7 +3178,7 @@ function SettingsSection({ onManualRun }) {
     ['Whale wallets (balances)', 'mempool.space · blockchain.com', 'Live'],
     ['Derivatives (OI, funding, long/short)', 'OKX', 'Live'],
     ['Sentiment (Fear & Greed)', 'alternative.me', 'Live'],
-    ['ETF flows / Institutional', 'ETF issuers / CME', 'Inactive — paid feed'],
+    ['ETF flows (US spot BTC)', 'Farside · bitbo mirror', 'Live'],
     ['Order-book / IV / liquidations', 'Deribit / CoinGlass', 'Inactive — paid feed'],
     ['Social sentiment', 'LunarCrush', 'Inactive — paid feed'],
   ];
@@ -4592,7 +4824,7 @@ export default function DashboardPage() {
     if (active === 'analogs') return <AnalogsSection />;
     if (active === 'smartmoney') return <DemoMetricsCard title="Smart Money" icon={Waves} panel={d.smart_money} sectionId="smartmoney" />;
     if (active === 'whales') return <WhaleWatch />;
-    if (active === 'institutional') return <DemoMetricsCard title="Institutional & Derivatives" icon={Landmark} panel={d.institutional} sectionId="institutional" />;
+    if (active === 'institutional') return (<div className="space-y-5"><DemoMetricsCard title="Institutional & Derivatives" icon={Landmark} panel={d.institutional} sectionId="institutional" />{(d.symbol || 'BTC') === 'BTC' && <EtfFlowsCard />}</div>);
     if (active === 'macro') return <PolicySection d={d} />;
     if (active === 'news') return <NewsSection news={news} status={newsStatus} onRefresh={handleNewsRefresh} refreshing={newsRefreshing} />;
     if (active === 'risk') return <RiskSection d={d} />;
