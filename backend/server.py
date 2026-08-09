@@ -3694,6 +3694,12 @@ SECTION_FOCUS = {
     'risk': "The current risk level: how big the swings could be and what could trigger a sharp move either way.",
     'crossmarket': "How this coin is performing versus traditional markets (S&P 500, Nasdaq, Nikkei, European indices, Gold, the US Dollar): whether crypto is currently moving WITH stocks (risk-on coupling) or breaking away (decoupling), how its returns and volatility stack up, and what that correlation means for a non-trader.",
     'analogs': "Historical analogs: which past Bitcoin trend episode today's market conditions most resemble (macro rates, US dollar, equity/gold correlation, volatility, drawdown, momentum and halving-cycle position), what drove that past episode, and what would confirm or break a repeat. Educational pattern-matching on a small sample — never a guarantee.",
+    'smartmoney': "The on-chain 'smart money' read: what valuation (MVRV, SOPR), holder accumulation, network activity and sentiment are saying about whether long-term/large holders are accumulating or distributing, and what that implies next.",
+    'institutional': "The institutional & derivatives footprint: futures open interest, funding, long/short positioning and taker flow — whether leverage and positioning are crowded or supportive, and what that means for the next move.",
+    'events': "The upcoming event calendar: which scheduled macro, derivatives and on-chain events are most likely to move the price, when, and how a trader should think about the risk around them.",
+    'timemachine': "How to read the Time Machine: what replaying a past day teaches about the model's behaviour and how today's setup compares to history. Keep it educational.",
+    'alerts': "The recent alerts feed: summarise what just changed (regime, decision, data-trust, event risk, whale moves) and what a user should pay attention to right now.",
+    'whales': "The largest labeled Bitcoin wallets: who is accumulating or distributing among major exchanges, ETF/treasury custody, governments and whales, and what net flows (especially to/from exchanges) imply for supply and price.",
 }
 
 
@@ -3762,6 +3768,59 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
                 top = (data.get('episodes') or [])[:3]
                 for ep in top:
                     lines.append(f"Analog: {ep['label']} ({ep['start']}→{ep['end']}) match {ep['match']}% — then moved fwd 30d {ep['fwd_30']}%, 90d {ep['fwd_90']}%, 180d {ep['fwd_180']}%. Drivers: {', '.join(t['label'] for t in ep.get('tags', [])) or 'price-driven'}.")
+                ctx = ctx + "\n\n" + "\n".join(lines)
+        if section in ('smartmoney', 'institutional', 'events', 'alerts', 'whales'):
+            if symbol != 'BTC':
+                today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+                _cd = coin_dash_col.find_one({'_id': f'{symbol}:{today}'}, {'_id': 0})
+                _run = (_cd or {}).get('data') or {}
+            else:
+                _run = runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0}) or {}
+            lines = []
+            if section == 'smartmoney':
+                sm = _run.get('smart_money') or {}
+                if sm and not sm.get('demo'):
+                    lines.append(f"ON-CHAIN SMART MONEY (source {sm.get('source')}): {sm.get('headline')}.")
+                    for m in sm.get('metrics', []):
+                        lines.append(f"- {m['name']}: {m['value']} ({m['signal']}).")
+                else:
+                    lines.append("The Smart Money panel is currently inactive/placeholder — say so plainly and do not invent on-chain figures.")
+            elif section == 'institutional':
+                inst = _run.get('institutional') or {}
+                if inst:
+                    lines.append(f"INSTITUTIONAL & DERIVATIVES (source {inst.get('source')}): {inst.get('headline')}.")
+                    for m in inst.get('metrics', []):
+                        tag = ' [INACTIVE - do not interpret]' if m.get('inactive') else ''
+                        lines.append(f"- {m['name']}: {m['value']} ({m['signal']}){tag}.")
+                else:
+                    lines.append("No live derivatives data is available right now — say so plainly.")
+            elif section == 'events':
+                ec = _run.get('event_calendar') or {}
+                evs = ec.get('events') if isinstance(ec, dict) else (ec if isinstance(ec, list) else [])
+                nh = ec.get('next_high_impact') if isinstance(ec, dict) else None
+                if nh:
+                    lines.append(f"Next high-impact event: {nh.get('title')} in {nh.get('days_until')} day(s).")
+                for e in (evs or [])[:8]:
+                    lines.append(f"- In {e.get('days_until')}d: {e.get('title')} [{e.get('category')}, importance {e.get('importance')}] — {e.get('description')}")
+            elif section == 'alerts':
+                al = list(smart_alerts_col.find(_alert_symbol_filter(symbol), {'_id': 0}).sort('ts', -1).limit(8))
+                if al:
+                    lines.append("RECENT STATE-CHANGE ALERTS:")
+                    for a in al:
+                        lines.append(f"- [{a.get('category')}/{a.get('severity')}] {a.get('title')}: {(a.get('message') or '')[:180]}")
+                for a in (_run.get('alerts') or [])[:5]:
+                    lines.append(f"- [{a.get('type')}/{a.get('level')}] {a.get('message')}")
+                if not lines:
+                    lines.append("No alerts are currently active.")
+            elif section == 'whales':
+                try:
+                    wd = get_whales()
+                    lines.append(f"LARGEST LABELED BITCOIN WALLETS (source {wd.get('source')}):")
+                    for w in (wd.get('whales') or [])[:8]:
+                        lines.append(f"- {w['name']} ({w['category']}): {round(w['balance']):,} BTC, 7d change {w.get('change_7d')} BTC, signal {w['signal']}.")
+                except Exception:  # noqa
+                    pass
+            if lines:
                 ctx = ctx + "\n\n" + "\n".join(lines)
         sys_tmpl = ALBERT_TECH_SYSTEM if mode == 'technical' else ALBERT_INSIGHT_SYSTEM
         kind = 'technical briefing' if mode == 'technical' else 'insight'

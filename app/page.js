@@ -1468,6 +1468,7 @@ function AlertsSection({ d, alertsData, onAck, filter = 'BTC', onFilter, coins =
   return (
     <div className="space-y-5">
       <SectionHead icon={Bell} title="Smart Alerts" blurb={sec('alerts').blurb} coin={d.symbol || 'BTC'} />
+      <AiReview section="alerts" text="Albert is reviewing recent alerts…" voice />
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -1725,6 +1726,7 @@ function TimeMachineSection() {
   return (
     <div className="space-y-5">
       <SectionHead icon={History} title="Bitcoin Time Machine" blurb={sec('timemachine').blurb} />
+      <AiReview section="timemachine" text="Albert is reviewing the Time Machine…" voice />
 
       <ScenariosPanel />
 
@@ -1890,6 +1892,7 @@ function NewsSection({ news, status, onRefresh, refreshing }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={Newspaper} title={`${symbol} News`} blurb={sec('news').blurb} coin={symbol} />
+      <AiReview section="news" text="Albert is reviewing today’s news…" voice />
       <Card className="border-0 bg-gradient-to-br from-violet-500/10 to-slate-900 p-6 ring-1 ring-violet-500/25">
         <div className="mb-3 flex items-center gap-2"><Sparkles className="h-5 w-5 text-violet-400" /><h3 className="flex items-center gap-1 font-semibold text-slate-100">Daily AI Briefing<InfoTip below text={`A plain-English summary of the day's most important ${symbol} news, written by the AI, with the likely market impact of each story.`} /></h3><span className="ml-auto text-[11px] text-slate-500">{news.model}</span></div>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -2224,6 +2227,7 @@ function LedgerExplorer({ ledger }) {
 function ScorecardSection({ d }) {
   const pl = d.prediction_ledger;
   const [sc, setSc] = React.useState(null);
+  const [modal, setModal] = React.useState(null);
   React.useEffect(() => {
     let on = true;
     fetch('/api/v1/scorecard', { cache: 'no-store' })
@@ -2241,12 +2245,77 @@ function ScorecardSection({ d }) {
       <div className="rounded-xl border border-sky-500/20 bg-sky-500/[0.06] p-4 text-sm text-slate-300">
         <span className="font-semibold text-sky-300">Accountability by design.</span> Every forecast is written to the ledger the moment it is issued — before the outcome exists — then graded automatically when it matures. Model <span className="font-mono text-slate-200">{pl.model_version}</span> · <span className="text-slate-200">{pl.total_logged}</span> forecasts logged (<span className="text-slate-200">{pl.live_logged}</span> live-forward + <span className="text-slate-200">{pl.backtested}</span> walk-forward backtest).
       </div>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="Directional Accuracy" value={o.accuracy == null ? '—' : `${o.accuracy}%`} sub={`${o.n} graded`} color={accCol} />
-        <Stat label="Brier Score" value={o.brier == null ? '—' : o.brier} sub="lower is better (0 = perfect)" />
-        <Stat label="Mean Abs. Error" value={o.mae_pct == null ? '—' : `${o.mae_pct}%`} sub="base-case price vs actual" />
-        <Stat label="Range Hit Rate" value={o.range_hit_pct == null ? '—' : `${o.range_hit_pct}%`} sub="actual inside base range" />
-      </div>
+      {(() => {
+        const metricInfo = {
+          accuracy: {
+            title: 'Directional Accuracy', value: o.accuracy == null ? '—' : `${o.accuracy}%`,
+            body: [
+              `This is how often my up/down call was correct — measured only on the ${o.n || 0} forecasts that have already matured and been graded, never on open ones.`,
+              '50% is a coin flip, so anything meaningfully above 50% means there is a genuine directional edge. Because every call is written to the ledger before the outcome exists, this number can\'t be cherry-picked.',
+              'Read it alongside sample size: a high accuracy over hundreds of graded calls is far more trustworthy than the same number over a handful.',
+            ],
+          },
+          brier: {
+            title: 'Brier Score', value: o.brier == null ? '—' : String(o.brier),
+            body: [
+              'The Brier score grades how honest my probabilities are, not just the direction. It compares the confidence I stated (e.g. "70% up") against what actually happened.',
+              '0.0 is perfect, 0.25 is what a lazy 50/50 guess scores — so lower is better. It punishes me for being confidently wrong more than for being cautiously wrong.',
+              'A low accuracy but low Brier means I hedge well; high accuracy with a poor Brier means I\'m right but over-confident on the misses.',
+            ],
+          },
+          mae: {
+            title: 'Mean Absolute Error', value: o.mae_pct == null ? '—' : `${o.mae_pct}%`,
+            body: [
+              'This is the average gap between my base-case price target and where price actually landed, in percent.',
+              'Smaller is better: a 2% MAE means my central price estimate was, on average, within 2% of reality.',
+              'It measures magnitude, not direction — pair it with directional accuracy to see the full picture of how precise the forecasts are.',
+            ],
+          },
+          range: {
+            title: 'Range Hit Rate', value: o.range_hit_pct == null ? '—' : `${o.range_hit_pct}%`,
+            body: [
+              'Every forecast quotes a base range, not just a point. This is how often the actual close finished inside that range.',
+              'A well-calibrated range should be hit roughly as often as its stated confidence — too low means my ranges are too tight, too high means they\'re too wide to be useful.',
+              'It\'s the honesty check on the uncertainty bands you see on the forecast cards.',
+            ],
+          },
+        };
+        const cards = [
+          ['accuracy', 'Directional Accuracy', o.accuracy == null ? '—' : `${o.accuracy}%`, `${o.n} graded`, accCol],
+          ['brier', 'Brier Score', o.brier == null ? '—' : o.brier, 'lower is better (0 = perfect)', undefined],
+          ['mae', 'Mean Abs. Error', o.mae_pct == null ? '—' : `${o.mae_pct}%`, 'base-case price vs actual', undefined],
+          ['range', 'Range Hit Rate', o.range_hit_pct == null ? '—' : `${o.range_hit_pct}%`, 'actual inside base range', undefined],
+        ];
+        return (
+          <>
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              {cards.map(([key, label, value, sub, color]) => (
+                <button key={key} onClick={() => setModal(key)} className="group relative block w-full text-left transition hover:-translate-y-0.5">
+                  <Stat label={label} value={value} sub={sub} color={color} />
+                  <span className="absolute right-2 top-2 flex items-center gap-0.5 rounded-full bg-slate-800/70 px-1.5 py-0.5 text-[9px] font-semibold text-slate-400 group-hover:text-sky-300"><Info className="h-3 w-3" />Albert</span>
+                </button>
+              ))}
+            </div>
+            {modal && (
+              <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setModal(null)}>
+                <div className="w-full max-w-md rounded-xl border border-sky-500/25 bg-slate-900 p-5 shadow-2xl ring-1 ring-slate-800" onClick={(e) => e.stopPropagation()}>
+                  <div className="mb-3 flex items-center gap-3">
+                    <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-white">{metricInfo[modal].title}</h3>
+                      <p className="text-xs text-slate-400">Albert explains · current: <span className="font-mono text-sky-300">{metricInfo[modal].value}</span></p>
+                    </div>
+                    <button onClick={() => setModal(null)} className="rounded p-1 text-slate-400 hover:bg-slate-800 hover:text-white"><X className="h-4 w-4" /></button>
+                  </div>
+                  <div className="space-y-2.5 text-sm leading-relaxed text-slate-300">
+                    {metricInfo[modal].body.map((para, i) => <p key={i}>{para}</p>)}
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       <InfoBlock>
         <ul className="mt-1 space-y-1 text-slate-400">
@@ -2440,6 +2509,7 @@ function EventsSection({ d }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={CalendarClock} title="Event Calendar" blurb={sec('events').blurb} />
+      <AiReview section="events" text="Albert is reviewing the event calendar…" voice />
       {nx && (
         <Card className="border-0 bg-gradient-to-r from-orange-500/10 to-slate-900 p-5 ring-1 ring-orange-500/30">
           <div className="flex flex-wrap items-center gap-4">
@@ -2635,6 +2705,7 @@ function RiskSection({ d }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={ShieldAlert} title="BTCIQ Risk" blurb={sec('risk').blurb} coin={d.symbol || 'BTC'} />
+      <AiReview section="risk" text="Albert is reviewing current risk…" voice />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="flex flex-wrap items-center gap-6">
           <div>
@@ -2707,6 +2778,7 @@ function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={Icon} title={title} blurb={sec(sectionId).blurb} />
+      {!inactive && <AiReview section={sectionId} text={`Albert is reviewing ${title.toLowerCase()}…`} voice />}
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <Icon className="h-5 w-5 text-sky-400" />

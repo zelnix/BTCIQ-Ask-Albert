@@ -1710,21 +1710,22 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      NEW TEST FOCUS — Whale Watch (Phase 1). New endpoint GET /api/v1/whales returns live balances of a
-      curated set of publicly-labeled BTC wallets (Binance x2, Bitfinex, Robinhood, U.S. Government, and
-      two famous whales), fetched from mempool.space (fallback blockchain.info), cached ~45min.
-      Validate GET /api/v1/whales:
-        1) status == 'ready'; whales is a non-empty list (expect 7 items).
-        2) Each whale has: name (str), category (Exchange/Government/Whale), address (str), balance (number,
-           should be large e.g. Binance ~200k+ BTC), balance_usd (number or null), change_24h/change_7d
-           (number or null on day 1), signal (Bullish/Bearish/Neutral). List is sorted by balance desc.
-        3) price is a number (BTC USD) and source string present.
-        4) No 500s; a second call still returns quickly (cached).
-      Also regression: GET /api/v1/dashboard (BTC) still 'ready' with smart_money & institutional demo:false
-      and metrics carrying a 'spark' array (24 points) on trend metrics; GET /api/v1/dashboard?symbol=ETH
-      and ?symbol=SOL should now include a real `institutional` panel (demo:false, source mentions OKX) —
-      just GET (it computes then caches; may return status 'computing' first, retry until 'ready').
-      Do NOT test frontend. All data is REAL (free public APIs + Glassnode Light key).
+      NEW TEST FOCUS — Albert section reviews (LLM). GET /api/v1/albert/insight?section={id}&symbol=BTC now
+      supports these additional sections with tailored data context: smartmoney, institutional, events,
+      alerts, whales, timemachine (plus existing performance/news/risk).
+      NOTE ON LATENCY: each FRESH insight calls Gemini and can take 20-60s; results are cached per
+      section+symbol+day (insights_col), so a second call to the same section is fast. Use a generous
+      per-request timeout (>=75s) and test sections ONE AT A TIME (do not batch — sequential fresh LLM
+      calls will exceed a short overall timeout).
+      Validate for section in [smartmoney, institutional, alerts, events]:
+        1) HTTP 200, JSON has non-empty 'text' (grounded, > 100 chars) and a 'mode' field. No 500.
+        2) institutional insight text should reference derivatives context (e.g. funding / open interest /
+           long-short / taker) — confirms the injected context is used.
+        3) A second call to the same section returns quickly (cached) with same/again non-empty text.
+      Also keep prior coverage valid (regression, quick): GET /api/v1/whales (status ready, 10 whales),
+      GET /api/v1/whale-activity?address=bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h (status ready, activity
+      list with amount/direction/txid), and GET /api/v1/dashboard (BTC) still ready with smart_money &
+      institutional demo:false. Do NOT test frontend.
     -agent: "testing"
     -message: |
       ✅ ALERT COIN FILTER BACKEND TEST COMPLETE - ALL TESTS PASSED (8/8)
