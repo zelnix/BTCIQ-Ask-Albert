@@ -3660,10 +3660,42 @@ ALBERT_INSIGHT_SYSTEM = (
     "certainties, and never give direct buy/sell financial advice. Warm, clear, professor-like. "
     "Do NOT open with a greeting or salutation (no 'Hello', 'Hi', 'Hey', 'Hello there', and do not address "
     "the reader) — start immediately with the substance. "
+    "CRITICAL: Your entire answer must be specifically ABOUT THIS SECTION'S FOCUS. If a 'SECTION-SPECIFIC "
+    "DATA' block is present below, that is your PRIMARY subject — lead with its concrete specifics (the actual "
+    "counts, values, names and signals) and interpret THEM; use the rest of the dashboard data only as "
+    "supporting context. Do NOT default to a generic market/regime overview unless this section IS the overview.\n"
     "Write 80-130 words, at most two short paragraphs. Do not use markdown headers or bullet symbols.\n\n"
     "THIS SECTION'S FOCUS: {focus}\n\n"
     "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
 )
+
+ALBERT_SECTION_SYSTEM = (
+    "You are 'Albert', the friendly HuCentAI Quant analyst in the BTCIQ dashboard, explaining ONE specific panel "
+    "to a curious NON-TRADER. You are NOT giving a general Bitcoin market update.\n"
+    "Your entire answer MUST be about this panel and the 'SECTION-SPECIFIC DATA' block below. Lead with, and build "
+    "the whole explanation around, that block's concrete specifics — the actual counts, values, names and signals. "
+    "Interpret what they mean and why they matter for this panel.\n"
+    "Do NOT give a generic market/regime narrative and do NOT append price-level 'if BTC holds $X then...' scenarios "
+    "unless this panel is specifically about price levels.\n"
+    "Panel-specific guidance:\n"
+    "- Alerts: say how many alerts there are and how many are unread, group them by category and severity, summarise "
+    "the most important one or two and their likely impact, and what the user should watch.\n"
+    "- Prediction Ledger / Performance: interpret accuracy vs a 50% coin-flip, what the Brier score and range-hit "
+    "rate imply about trustworthiness, and where the model is strongest/weakest (by horizon or regime).\n"
+    "- Smart Money / Institutional / Whales: read whether the on-chain / positioning / wallet data leans "
+    "accumulation or distribution and why.\n"
+    "- Risk: explain the overall risk level, the biggest driver, and the expected move ranges.\n"
+    "- Events: which upcoming events matter most, when, and how to think about the risk.\n"
+    "Rules: use ONLY the data below — never invent numbers, prices or events; if the data says a metric is "
+    "inactive/placeholder, say so rather than interpreting it. Explain any jargon in 3-4 words. Frame things as "
+    "probabilities, never certainties; no buy/sell advice. No greeting — start immediately with the substance. "
+    "Write 80-130 words, at most two short paragraphs, no markdown headers or bullet symbols.\n\n"
+    "THIS PANEL'S FOCUS: {focus}\n\n"
+    "===== LIVE DASHBOARD DATA (supporting context) =====\n{ctx}\n===== END DATA ====="
+)
+
+ALBERT_DATA_SECTIONS = {'alerts', 'scorecard', 'performance', 'whales', 'smartmoney',
+                        'institutional', 'events', 'risk'}
 
 ALBERT_TECH_SYSTEM = (
     "You are 'Albert', the HuCentAI Quant analyst in the BTCIQ Bitcoin dashboard, now giving a MORE TECHNICAL "
@@ -3676,7 +3708,10 @@ ALBERT_TECH_SYSTEM = (
     "trading terms without dumbing them down, but stay rigorous. Always frame outcomes as probabilities, never "
     "certainties, and never give direct buy/sell financial advice. Do NOT open with a greeting or salutation "
     "(no 'Hello', 'Hi', 'Hey') — start immediately with the analysis. Write 90-150 words, tight and information-dense, "
-    "no markdown headers or bullet symbols.\n\n"
+    "no markdown headers or bullet symbols.\n"
+    "CRITICAL: Keep the whole briefing specifically ABOUT THIS SECTION'S FOCUS. If a 'SECTION-SPECIFIC DATA' "
+    "block is present below, make it the primary subject — cite its concrete numbers/names/signals directly — "
+    "and treat the rest as supporting context, not the headline.\n\n"
     "THIS SECTION'S FOCUS: {focus}\n\n"
     "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
 )
@@ -3687,6 +3722,7 @@ SECTION_FOCUS = {
     'forecasts': "The short and medium-term forecasts: what the odds imply, and what price action would confirm or break each call.",
     'analysis': "The Quant Score breakdown: which forces (trend, momentum, macro, etc.) are pushing Bitcoin and what their balance means.",
     'performance': "The model's real track record: how much a beginner should trust the current calls, and why.",
+    'scorecard': "The Prediction Ledger scorecard: read the concrete accuracy/Brier/error/range numbers, say how trustworthy the model is right now and where it's strongest or weakest (by horizon and regime).",
     'chart': "The chart structure and key support/resistance levels: what a break above or below them would likely lead to.",
     'cycle': "The 4-year halving cycle and BTC dominance: what this stage has historically meant for the months ahead.",
     'policy': "Macro and liquidity: how interest rates, the US dollar and global liquidity are pushing or pulling Bitcoin.",
@@ -3769,7 +3805,7 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
                 for ep in top:
                     lines.append(f"Analog: {ep['label']} ({ep['start']}→{ep['end']}) match {ep['match']}% — then moved fwd 30d {ep['fwd_30']}%, 90d {ep['fwd_90']}%, 180d {ep['fwd_180']}%. Drivers: {', '.join(t['label'] for t in ep.get('tags', [])) or 'price-driven'}.")
                 ctx = ctx + "\n\n" + "\n".join(lines)
-        if section in ('smartmoney', 'institutional', 'events', 'alerts', 'whales'):
+        if section in ('smartmoney', 'institutional', 'events', 'alerts', 'whales', 'scorecard', 'performance', 'risk'):
             if symbol != 'BTC':
                 today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
                 _cd = coin_dash_col.find_one({'_id': f'{symbol}:{today}'}, {'_id': 0})
@@ -3802,16 +3838,24 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
                     lines.append(f"Next high-impact event: {nh.get('title')} in {nh.get('days_until')} day(s).")
                 for e in (evs or [])[:8]:
                     lines.append(f"- In {e.get('days_until')}d: {e.get('title')} [{e.get('category')}, importance {e.get('importance')}] — {e.get('description')}")
+                if not evs:
+                    lines.append("No scheduled events are in the current window.")
             elif section == 'alerts':
-                al = list(smart_alerts_col.find(_alert_symbol_filter(symbol), {'_id': 0}).sort('ts', -1).limit(8))
+                al = list(smart_alerts_col.find(_alert_symbol_filter(symbol), {'_id': 0}).sort('ts', -1).limit(10))
+                unseen = smart_alerts_col.count_documents({**_alert_symbol_filter(symbol), 'seen': False})
+                from collections import Counter as _Counter
+                cats = _Counter(a.get('category') for a in al)
+                sevs = _Counter(a.get('severity') for a in al)
+                lines.append(f"ALERTS SUMMARY for {symbol}: {len(al)} recent alert(s), {unseen} unread. "
+                             f"By category: {dict(cats)}. By severity: {dict(sevs)}.")
                 if al:
-                    lines.append("RECENT STATE-CHANGE ALERTS:")
+                    lines.append("The alerts (newest first):")
                     for a in al:
                         lines.append(f"- [{a.get('category')}/{a.get('severity')}] {a.get('title')}: {(a.get('message') or '')[:180]}")
                 for a in (_run.get('alerts') or [])[:5]:
-                    lines.append(f"- [{a.get('type')}/{a.get('level')}] {a.get('message')}")
-                if not lines:
-                    lines.append("No alerts are currently active.")
+                    lines.append(f"- (live) [{a.get('type')}/{a.get('level')}] {a.get('message')}")
+                if not al and not (_run.get('alerts')):
+                    lines.append("No alerts are currently active for this coin.")
             elif section == 'whales':
                 try:
                     wd = get_whales()
@@ -3820,9 +3864,50 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
                         lines.append(f"- {w['name']} ({w['category']}): {round(w['balance']):,} BTC, 7d change {w.get('change_7d')} BTC, signal {w['signal']}.")
                 except Exception:  # noqa
                     pass
+            elif section in ('scorecard', 'performance'):
+                pl = _run.get('prediction_ledger') or {}
+                o = pl.get('overall') or {}
+                if o:
+                    lines.append(f"PREDICTION LEDGER TRACK RECORD ({pl.get('model_version', 'model')}): graded on {o.get('n')} matured forecasts. "
+                                 f"Directional accuracy {o.get('accuracy')}% (50% = coin flip). "
+                                 f"Brier score {o.get('brier')} (0 = perfect, 0.25 = a random 50/50 guess; lower is better). "
+                                 f"Mean absolute price error {o.get('mae_pct')}%. Range hit rate {o.get('range_hit_pct')}% "
+                                 f"(how often price finished inside the quoted range).")
+                    lines.append(f"Logged forecasts: {pl.get('total_logged')} total ({pl.get('live_logged')} live, {pl.get('backtested')} backtested).")
+                    bh = pl.get('by_horizon') or {}
+                    for hz, s in (bh.items() if isinstance(bh, dict) else []):
+                        if isinstance(s, dict):
+                            lines.append(f"- {hz} horizon: accuracy {s.get('accuracy')}% over {s.get('n')} calls.")
+                    br = pl.get('by_regime') or {}
+                    for rg, s in (br.items() if isinstance(br, dict) else []):
+                        if isinstance(s, dict):
+                            lines.append(f"- In '{rg}' regimes: accuracy {s.get('accuracy')}% over {s.get('n')} calls.")
+                else:
+                    lines.append("No graded track record is available yet.")
+            elif section == 'risk':
+                rk = _run.get('risk') or {}
+                if rk:
+                    lines.append(f"RISK ENGINE: overall risk is {rk.get('level')} (score {rk.get('score')}/100). "
+                                 f"Realised volatility {rk.get('realised_vol_annual')}% annualised ({rk.get('vol_percentile')} percentile). "
+                                 f"Macro event risk: {rk.get('macro_event_risk')} — {rk.get('macro_note')}. "
+                                 f"Data uncertainty: {rk.get('data_uncertainty')}.")
+                    em = rk.get('expected_move') or {}
+                    for hz, mv in (em.items() if isinstance(em, dict) else []):
+                        if isinstance(mv, dict):
+                            lines.append(f"- Expected {hz} move ±{mv.get('pct')}% (range ${mv.get('low')}–${mv.get('high')}).")
+                    for dv in (rk.get('drivers') or []):
+                        tag = ' [INACTIVE placeholder]' if dv.get('demo') else ''
+                        lines.append(f"- Driver {dv.get('name')}: {dv.get('state')} ({dv.get('value')}){tag}.")
+                else:
+                    lines.append("No risk data is available right now.")
             if lines:
-                ctx = ctx + "\n\n" + "\n".join(lines)
-        sys_tmpl = ALBERT_TECH_SYSTEM if mode == 'technical' else ALBERT_INSIGHT_SYSTEM
+                ctx = ctx + f"\n\n===== SECTION-SPECIFIC DATA ({section}) — BASE YOUR ANSWER ON THIS =====\n" + "\n".join(lines) + "\n===== END SECTION DATA ====="
+        if mode == 'technical':
+            sys_tmpl = ALBERT_TECH_SYSTEM
+        elif section in ALBERT_DATA_SECTIONS:
+            sys_tmpl = ALBERT_SECTION_SYSTEM
+        else:
+            sys_tmpl = ALBERT_INSIGHT_SYSTEM
         kind = 'technical briefing' if mode == 'technical' else 'insight'
         umsg = f"Write Albert's {kind} for the '{section}' section now, following all the rules."
 
