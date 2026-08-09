@@ -276,11 +276,12 @@ def fetch_block_height():
 
 
 def compute_cycle_context(price, regime_name):
+  try:
     height = fetch_block_height()
     if not height:
         return None
     interval = 210000
-    epoch = min(height // interval, 4)
+    epoch = max(0, min(height // interval, len(HALVINGS) - 1))
     reward = 50.0 / (2 ** epoch)
     last_block, last_date, _ = HALVINGS[epoch]
     next_block = (epoch + 1) * interval
@@ -317,6 +318,9 @@ def compute_cycle_context(price, regime_name):
         'est_days_to_next': est_days_to_next, 'cycle_perf_pct': cycle_perf,
         'cycle_progress_pct': progress, 'phase': phase,
     }
+  except Exception:  # noqa
+    traceback.print_exc()
+    return None
 
 
 def fetch_dominance(price_change_24h):
@@ -1676,7 +1680,7 @@ def get_smart_money_panel():
 # =====================================================================
 onchain_col = db['onchain_engine']
 ONCHAIN_TTL_SEC = 2 * 3600
-_onchain_state = {'running': False}
+_onchain_state = {}
 
 
 def _engine_get(url, params=None, headers=None, timeout=12):
@@ -1716,10 +1720,55 @@ def _okx(path, params=None):
     return None
 
 
+def _spark(vals, n=24, nd=4):
+    """Downsample a numeric series to <= n points for a tiny sparkline."""
+    vals = [v for v in (vals or []) if v is not None]
+    if len(vals) < 2:
+        return None
+    if len(vals) > n:
+        step = len(vals) / n
+        out = [vals[int(i * step)] for i in range(n)]
+        out[-1] = vals[-1]
+        vals = out
+    try:
+        return [round(float(v), nd) for v in vals]
+    except Exception:  # noqa
+        return None
+
+
+def _bdata_series(metric, key, days=30):
+    """Ascending-by-date value list from bitcoin-data.com (BGeometrics) for a date window."""
+    end = datetime.date.today()
+    start = end - datetime.timedelta(days=days)
+    js = _engine_get(f'https://bitcoin-data.com/v1/{metric}',
+                     params={'startday': start.isoformat(), 'endday': end.isoformat()})
+    if isinstance(js, list):
+        out = []
+        for x in js:
+            v = x.get(key)
+            if v is not None:
+                try:
+                    out.append(float(v))
+                except Exception:  # noqa
+                    pass
+        return out or None
+    return None
+
+
+def _fng_series(days=30):
+    """Fear & Greed values oldest->newest."""
+    js = _engine_get('https://api.alternative.me/fng/', params={'limit': days})
+    try:
+        vals = [int(x['value']) for x in js['data']]
+        return list(reversed(vals))  # API returns newest-first
+    except Exception:  # noqa
+        return None
+
+
 def build_smart_money_engine(gn_series=None):
     metrics, tally = [], {'b': 0, 'r': 0}
 
-    def add(name, value, s, inactive=False):
+    def add(name, value, s, inactive=False, spark=None):
         if not inactive:
             if s == 'Bullish':
                 tally['b'] += 1
@@ -1728,24 +1777,26 @@ def build_smart_money_engine(gn_series=None):
         m = {'name': name, 'value': value, 'signal': s}
         if inactive:
             m['inactive'] = True
+        if spark:
+            m['spark'] = spark
         metrics.append(m)
 
-    mz = _bdata_last('mvrv-zscore')
-    if mz and mz.get('mvrvZscore') is not None:
-        try:
-            z = float(mz['mvrvZscore'])
-            s = 'Bullish' if z < 1 else 'Bearish' if z > 5 else 'Neutral'
-            add('MVRV Z-score', f'{z:.2f}', s)
-        except Exception:  # noqa
-            pass
-    sp = _bdata_last('sopr')
-    if sp and sp.get('sopr') is not None:
-        try:
-            v = float(sp['sopr'])
-            s = 'Bullish' if v < 0.98 else 'Bearish' if v > 1.03 else 'Neutral'
-            add('SOPR', f'{v:.3f}', s)
-        except Exception:  # noqa
-            pass
+    mzs = _bdata_series('mvrv-zscore', 'mvrvZscore', 30)
+    z = mzs[-1] if mzs else None
+    if z is None:
+        mz = _bdata_last('mvrv-zscore')
+        z = float(mz['mvrvZscore']) if (mz and mz.get('mvrvZscore') is not None) else None
+    if z is not None:
+        s = 'Bullish' if z < 1 else 'Bearish' if z > 5 else 'Neutral'
+        add('MVRV Z-score', f'{z:.2f}', s, spark=_spark(mzs))
+    sps = _bdata_series('sopr', 'sopr', 30)
+    v = sps[-1] if sps else None
+    if v is None:
+        sp = _bdata_last('sopr')
+        v = float(sp['sopr']) if (sp and sp.get('sopr') is not None) else None
+    if v is not None:
+        s = 'Bullish' if v < 0.98 else 'Bearish' if v > 1.03 else 'Neutral'
+        add('SOPR', f'{v:.3f}', s, spark=_spark(sps))
     aa = _bc_chart('n-unique-addresses', '30days')
     if aa and len(aa) >= 2:
         try:
@@ -1753,9 +1804,11 @@ def build_smart_money_engine(gn_series=None):
             chg = round((a1 - a0) / a0 * 100, 1) if a0 else None
             if chg is not None:
                 s = 'Bullish' if chg > 3 else 'Bearish' if chg < -8 else 'Neutral'
-                add('Active addresses (30d)', f'{"+" if chg >= 0 else ""}{chg}%', s)
+                add('Active addresses (30d)', f'{"+" if chg >= 0 else ""}{chg}%', s,
+                    spark=_spark([float(p['y']) for p in aa], nd=0))
         except Exception:  # noqa
             pass
+    fgs = _fng_series(30)
     fg = _fng()
     if fg:
         try:
@@ -1763,26 +1816,29 @@ def build_smart_money_engine(gn_series=None):
             cls = fg[0].get('value_classification', '')
             # Contrarian read: extreme fear = accumulation opportunity, extreme greed = caution.
             s = 'Bullish' if val <= 25 else 'Bearish' if val >= 75 else 'Neutral'
-            add(f'Fear & Greed ({cls})', str(val), s)
+            add(f'Fear & Greed ({cls})', str(val), s, spark=_spark(fgs, nd=0))
         except Exception:  # noqa
             pass
     if gn_series:
         exch_chg = _gn_change_pct(gn_series.get('exch_balance'))
         if exch_chg is not None:
             s = 'Bullish' if exch_chg < -0.3 else 'Bearish' if exch_chg > 0.3 else 'Neutral'
-            add('Exchange balance (14d)', f'{"+" if exch_chg >= 0 else ""}{exch_chg}%', s)
+            add('Exchange balance (14d)', f'{"+" if exch_chg >= 0 else ""}{exch_chg}%', s,
+                spark=_spark([_gn_point_val(p) for p in (gn_series.get('exch_balance') or [])], nd=0))
         accum = _gn_val(gn_series.get('accum'))
         if accum is not None:
             try:
                 accum = float(accum)
                 s = 'Bullish' if accum >= 0.6 else 'Bearish' if accum <= 0.4 else 'Neutral'
-                add('Accumulation trend score', f'{accum:.2f}', s)
+                add('Accumulation trend score', f'{accum:.2f}', s,
+                    spark=_spark([_gn_point_val(p) for p in (gn_series.get('accum') or [])]))
             except Exception:  # noqa
                 pass
         lth_chg = _gn_change_pct(gn_series.get('lth'))
         if lth_chg is not None:
             s = 'Bullish' if lth_chg > 0.1 else 'Bearish' if lth_chg < -0.1 else 'Neutral'
-            add('Long-term holder supply (14d)', f'{"+" if lth_chg >= 0 else ""}{lth_chg}%', s)
+            add('Long-term holder supply (14d)', f'{"+" if lth_chg >= 0 else ""}{lth_chg}%', s,
+                spark=_spark([_gn_point_val(p) for p in (gn_series.get('lth') or [])], nd=0))
 
     if not metrics:
         return None
@@ -1795,10 +1851,12 @@ def build_smart_money_engine(gn_series=None):
             'as_of': datetime.datetime.utcnow().isoformat()}
 
 
-def build_derivatives_engine():
+def build_derivatives_engine(symbol='BTC'):
+    sym = (symbol or 'BTC').upper()
+    inst = f'{sym}-USDT-SWAP'
     metrics, tally = [], {'b': 0, 'r': 0}
 
-    def add(name, value, s, inactive=False, count=True):
+    def add(name, value, s, inactive=False, count=True, spark=None):
         if not inactive and count:
             if s == 'Bullish':
                 tally['b'] += 1
@@ -1807,16 +1865,19 @@ def build_derivatives_engine():
         m = {'name': name, 'value': value, 'signal': s}
         if inactive:
             m['inactive'] = True
+        if spark:
+            m['spark'] = spark
         metrics.append(m)
 
-    oi = _okx('/api/v5/public/open-interest', {'instType': 'SWAP', 'instId': 'BTC-USDT-SWAP'})
-    oih = _okx('/api/v5/rubik/stat/contracts/open-interest-volume', {'ccy': 'BTC', 'period': '1D'})
-    oi_chg = None
+    oi = _okx('/api/v5/public/open-interest', {'instType': 'SWAP', 'instId': inst})
+    oih = _okx('/api/v5/rubik/stat/contracts/open-interest-volume', {'ccy': sym, 'period': '1D'})
+    oi_chg, oi_spark = None, None
     if oih and len(oih) >= 2:
         try:
+            rows = list(reversed(oih))  # oldest -> newest
+            oi_spark = _spark([float(r[1]) for r in rows], nd=0)
             latest = float(oih[0][1])
-            idx = min(7, len(oih) - 1)
-            prev = float(oih[idx][1])
+            prev = float(oih[min(7, len(oih) - 1)][1])
             oi_chg = round((latest - prev) / prev * 100, 1) if prev else None
         except Exception:  # noqa
             pass
@@ -1826,27 +1887,35 @@ def build_derivatives_engine():
             val = f'${oi_usd / 1e9:.2f}B'
             if oi_chg is not None:
                 val += f' ({"+" if oi_chg >= 0 else ""}{oi_chg}% 7d)'
-            add('Futures open interest', val, 'Neutral', count=False)
+            add('Futures open interest', val, 'Neutral', count=False, spark=oi_spark)
         except Exception:  # noqa
             pass
-    fr = _okx('/api/v5/public/funding-rate', {'instId': 'BTC-USDT-SWAP'})
+    fr = _okx('/api/v5/public/funding-rate', {'instId': inst})
+    frh = _okx('/api/v5/public/funding-rate-history', {'instId': inst, 'limit': '30'})
+    fr_spark = None
+    if frh:
+        try:
+            fr_spark = _spark([float(r['fundingRate']) * 100 for r in reversed(frh)], nd=4)
+        except Exception:  # noqa
+            pass
     if fr:
         try:
             rate = float(fr[0]['fundingRate']) * 100  # % per funding interval
             s = ('Bearish' if rate > 0.03 else 'Bullish' if rate > 0.002
                  else 'Bearish' if rate < 0 else 'Neutral')
-            add('Funding rate', f'{rate:+.4f}%', s)
+            add('Funding rate', f'{rate:+.4f}%', s, spark=fr_spark)
         except Exception:  # noqa
             pass
-    ls = _okx('/api/v5/rubik/stat/contracts/long-short-account-ratio', {'ccy': 'BTC', 'period': '1D'})
+    ls = _okx('/api/v5/rubik/stat/contracts/long-short-account-ratio', {'ccy': sym, 'period': '1D'})
     if ls:
         try:
             ratio = float(ls[0][1])
             s = 'Bearish' if ratio > 2 else 'Bullish' if ratio < 1 else 'Neutral'
-            add('Long/short account ratio', f'{ratio:.2f}', s)
+            add('Long/short account ratio', f'{ratio:.2f}', s,
+                spark=_spark([float(r[1]) for r in reversed(ls)]))
         except Exception:  # noqa
             pass
-    tv = _okx('/api/v5/rubik/stat/taker-volume', {'ccy': 'BTC', 'instType': 'SPOT', 'period': '1D'})
+    tv = _okx('/api/v5/rubik/stat/taker-volume', {'ccy': sym, 'instType': 'SPOT', 'period': '1D'})
     if tv:
         try:
             sell = float(tv[0][1])
@@ -1854,11 +1923,13 @@ def build_derivatives_engine():
             r = buy / sell if sell else None
             if r:
                 s = 'Bullish' if r > 1.05 else 'Bearish' if r < 0.95 else 'Neutral'
-                add('Taker buy/sell ratio', f'{r:.2f}', s)
+                tv_spark = _spark([(float(x[2]) / float(x[1])) for x in reversed(tv) if float(x[1])])
+                add('Taker buy/sell ratio', f'{r:.2f}', s, spark=tv_spark)
         except Exception:  # noqa
             pass
-    # ETF net flow: no free, server-reachable feed -> shown as Inactive
-    add('Spot ETF net flow (1d)', 'Inactive — paid feed required', 'Neutral', inactive=True)
+    # Spot ETF net flow: no free, server-reachable feed. Only BTC & ETH have US spot ETFs.
+    if sym in ('BTC', 'ETH'):
+        add('Spot ETF net flow (1d)', 'Inactive — paid feed required', 'Neutral', inactive=True)
 
     if not [m for m in metrics if not m.get('inactive')]:
         return None
@@ -1866,38 +1937,46 @@ def build_derivatives_engine():
     headline = ('Derivatives leaning bullish' if net >= 2
                 else 'Derivatives leaning bearish' if net <= -2
                 else 'Derivatives mixed / neutral')
-    return {'demo': False, 'source': 'OKX (derivatives) · ETF flow inactive',
-            'headline': headline, 'metrics': metrics,
+    src = f'OKX ({sym} derivatives)' + (' · ETF flow inactive' if sym in ('BTC', 'ETH') else '')
+    return {'demo': False, 'source': src, 'headline': headline, 'metrics': metrics,
             'as_of': datetime.datetime.utcnow().isoformat()}
 
 
-def _refresh_onchain_bg():
-    if _onchain_state.get('running'):
+def _refresh_onchain_bg(symbol='BTC'):
+    sym = (symbol or 'BTC').upper()
+    if _onchain_state.get(sym):
         return
-    _onchain_state['running'] = True
+    _onchain_state[sym] = True
     try:
-        gc = glassnode_col.find_one({'_id': 'smart_money_btc'}) or {}
-        gn = gc.get('series')
-        if GLASSNODE_API_KEY and (time.time() - gc.get('fetched_ts', 0) >= GLASSNODE_TTL_SEC):
-            threading.Thread(target=_refresh_glassnode_bg, daemon=True).start()
-        sm = build_smart_money_engine(gn)
-        dv = build_derivatives_engine()
-        onchain_col.update_one({'_id': 'btc'}, {'$set': {
-            '_id': 'btc', 'fetched_ts': time.time(),
+        sm = None
+        if sym == 'BTC':
+            gc = glassnode_col.find_one({'_id': 'smart_money_btc'}) or {}
+            gn = gc.get('series')
+            if GLASSNODE_API_KEY and (time.time() - gc.get('fetched_ts', 0) >= GLASSNODE_TTL_SEC):
+                threading.Thread(target=_refresh_glassnode_bg, daemon=True).start()
+            sm = build_smart_money_engine(gn)
+        dv = build_derivatives_engine(sym)
+        doc_id = 'btc' if sym == 'BTC' else f'onchain_{sym}'
+        onchain_col.update_one({'_id': doc_id}, {'$set': {
+            '_id': doc_id, 'symbol': sym, 'fetched_ts': time.time(),
             'fetched_at': datetime.datetime.utcnow().isoformat(),
             'smart_money': sm, 'institutional': dv}}, upsert=True)
     except Exception:  # noqa
         traceback.print_exc()
     finally:
-        _onchain_state['running'] = False
+        _onchain_state[sym] = False
 
 
-def get_onchain_panels():
-    """Return cached {smart_money, institutional} real panels; refresh in background when stale."""
-    c = onchain_col.find_one({'_id': 'btc'}) or {}
+def get_onchain_panels(symbol='BTC'):
+    """Return cached {smart_money, institutional} real panels for a coin; refresh in background when stale.
+    Smart Money (on-chain valuation) is BTC-only; altcoins get the OKX derivatives panel only."""
+    sym = (symbol or 'BTC').upper()
+    doc_id = 'btc' if sym == 'BTC' else f'onchain_{sym}'
+    c = onchain_col.find_one({'_id': doc_id}) or {}
     now = time.time()
-    if (not c.get('smart_money') and not c.get('institutional')) or (now - c.get('fetched_ts', 0) >= ONCHAIN_TTL_SEC):
-        threading.Thread(target=_refresh_onchain_bg, daemon=True).start()
+    empty = (not c.get('smart_money') and not c.get('institutional'))
+    if empty or (now - c.get('fetched_ts', 0) >= ONCHAIN_TTL_SEC):
+        threading.Thread(target=_refresh_onchain_bg, args=(sym,), daemon=True).start()
     return {'smart_money': c.get('smart_money'), 'institutional': c.get('institutional')}
 
 
@@ -3820,6 +3899,11 @@ def compute_coin_dashboard(symbol):
         dominance = compute_coin_dominance(symbol, day_change)
     except Exception:  # noqa
         traceback.print_exc()
+    institutional = None
+    try:
+        institutional = get_onchain_panels(symbol).get('institutional')
+    except Exception:  # noqa
+        traceback.print_exc()
 
     doc = {
         'id': str(uuid.uuid4()),
@@ -3861,7 +3945,7 @@ def compute_coin_dashboard(symbol):
         'alerts': alerts,
         # BTC-only engines (hidden for altcoins in UI)
         'live_record': None, 'news_forecast_link': None, 'data_health': None,
-        'event_calendar': None, 'smart_money': None, 'institutional': None,
+        'event_calendar': None, 'smart_money': None, 'institutional': institutional,
         'prediction_ledger': None, 'bitmark': None, 'cycle': None, 'dominance': dominance,
         'crossmarket': None, 'policy': None, 'smart_alerts': [],
     }

@@ -114,7 +114,7 @@ const sec = (id) => SECTIONS.find(s => s.id === id)
   || { id, label: id, icon: Info, blurb: '' };
 
 // Sections that are Bitcoin-specific and hidden from the nav when an altcoin is selected.
-const BTC_ONLY_SECTIONS = ['smartmoney', 'institutional', 'macro', 'events', 'timemachine'];
+const BTC_ONLY_SECTIONS = ['smartmoney', 'macro', 'events', 'timemachine'];
 // Sections removed from the app entirely (superseded by the global coin picker).
 const REMOVED_SECTIONS = ['compare'];
 // The currently-selected coin flows through this context so deep components
@@ -2600,6 +2600,27 @@ function AskQuantSection({ d }) {
 function DemoBadge({ label = 'Inactive' }) {
   return <span className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-slate-300">{label}</span>;
 }
+const sigHex = (s) => s === 'Bullish' ? '#34d399' : s === 'Bearish' ? '#f87171' : '#94a3b8';
+function Spark({ data, color = '#94a3b8', width = 72, height = 22 }) {
+  if (!data || data.length < 2) return null;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const rng = (max - min) || 1;
+  const pts = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * (width - 2) + 1;
+    const y = height - 1 - ((v - min) / rng) * (height - 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const last = data[data.length - 1];
+  const lx = width - 1;
+  const ly = height - 1 - ((last - min) / rng) * (height - 2);
+  return (
+    <svg width={width} height={height} className="shrink-0" aria-hidden="true">
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={lx.toFixed(1)} cy={ly.toFixed(1)} r="1.6" fill={color} />
+    </svg>
+  );
+}
 const sigColor = (s) => s === 'Bullish' ? 'text-emerald-400' : s === 'Bearish' ? 'text-red-400' : 'text-slate-400';
 const riskStateColor = (s) => ({ Low: 'text-emerald-400', Normal: 'text-lime-400', Deep: 'text-emerald-400',
   Elevated: 'text-amber-400', High: 'text-orange-400', Thin: 'text-orange-400', Extreme: 'text-red-400' }[s] || 'text-slate-300');
@@ -2695,6 +2716,7 @@ function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
             <div key={i} className={`flex items-center gap-3 rounded-lg border p-3 text-sm ${m.inactive ? 'border-slate-800/60 bg-slate-950/20 opacity-60' : 'border-slate-800 bg-slate-950/40'}`}>
               <span className="flex-1 text-slate-300">{m.name}</span>
               {m.inactive && <DemoBadge />}
+              {!m.inactive && m.spark && <Spark data={m.spark} color={sigHex(m.signal)} />}
               <span className="font-mono text-slate-200">{m.value}</span>
               {!m.inactive && <span className={`w-16 text-right text-xs font-semibold ${sigColor(m.signal)}`}>{m.signal}</span>}
             </div>
