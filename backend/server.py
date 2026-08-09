@@ -2231,6 +2231,149 @@ def get_leverage(timeframe='4H', refresh=False):
     return c.get('data')
 
 
+# =====================================================================
+# PHASE A: Fear & Greed / Network Health / Exchange Net-Flow (REAL, keyless)
+# =====================================================================
+misc_col = db['misc_cache']
+usage_col = db['usage_stats']
+
+
+def _bump_usage(kind, n=1):
+    """Lightweight LLM/usage counter for the Admin screen (best-effort, non-blocking)."""
+    try:
+        today = datetime.date.today().isoformat()
+        usage_col.update_one({'_id': f'{kind}:{today}'},
+                             {'$inc': {'count': n}, '$set': {'kind': kind, 'day': today}}, upsert=True)
+        usage_col.update_one({'_id': f'{kind}:total'},
+                             {'$inc': {'count': n}, '$set': {'kind': kind}}, upsert=True)
+    except Exception:  # noqa
+        pass
+
+
+def _misc_get(key, ttl, builder):
+    c = misc_col.find_one({'_id': key}, {'_id': 0}) or {}
+    if c.get('data') and (time.time() - c.get('fetched_ts', 0)) < ttl:
+        return c['data']
+    try:
+        data = builder()
+        if data:
+            misc_col.update_one({'_id': key}, {'$set': {'_id': key, 'data': data,
+                                'fetched_ts': time.time()}}, upsert=True)
+            return data
+    except Exception:  # noqa
+        traceback.print_exc()
+    return c.get('data')
+
+
+def compute_fear_greed():
+    j = _engine_get('https://api.alternative.me/fng/?limit=90&format=json')
+    data = (j or {}).get('data') or []
+    if not data:
+        return None
+    def _row(r):
+        return {'value': int(r['value']), 'label': r['value_classification'],
+                'ts': int(r['timestamp'])}
+    latest = _row(data[0])
+    hist = [_row(r) for r in reversed(data)]  # oldest -> newest
+    vals = [h['value'] for h in hist]
+    wk_ago = hist[-8]['value'] if len(hist) >= 8 else hist[0]['value']
+    mo_ago = hist[-31]['value'] if len(hist) >= 31 else hist[0]['value']
+    v = latest['value']
+    if v <= 25:
+        read = ("Sentiment is in Fear/Extreme Fear. Historically, crowd fear can mark points of "
+                "capitulation where downside is increasingly priced in — but fear alone is not a bottom signal.")
+    elif v >= 75:
+        read = ("Sentiment is in Greed/Extreme Greed. Crowd euphoria has often coincided with local "
+                "tops and rising fragility — it suggests caution, not a guaranteed reversal.")
+    else:
+        read = ("Sentiment is broadly neutral — the crowd is neither fearful nor greedy, so this indicator "
+                "is not flagging an extreme right now.")
+    return {'value': v, 'label': latest['label'], 'ts': latest['ts'],
+            'week_ago': wk_ago, 'month_ago': mo_ago, 'history': hist,
+            'read': read, 'source': 'alternative.me Crypto Fear & Greed Index'}
+
+
+def compute_network_health():
+    hr = _engine_get('https://mempool.space/api/v1/mining/hashrate/3m') or {}
+    da = _engine_get('https://mempool.space/api/v1/difficulty-adjustment') or {}
+    fees = _engine_get('https://mempool.space/api/v1/fees/recommended') or {}
+    mp = _engine_get('https://mempool.space/api/mempool') or {}
+    cur_hr = hr.get('currentHashrate')
+    cur_diff = hr.get('currentDifficulty')
+    hseries = [{'ts': x['timestamp'], 'v': round(x['avgHashrate'] / 1e18, 1)}
+               for x in (hr.get('hashrates') or [])][-90:]  # EH/s
+    fast = fees.get('fastestFee'); half = fees.get('halfHourFee'); hour = fees.get('hourFee')
+    congestion = ('Low' if (mp.get('count') or 0) < 20000 else 'Elevated'
+                  if (mp.get('count') or 0) < 80000 else 'High')
+    fee_state = ('Cheap' if (fast or 0) <= 10 else 'Normal' if (fast or 0) <= 50 else 'Expensive')
+    dchg = da.get('difficultyChange')
+    # simple health read
+    read = (f"Fees are {fee_state.lower()} (~{fast} sat/vB for a fast confirm) and the mempool looks "
+            f"{congestion.lower()} ({(mp.get('count') or 0):,} txns waiting). "
+            f"Next difficulty adjustment is estimated {('+' if (dchg or 0) >= 0 else '')}{(dchg or 0):.1f}% "
+            f"in ~{round((da.get('remainingTime') or 0)/86400000, 1)} days. "
+            "Hashrate near record levels reflects a well-secured network.")
+    return {
+        'hashrate_ehs': (round(cur_hr / 1e18, 1) if cur_hr else (hseries[-1]['v'] if hseries else None)),
+        'difficulty': cur_diff, 'difficulty_change_pct': (round(dchg, 2) if dchg is not None else None),
+        'retarget_days': round((da.get('remainingTime') or 0) / 86400000, 1),
+        'retarget_progress_pct': round(da.get('progressPercent') or 0, 1),
+        'fees': {'fastest': fast, 'half_hour': half, 'hour': hour, 'state': fee_state},
+        'mempool': {'count': mp.get('count'), 'vsize': mp.get('vsize'), 'congestion': congestion},
+        'hashrate_series': hseries, 'read': read,
+        'source': 'mempool.space (hashrate, difficulty, fees, mempool)'}
+
+
+def compute_exchange_flows():
+    """Aggregate BTC balance held by tracked EXCHANGE wallets over time (REAL, reconstructed
+    from on-chain history). Net decline = coins leaving exchanges (bullish supply reduction)."""
+    meta = whale_col.find_one({'_id': '_meta'}) or {}
+    price = meta.get('price')
+    exch = [w for w in WHALE_SEED if w['category'] == 'Exchange']
+    # gather each exchange whale's reconstructed daily series
+    per = []
+    all_dates = set()
+    for w in exch:
+        h = get_whale_history(w['address'])
+        s = h.get('series') or []
+        if s:
+            per.append({a['date']: a['bal'] for a in s})
+            all_dates.update(a['date'] for a in s)
+    if not per:
+        return None
+    dates = sorted(all_dates)
+    agg = []
+    lasts = [None] * len(per)
+    for dt in dates:
+        tot = 0.0
+        for i, m in enumerate(per):
+            if dt in m:
+                lasts[i] = m[dt]
+            if lasts[i] is not None:
+                tot += lasts[i]
+        agg.append({'date': dt, 'balance': round(tot, 1)})
+    # keep a reasonable window (last ~180 days) and downsample
+    agg = agg[-180:]
+    def _chg(days):
+        if len(agg) < 2:
+            return None
+        cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+        past = [a for a in agg if a['date'] <= cutoff]
+        base = past[-1]['balance'] if past else agg[0]['balance']
+        return round(agg[-1]['balance'] - base, 1)
+    net30 = _chg(30)
+    trend = ('Outflow (bullish supply reduction)' if (net30 or 0) < -200
+             else 'Inflow (rising exchange supply)' if (net30 or 0) > 200 else 'Flat')
+    return {'series': agg, 'current': agg[-1]['balance'], 'price': price,
+            'net_7d': _chg(7), 'net_30d': net30, 'net_90d': _chg(90), 'trend': trend,
+            'read': (f"Tracked exchange wallets hold ~{round(agg[-1]['balance']):,} BTC. Over 30 days the "
+                     f"balance changed {('+' if (net30 or 0) >= 0 else '')}{net30:,.0f} BTC — {trend.lower()}. "
+                     "Coins leaving exchanges typically reduce immediately sellable supply."),
+            'source': 'mempool.space (exchange-wallet reconstruction)'}
+
+
+
+
 
 def _refresh_onchain_bg(symbol='BTC'):
     sym = (symbol or 'BTC').upper()
@@ -4373,11 +4516,14 @@ def etf_flows_feed(refresh: int = 0):
         net_1d = totals[0] if totals else None
         net_7d = round(sum(totals[:7]), 1) if totals else None
         net_30d = round(sum(totals[:30]), 1) if totals else None
-        # cumulative over FULL history (oldest -> newest) for the long-trend chart
+        # cumulative over FULL history (oldest -> newest) for the long-trend chart.
+        # Include real BTC close (from TFTC dataset) so the UI can overlay price vs demand.
         cum, running = [], 0.0
         for d in reversed(daily):
             running += (d.get('total') or 0)
-            cum.append({'date': d['date'], 'cum': round(running, 1)})
+            bc = d.get('btc_close')
+            cum.append({'date': d['date'], 'cum': round(running, 1),
+                        'price': (round(bc) if bc else None)})
         cum_total = round(running, 1)  # net flow since inception
         # downsample cumulative to <= ~180 points for a light payload
         if len(cum) > 180:
@@ -4385,6 +4531,7 @@ def etf_flows_feed(refresh: int = 0):
             cum_ds = [cum[int(i * step)] for i in range(180)]
             cum_ds[-1] = cum[-1]
             cum = cum_ds
+        has_price = any(x.get('price') for x in cum)
         # per-issuer leaderboard over the RECENT 30-day window (current demand)
         issuers = c.get('issuers') or []
         recent = daily[:30]
@@ -4395,7 +4542,7 @@ def etf_flows_feed(refresh: int = 0):
         board.sort(key=lambda x: x['window_total'], reverse=True)
         return {'status': 'ready', 'symbol': 'BTC', 'unit': 'USD millions',
                 'issuers': issuers, 'daily': daily, 'cumulative': cum,
-                'cum_total': cum_total, 'history_days': len(daily),
+                'cum_total': cum_total, 'history_days': len(daily), 'has_price': has_price,
                 'leaderboard': board, 'leaderboard_window': 30,
                 'summary': c.get('summary') or {},
                 'net_1d': net_1d, 'net_7d': net_7d, 'net_30d': net_30d,
@@ -4405,6 +4552,147 @@ def etf_flows_feed(refresh: int = 0):
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error', 'daily': []}
+
+
+@app.get('/api/v1/fear-greed')
+def fear_greed_feed():
+    """Crypto Fear & Greed Index (REAL, keyless — alternative.me)."""
+    d = _misc_get('fear_greed', 30 * 60, compute_fear_greed)
+    return {'status': 'ready', **d} if d else {'status': 'computing'}
+
+
+@app.get('/api/v1/network-health')
+def network_health_feed():
+    """Bitcoin network health — hashrate, difficulty, mempool & fees (REAL, keyless — mempool.space)."""
+    d = _misc_get('network_health', 10 * 60, compute_network_health)
+    return {'status': 'ready', **d} if d else {'status': 'computing'}
+
+
+@app.get('/api/v1/exchange-flows')
+def exchange_flows_feed(refresh: int = 0):
+    """Aggregate BTC held by tracked exchange wallets over time (REAL, on-chain reconstruction)."""
+    if refresh:
+        d = compute_exchange_flows()
+        if d:
+            misc_col.update_one({'_id': 'exchange_flows'}, {'$set': {'_id': 'exchange_flows',
+                                'data': d, 'fetched_ts': time.time()}}, upsert=True)
+    else:
+        d = _misc_get('exchange_flows', 6 * 3600, compute_exchange_flows)
+    return {'status': 'ready', **d} if d else {'status': 'computing'}
+
+
+@app.get('/api/v1/admin/overview')
+def admin_overview():
+    """Admin dashboard: integrations, data freshness, usage, costs & system health."""
+    now = time.time()
+
+    def _age(ts):
+        if not ts:
+            return None
+        return round((now - ts) / 60, 1)  # minutes
+
+    def _cache_ts(col, _id, field='fetched_ts'):
+        d = col.find_one({'_id': _id}, {field: 1, 'fetched_at': 1}) or {}
+        return d.get(field)
+
+    # ---- integrations (no secrets exposed) ----
+    integrations = [
+        {'name': 'Gemini (' + str(CHAT_MODEL) + ')', 'category': 'LLM / Albert', 'auth': 'Emergent LLM key',
+         'status': 'Active' if (EMERGENT_LLM_KEY and _HAS_LLM) else 'Inactive', 'cost': 'Metered (Emergent key)'},
+        {'name': 'OKX public API', 'category': 'Derivatives / Leverage', 'auth': 'Keyless',
+         'status': 'Active', 'cost': 'Free'},
+        {'name': 'mempool.space', 'category': 'Whales / Network health', 'auth': 'Keyless',
+         'status': 'Active', 'cost': 'Free'},
+        {'name': 'blockchain.info', 'category': 'Whale balances', 'auth': 'Keyless', 'status': 'Active', 'cost': 'Free'},
+        {'name': 'tftc.io (Farside data)', 'category': 'ETF flows', 'auth': 'Keyless', 'status': 'Active', 'cost': 'Free'},
+        {'name': 'CoinGecko', 'category': 'Price', 'auth': 'Keyless', 'status': 'Active', 'cost': 'Free'},
+        {'name': 'alternative.me', 'category': 'Fear & Greed', 'auth': 'Keyless', 'status': 'Active', 'cost': 'Free'},
+        {'name': 'Glassnode / BGeometrics', 'category': 'Smart money on-chain', 'auth': 'User key (Glassnode)',
+         'status': 'Active', 'cost': 'Free tier + user key'},
+        {'name': 'CoinGlass', 'category': 'Liquidations / Leverage heatmap', 'auth': 'API key required',
+         'status': 'Inactive', 'cost': 'Paid — not connected'},
+        {'name': 'ElevenLabs', 'category': 'Albert voice', 'auth': 'API key required',
+         'status': 'Inactive', 'cost': 'Paid — not connected'},
+        {'name': 'SendGrid', 'category': 'Email digests', 'auth': 'API key required',
+         'status': 'Inactive', 'cost': 'Paid — not connected'},
+    ]
+    active = sum(1 for i in integrations if i['status'] == 'Active')
+
+    # ---- data freshness (minutes since last successful fetch) ----
+    freshness = [
+        {'source': 'ETF flows', 'age_min': _age(_cache_ts(etf_col, 'btc'))},
+        {'source': 'Whale balances', 'age_min': _age((whale_col.find_one({'_id': '_meta'}) or {}).get('fetched_ts'))},
+        {'source': 'Leverage (4H)', 'age_min': _age(_cache_ts(lev_col, 'BTC:4H'))},
+        {'source': 'Fear & Greed', 'age_min': _age(_cache_ts(misc_col, 'fear_greed'))},
+        {'source': 'Network health', 'age_min': _age(_cache_ts(misc_col, 'network_health'))},
+        {'source': 'Exchange flows', 'age_min': _age(_cache_ts(misc_col, 'exchange_flows'))},
+        {'source': 'On-chain panels', 'age_min': _age(_cache_ts(onchain_col, 'btc'))},
+    ]
+
+    # ---- usage (real counters + DB doc counts) ----
+    def _u(kind):
+        d = usage_col.find_one({'_id': f'{kind}:total'}) or {}
+        t = usage_col.find_one({'_id': f'{kind}:{datetime.date.today().isoformat()}'}) or {}
+        return {'total': d.get('count', 0), 'today': t.get('count', 0)}
+    ins, brf = _u('llm_insight'), _u('llm_brief')
+    llm_total = ins['total'] + brf['total']
+    llm_today = ins['today'] + brf['today']
+    # rough cost estimate (clearly labelled — NOT a billed figure)
+    est_per_call_usd = 0.002  # conservative rough estimate for a Gemini Flash insight
+    usage = {
+        'llm_calls_total': llm_total, 'llm_calls_today': llm_today,
+        'llm_insight': ins, 'llm_brief': brf,
+        'cached_insights': insights_col.count_documents({}),
+        'alerts_total': smart_alerts_col.count_documents({}),
+        'whales_tracked': whale_col.count_documents({'_id': {'$ne': '_meta'}}),
+        'runs_logged': runs_col.count_documents({}),
+    }
+    costs = {
+        'note': ('Free/keyless feeds cost $0. The only metered cost is the LLM (Gemini via the Emergent '
+                 'LLM key). The figures below are ROUGH estimates from call counts — NOT billed amounts. '
+                 'See your Emergent dashboard for the exact credit balance & spend.'),
+        'emergent': {
+            'service': 'Emergent Universal LLM key',
+            'model': str(CHAT_MODEL),
+            'status': 'Active' if (EMERGENT_LLM_KEY and _HAS_LLM) else 'Inactive',
+            'llm_calls_total': llm_total,
+            'llm_calls_today': llm_today,
+            'est_per_call_usd': est_per_call_usd,
+            'est_cost_total_usd': round(llm_total * est_per_call_usd, 2),
+            'est_cost_today_usd': round(llm_today * est_per_call_usd, 2),
+            'billing_note': 'Estimate only — actual usage & remaining credits are shown in the Emergent dashboard.',
+        },
+        'est_llm_cost_usd': round(llm_total * est_per_call_usd, 2),
+        'est_llm_cost_today_usd': round(llm_today * est_per_call_usd, 2),
+        'paid_feeds_active': [i['name'] for i in integrations if i['status'] == 'Active' and 'key' in i['auth'].lower()],
+        'paid_feeds_available': [i['name'] for i in integrations if i['status'] == 'Inactive'],
+    }
+
+    # ---- scheduler jobs ----
+    jobs = []
+    try:
+        for j in scheduler.get_jobs():
+            jobs.append({'id': j.id, 'next_run': (j.next_run_time.isoformat() if j.next_run_time else None)})
+    except Exception:  # noqa
+        pass
+
+    # ---- collection sizes ----
+    collections = {}
+    try:
+        for cn in ['runs', 'smart_alerts', 'whale_wallets', 'whale_history', 'whale_tx_feed',
+                   'etf_flows', 'leverage_engine', 'onchain_engine', 'albert_insights',
+                   'misc_cache', 'usage_stats']:
+            try:
+                collections[cn] = db[cn].count_documents({})
+            except Exception:  # noqa
+                pass
+    except Exception:  # noqa
+        pass
+
+    return {'status': 'ready', 'as_of': datetime.datetime.utcnow().isoformat(),
+            'integrations': integrations, 'integrations_active': active,
+            'integrations_total': len(integrations), 'freshness': freshness,
+            'usage': usage, 'costs': costs, 'scheduler_jobs': jobs, 'collections': collections}
 
 
 
@@ -4836,6 +5124,7 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
                 best = text
                 break
         text = best
+        _bump_usage('llm_insight')
         if not text:
             return {'status': 'fallback', 'reason': 'empty'}
         # Only cache complete responses so an occasional partial regenerates on the next load.
@@ -4850,6 +5139,109 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
     except Exception as ex:  # noqa
         traceback.print_exc()
         return {'status': 'fallback', 'reason': 'error'}
+
+
+ALBERT_BRIEF_SYSTEM = (
+    "You are 'Albert', the HuCentAI Quant analyst in the BTCIQ Bitcoin dashboard, writing a short "
+    "MORNING BRIEF for a busy non-trader — a 30-second read of the whole market state. Use ONLY the data "
+    "below. If a data source is unavailable or marked 'no data', explicitly say 'no [X] data available' and "
+    "do NOT invent or infer values for it. Output EXACTLY this shape and nothing else:\n"
+    "First, 4-5 lines each starting with '- ' (a single crisp observation pulling from decision, risk, "
+    "whales/exchange flows, ETF demand, leverage/positioning, sentiment and network health).\n"
+    "Then one final line starting with 'TAKE: ' giving the overall one-sentence read.\n"
+    "Measured, evidence-based language (suggests/indicates/may/could/elevated/decreasing). Never say "
+    "definitely/guaranteed/will happen. No greeting, no markdown headers, no extra commentary.\n\n"
+    "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
+)
+
+
+def _brief_context():
+    run = runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0}) or {}
+    L = []
+    dec = run.get('decision') or {}
+    if dec:
+        L.append(f"DECISION: {dec.get('label') or dec.get('stance')} (confidence {dec.get('confidence')}). {dec.get('summary') or ''}".strip())
+    rk = run.get('risk') or {}
+    if rk:
+        L.append(f"RISK: {rk.get('level')} (score {rk.get('score')}/100), realised vol {rk.get('realised_vol_annual')}% ann.")
+    try:
+        imp = compute_whale_impact()
+        L.append(f"WHALES: 30d net flow {imp.get('net_flow_30d')} BTC -> {imp.get('trend')} (holders {round(imp.get('holder_balance') or 0):,} BTC, exchanges {round(imp.get('exchange_balance') or 0):,} BTC).")
+    except Exception:  # noqa
+        pass
+    try:
+        xf = _misc_get('exchange_flows', 6 * 3600, compute_exchange_flows)
+        if xf:
+            L.append(f"EXCHANGE FLOW: {xf.get('trend')}; 30d {xf.get('net_30d')} BTC.")
+    except Exception:  # noqa
+        pass
+    try:
+        es = etf_summary()
+        if es and es.get('net_1d') is not None:
+            L.append(f"ETF FLOWS: {es['net_1d']:+.0f} $M last day, {es.get('net_7d'):+.0f} $M last 7d.")
+        else:
+            L.append("ETF FLOWS: no ETF data available.")
+    except Exception:  # noqa
+        pass
+    try:
+        lev = get_leverage('4H')
+        if lev:
+            s = lev.get('summary', {})
+            L.append(f"LEVERAGE: pressure {s.get('pressure')}, bias {s.get('bias')}, {s.get('squeeze')}; long {lev.get('positioning', {}).get('long_pct')}% / short {lev.get('positioning', {}).get('short_pct')}%.")
+    except Exception:  # noqa
+        pass
+    try:
+        fg = _misc_get('fear_greed', 30 * 60, compute_fear_greed)
+        if fg:
+            L.append(f"SENTIMENT: Fear & Greed {fg.get('value')} ({fg.get('label')}).")
+    except Exception:  # noqa
+        pass
+    try:
+        nh = _misc_get('network_health', 10 * 60, compute_network_health)
+        if nh:
+            L.append(f"NETWORK: fees {nh.get('fees', {}).get('state')} (~{nh.get('fees', {}).get('fastest')} sat/vB), mempool {nh.get('mempool', {}).get('congestion')}, hashrate ~{nh.get('hashrate_ehs')} EH/s.")
+    except Exception:  # noqa
+        pass
+    return "\n".join(L), run.get('as_of')
+
+
+@app.get('/api/v1/albert/brief')
+async def albert_brief(refresh: int = 0):
+    """Albert's Morning Brief — one auto-generated daily summary of the whole market state."""
+    today = datetime.date.today().isoformat()
+    cache_id = f'brief:{today}'
+    if not refresh:
+        c = insights_col.find_one({'_id': cache_id}, {'_id': 0})
+        if c and c.get('text'):
+            return {'status': 'ready', 'cached': True, **c}
+    try:
+        ctx, as_of = _brief_context()
+        if not ctx.strip():
+            return {'status': 'computing'}
+        if not (EMERGENT_LLM_KEY and _HAS_LLM):
+            return {'status': 'ready', 'cached': False, 'text': ctx,
+                    'observations': [l for l in ctx.split('\n')][:5], 'take': '', 'as_of': as_of}
+        chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'brief-{uuid.uuid4().hex[:10]}',
+                        system_message=ALBERT_BRIEF_SYSTEM.format(ctx=ctx))
+                .with_model('gemini', CHAT_MODEL).with_params(temperature=0.4, max_tokens=6000))
+        text = (getattr(reply, 'text', None) or str(reply)).strip()
+        _bump_usage('llm_brief')
+        obs, take = [], ''
+        for ln in text.split('\n'):
+            ln = ln.strip()
+            if ln.upper().startswith('TAKE:'):
+                take = ln[5:].strip()
+            elif ln.startswith('-'):
+                obs.append(ln.lstrip('-').strip())
+        now_iso = datetime.datetime.utcnow().isoformat()
+        doc = {'text': text, 'observations': obs, 'take': take, 'as_of': as_of,
+               'model': CHAT_MODEL, 'generated_at': now_iso}
+        insights_col.update_one({'_id': cache_id}, {'$set': {'_id': cache_id, 'kind': 'brief', **doc}}, upsert=True)
+        return {'status': 'ready', 'cached': False, **doc}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'fallback'}
+
 
 
 

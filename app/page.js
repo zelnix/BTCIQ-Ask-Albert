@@ -91,8 +91,12 @@ const SECTIONS = [
     blurb: 'Chat with Albert, BTCIQ’s HuCentAI Quant Analyst, in plain English — "Why did the score fall?", "What could move Bitcoin next?" — grounded strictly in the live dashboard numbers. He never invents data.' },
   { id: 'alerts', label: 'Alerts', icon: Bell,
     blurb: 'A running feed of what just changed and what is coming: regime shifts, decision changes, data-trust drops and upcoming high-impact events.' },
+  { id: 'network', label: 'Network & Sentiment', icon: Activity,
+    blurb: 'Is the network healthy and how does the crowd feel? Live hashrate, mining difficulty, mempool congestion & fees, plus the Crypto Fear & Greed Index with Albert’s read on crowd extremes.' },
   { id: 'settings', label: 'Settings', icon: Cpu,
     blurb: 'Admin passcode for manual forecast runs, the list of data sources and their status, and BTCIQ’s about & compliance information.' },
+  { id: 'admin', label: 'Admin', icon: ShieldCheck,
+    blurb: 'Integrations, data-source freshness, usage, costs and system health for the BTCIQ platform.' },
 ];
 
 // Legacy section metadata for sub-panels that are now grouped under the new nav
@@ -118,7 +122,7 @@ const sec = (id) => SECTIONS.find(s => s.id === id)
   || { id, label: id, icon: Info, blurb: '' };
 
 // Sections that are Bitcoin-specific and hidden from the nav when an altcoin is selected.
-const BTC_ONLY_SECTIONS = ['smartmoney', 'whales', 'macro', 'events', 'timemachine', 'leverage'];
+const BTC_ONLY_SECTIONS = ['smartmoney', 'whales', 'macro', 'events', 'timemachine', 'leverage', 'network', 'admin'];
 // Sections removed from the app entirely (superseded by the global coin picker).
 const REMOVED_SECTIONS = ['compare'];
 // The currently-selected coin flows through this context so deep components
@@ -877,6 +881,7 @@ function OverviewSection({ d, ticker }) {
     <div className="space-y-5">
       <SectionHead icon={LayoutDashboard} title="Overview" blurb={SECTIONS[0].blurb} />
       <AiReview text={reviewOverview(d)} voice section="overview" footer={<TechnicalBreakdownLink d={d} dec={d.decision || {}} />} />
+      {(d.symbol || 'BTC') === 'BTC' && <MorningBriefCard />}
       <MarketStateHero d={d} ticker={ticker} />
       <OverviewChart d={d} />
       <DecisionEngineCard d={d} />
@@ -2805,6 +2810,216 @@ function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
   );
 }
 
+/* ---------------- Phase A: Network & Sentiment / Exchange Flow / Morning Brief / Admin ---------------- */
+function useFetch(url, deps = []) {
+  const [d, setD] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    let alive = true; setLoading(true);
+    fetch(url, { cache: 'no-store' }).then((r) => r.json())
+      .then((j) => { if (alive) { setD(j); setLoading(false); } })
+      .catch(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, deps); // eslint-disable-line
+  return [d, loading];
+}
+
+function MorningBriefCard() {
+  const [d, loading] = useFetch('/api/v1/albert/brief');
+  const obs = (d && d.observations) || [];
+  return (
+    <Card className="border-0 bg-gradient-to-br from-sky-950/40 to-slate-900 p-6 ring-1 ring-sky-900/50">
+      <div className="mb-3 flex items-center gap-2">
+        <img src="/albert.png" alt="Albert" className="h-7 w-7 rounded-full" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+        <h3 className="font-semibold text-white">Albert's Morning Brief</h3>
+        <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-sky-300">Daily</span>
+      </div>
+      {loading ? <p className="text-sm text-slate-500">Albert is pulling together today's whole-market read…</p>
+        : !obs.length && !(d && d.take) ? <p className="text-sm text-slate-500">Brief is generating — check back in a moment.</p>
+          : (<>
+            <ul className="space-y-1.5">{obs.map((o, i) => (<li key={i} className="flex gap-2 text-sm text-slate-300"><span className="text-sky-500">•</span>{o}</li>))}</ul>
+            {d && d.take && <p className="mt-3 rounded-lg border border-sky-500/20 bg-sky-500/[0.06] p-3 text-sm font-medium text-white"><span className="text-sky-400">Take:</span> {d.take}</p>}
+          </>)}
+    </Card>
+  );
+}
+
+function NetworkSentimentSection() {
+  const [fg, fgLoad] = useFetch('/api/v1/fear-greed');
+  const [nh, nhLoad] = useFetch('/api/v1/network-health');
+  const fgColor = (v) => v == null ? '#94a3b8' : v <= 25 ? '#f87171' : v <= 45 ? '#fb923c' : v <= 55 ? '#94a3b8' : v <= 75 ? '#a3e635' : '#34d399';
+  const fgHist = (fg && fg.history || []).map((h) => ({ ts: h.ts, v: h.value }));
+  const hseries = (nh && nh.hashrate_series || []);
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={Activity} title="Network & Sentiment" blurb={sec('network').blurb} coin="BTC" />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* Fear & Greed */}
+        <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+          <div className="mb-3 flex items-center gap-2"><h3 className="flex items-center gap-1 font-semibold text-white">Fear &amp; Greed Index<InfoTip below text="A 0-100 gauge of crypto crowd emotion (0 = Extreme Fear, 100 = Extreme Greed). Extremes can mark turning points but are not timing signals." /></h3><span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Live</span></div>
+          {fgLoad ? <p className="text-sm text-slate-500">Loading sentiment…</p> : !fg || fg.value == null ? <p className="text-sm text-slate-500">No Fear &amp; Greed data available.</p> : (<>
+            <div className="flex items-center gap-5">
+              <div className="text-center"><LevGauge value={fg.value} label={fg.label} color={fgColor(fg.value)} /></div>
+              <div className="text-sm text-slate-400">
+                <div>Now: <span className="font-bold" style={{ color: fgColor(fg.value) }}>{fg.value} · {fg.label}</span></div>
+                <div className="mt-1">1 week ago: <span className="text-slate-200">{fg.week_ago}</span></div>
+                <div>1 month ago: <span className="text-slate-200">{fg.month_ago}</span></div>
+              </div>
+            </div>
+            <div className="mt-3 h-20 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={fgHist} margin={{ top: 2, right: 4, left: -28, bottom: 0 }}>
+                  <YAxis domain={[0, 100]} hide /><XAxis dataKey="ts" hide />
+                  <ReferenceLine y={25} stroke="#7f1d1d" strokeDasharray="3 3" /><ReferenceLine y={75} stroke="#14532d" strokeDasharray="3 3" />
+                  <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} labelFormatter={() => ''} formatter={(v) => [v, 'F&G']} />
+                  <Line type="monotone" dataKey="v" stroke="#38bdf8" strokeWidth={1.6} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-400">{fg.read}</p>
+          </>)}
+        </Card>
+        {/* Network health */}
+        <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+          <div className="mb-3 flex items-center gap-2"><h3 className="flex items-center gap-1 font-semibold text-white">Network Health<InfoTip below text="How secure and congested the Bitcoin network is: hashrate (mining power securing it), difficulty (auto-adjusts every ~2 weeks), mempool backlog and fees to confirm quickly." /></h3><span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Live</span></div>
+          {nhLoad ? <p className="text-sm text-slate-500">Loading network data…</p> : !nh || nh.hashrate_ehs == null ? <p className="text-sm text-slate-500">No network data available.</p> : (<>
+            <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+              <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Hashrate</div><div className="font-semibold text-white">{nh.hashrate_ehs} EH/s</div></div>
+              <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Next difficulty</div><div className={`font-semibold ${(nh.difficulty_change_pct || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{(nh.difficulty_change_pct >= 0 ? '+' : '')}{nh.difficulty_change_pct}%</div><div className="text-[10px] text-slate-600">~{nh.retarget_days}d</div></div>
+              <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Fees ({nh.fees && nh.fees.state})</div><div className="font-semibold text-white">{nh.fees && nh.fees.fastest} sat/vB</div></div>
+              <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Mempool</div><div className="font-semibold text-white">{nh.mempool && nh.mempool.congestion}</div><div className="text-[10px] text-slate-600">{nh.mempool && Number(nh.mempool.count).toLocaleString()} txns</div></div>
+            </div>
+            <div className="mt-3 h-20 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={hseries} margin={{ top: 2, right: 4, left: -22, bottom: 0 }}>
+                  <YAxis hide domain={['auto', 'auto']} /><XAxis dataKey="ts" hide />
+                  <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} labelFormatter={() => ''} formatter={(v) => [v + ' EH/s', 'Hashrate']} />
+                  <Line type="monotone" dataKey="v" stroke="#fbbf24" strokeWidth={1.6} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="mt-2 text-[11px] text-slate-400">{nh.read}</p>
+          </>)}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function ExchangeNetFlowCard() {
+  const [d, loading] = useFetch('/api/v1/exchange-flows');
+  const series = (d && d.series || []).map((x) => ({ date: x.date, bal: x.balance }));
+  const fChg = (v) => v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' BTC';
+  const trendColor = (t) => (t || '').startsWith('Outflow') ? 'text-emerald-400' : (t || '').startsWith('Inflow') ? 'text-red-400' : 'text-slate-300';
+  return (
+    <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <ArrowUpRight className="h-5 w-5 text-sky-400" />
+        <h3 className="flex items-center gap-1 font-semibold text-white">Exchange Net-Flow<InfoTip below text="Total BTC held by tracked exchange wallets over time. Coins leaving exchanges (outflow) reduce immediately sellable supply and read bullish; inflows read bearish." /></h3>
+        <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Live</span>
+      </div>
+      {loading ? <p className="text-sm text-slate-500">Reconstructing exchange balances from on-chain history…</p> : !series.length ? <p className="text-sm text-slate-500">No exchange-flow data available.</p> : (<>
+        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Held now</div><div className="font-semibold text-white">{Number(d.current).toLocaleString(undefined, { maximumFractionDigits: 0 })} BTC</div></div>
+          <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">7d</div><div className={`font-semibold ${(d.net_7d || 0) <= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fChg(d.net_7d)}</div></div>
+          <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">30d</div><div className={`font-semibold ${(d.net_30d || 0) <= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fChg(d.net_30d)}</div></div>
+          <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[10px] text-slate-500">Trend</div><div className={`text-xs font-semibold ${trendColor(d.trend)}`}>{d.trend}</div></div>
+        </div>
+        <div className="h-32 w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={series} margin={{ top: 4, right: 6, left: 6, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+              <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} tickLine={false} axisLine={{ stroke: '#1e293b' }} minTickGap={40} tickFormatter={shortDate} />
+              <YAxis tick={{ fontSize: 9, fill: '#64748b' }} tickLine={false} axisLine={false} width={52} domain={['auto', 'auto']} tickFormatter={(v) => (v / 1000).toFixed(0) + 'k'} />
+              <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} labelFormatter={shortDate} formatter={(v) => [Number(v).toLocaleString() + ' BTC', 'Exchange balance']} />
+              <Line type="monotone" dataKey="bal" stroke="#38bdf8" strokeWidth={1.6} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+        <p className="mt-2 text-[11px] text-slate-400">{d.read}</p>
+      </>)}
+    </Card>
+  );
+}
+
+function AdminSection() {
+  const [d, loading] = useFetch('/api/v1/admin/overview');
+  const stColor = (s) => s === 'Active' ? 'text-emerald-400' : 'text-slate-500';
+  const ageColor = (m) => m == null ? 'text-slate-600' : m < 60 ? 'text-emerald-400' : m < 360 ? 'text-amber-400' : 'text-red-400';
+  const em = (d && d.costs && d.costs.emergent) || {};
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={ShieldCheck} title="Admin" blurb={sec('admin').blurb} coin="BTC" />
+      {loading ? <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-sm text-slate-500">Loading admin overview…</p></Card> : !d || d.status !== 'ready' ? <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-sm text-slate-500">Admin data unavailable.</p></Card> : (<>
+        {/* KPIs */}
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4"><div className="text-[11px] text-slate-500">Integrations active</div><div className="text-2xl font-bold text-white">{d.integrations_active}<span className="text-sm text-slate-500">/{d.integrations_total}</span></div></div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4"><div className="text-[11px] text-slate-500">LLM calls (total)</div><div className="text-2xl font-bold text-white">{d.usage.llm_calls_total}</div><div className="text-[10px] text-slate-600">{d.usage.llm_calls_today} today</div></div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4"><div className="text-[11px] text-slate-500">Est. LLM cost</div><div className="text-2xl font-bold text-white">${d.costs.est_llm_cost_usd}</div><div className="text-[10px] text-slate-600">${d.costs.est_llm_cost_today_usd} today</div></div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4"><div className="text-[11px] text-slate-500">Whales tracked</div><div className="text-2xl font-bold text-white">{d.usage.whales_tracked}</div></div>
+        </div>
+
+        {/* Integrations */}
+        <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+          <h3 className="mb-3 font-semibold text-white">Integrations</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-[11px] uppercase tracking-wider text-slate-500"><th className="pb-2">Service</th><th className="pb-2">Category</th><th className="pb-2">Auth</th><th className="pb-2">Cost</th><th className="pb-2 text-right">Status</th></tr></thead>
+              <tbody>{(d.integrations || []).map((it, i) => (
+                <tr key={i} className="border-t border-slate-800/60"><td className="py-2 font-medium text-slate-200">{it.name}</td><td className="py-2 text-slate-400">{it.category}</td><td className="py-2 text-slate-500">{it.auth}</td><td className="py-2 text-slate-500">{it.cost}</td><td className={`py-2 text-right font-semibold ${stColor(it.status)}`}>{it.status === 'Active' ? '● Active' : '○ ' + it.status}</td></tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </Card>
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {/* Emergent cost */}
+          <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+            <h3 className="mb-3 flex items-center gap-1 font-semibold text-white">Emergent LLM Cost<InfoTip below text="Cost of the Gemini model calls made via your Emergent Universal LLM key. Figures are a rough estimate from call counts — exact spend is in your Emergent dashboard." /></h3>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="rounded border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">Model</div><div className="font-mono text-slate-200">{em.model}</div></div>
+              <div className="rounded border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">Status</div><div className={`font-semibold ${stColor(em.status)}`}>{em.status}</div></div>
+              <div className="rounded border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">Calls (total / today)</div><div className="font-semibold text-white">{em.llm_calls_total} / {em.llm_calls_today}</div></div>
+              <div className="rounded border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">Est. cost (total / today)</div><div className="font-semibold text-white">${em.est_cost_total_usd} / ${em.est_cost_today_usd}</div></div>
+            </div>
+            <p className="mt-3 text-[11px] italic text-slate-500">{em.billing_note}</p>
+          </Card>
+
+          {/* Data freshness */}
+          <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+            <h3 className="mb-3 font-semibold text-white">Data freshness</h3>
+            <div className="space-y-1.5">{(d.freshness || []).map((f, i) => (
+              <div key={i} className="flex items-center justify-between text-sm"><span className="text-slate-300">{f.source}</span><span className={`font-mono ${ageColor(f.age_min)}`}>{f.age_min == null ? 'no data' : f.age_min < 60 ? `${f.age_min}m ago` : `${(f.age_min / 60).toFixed(1)}h ago`}</span></div>
+            ))}</div>
+          </Card>
+        </div>
+
+        {/* Usage + scheduler + collections */}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+            <h3 className="mb-3 font-semibold text-white">Usage & content</h3>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              {[['Cached Albert insights', d.usage.cached_insights], ['Smart alerts', d.usage.alerts_total], ['Forecast runs logged', d.usage.runs_logged], ['Whales tracked', d.usage.whales_tracked]].map(([k, v], i) => (
+                <div key={i} className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[11px] text-slate-500">{k}</div><div className="font-semibold text-white">{v}</div></div>
+              ))}
+            </div>
+            <h4 className="mb-2 mt-4 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Scheduler jobs</h4>
+            {(d.scheduler_jobs || []).length ? <div className="space-y-1 text-[11px]">{d.scheduler_jobs.map((j, i) => (<div key={i} className="flex justify-between"><span className="font-mono text-slate-300">{j.id}</span><span className="text-slate-500">{j.next_run ? new Date(j.next_run).toLocaleString() : '—'}</span></div>))}</div> : <p className="text-[11px] text-slate-500">No scheduled jobs reported.</p>}
+          </Card>
+
+          <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+            <h3 className="mb-3 font-semibold text-white">Database collections</h3>
+            <div className="grid grid-cols-2 gap-1.5 text-sm">{Object.entries(d.collections || {}).map(([k, v], i) => (
+              <div key={i} className="flex justify-between rounded border border-slate-800/60 bg-slate-950/40 px-2.5 py-1.5"><span className="font-mono text-[11px] text-slate-400">{k}</span><span className="font-semibold text-slate-200">{v}</span></div>
+            ))}</div>
+          </Card>
+        </div>
+        <p className="text-[11px] text-slate-600">As of {d.as_of ? new Date(d.as_of).toLocaleString() : '—'}. Costs for free/keyless feeds are $0; the only metered cost is the Emergent LLM key.</p>
+      </>)}
+    </div>
+  );
+}
+
 /* ---------------- Leverage screen ---------------- */
 function LevGauge({ value = 0, label = '', color = '#f87171' }) {
   const v = Math.max(0, Math.min(100, value || 0));
@@ -3054,13 +3269,13 @@ function EtfFlowsCard() {
           {cum.length > 1 && (
             <>
               <div className="mt-4 mb-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                Cumulative net flow since launch ($M)
+                Cumulative net flow vs BTC price
                 {d.cum_total != null && <span className={`normal-case ${netColor(d.cum_total)}`}>· total {fMln(d.cum_total)}</span>}
                 {d.history_days ? <span className="ml-auto normal-case text-slate-600">{d.history_days} days{d.span_from ? ` · from ${shortDate(d.span_from)}` : ''}</span> : null}
               </div>
               <div className="h-44 w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={cum} margin={{ top: 5, right: 5, left: -6, bottom: 0 }}>
+                  <ComposedChart data={cum} margin={{ top: 5, right: 4, left: -6, bottom: 0 }}>
                     <defs>
                       <linearGradient id="etfCum" x1="0" y1="0" x2="0" y2="1">
                         <stop offset="0%" stopColor="#38bdf8" stopOpacity={0.35} />
@@ -3069,12 +3284,15 @@ function EtfFlowsCard() {
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
                     <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} tickLine={false} axisLine={{ stroke: '#1e293b' }} minTickGap={40} tickFormatter={shortDate} />
-                    <YAxis tick={{ fontSize: 9, fill: '#64748b' }} tickLine={false} axisLine={false} width={52} tickFormatter={(v) => (Math.abs(v) >= 1000 ? (v / 1000).toFixed(0) + 'B' : v)} />
-                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} labelFormatter={shortDate} formatter={(v) => [fMln(v), 'Cumulative']} />
-                    <Area type="monotone" dataKey="cum" stroke="#38bdf8" strokeWidth={1.8} fill="url(#etfCum)" dot={false} />
+                    <YAxis yAxisId="cum" tick={{ fontSize: 9, fill: '#64748b' }} tickLine={false} axisLine={false} width={52} tickFormatter={(v) => (Math.abs(v) >= 1000 ? (v / 1000).toFixed(0) + 'B' : v)} />
+                    <YAxis yAxisId="px" orientation="right" hide domain={['auto', 'auto']} />
+                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} labelFormatter={shortDate} formatter={(v, n) => [n === 'price' ? '$' + Number(v).toLocaleString() : fMln(v), n === 'price' ? 'BTC price' : 'Cumulative flow']} />
+                    <Area yAxisId="cum" type="monotone" dataKey="cum" stroke="#38bdf8" strokeWidth={1.8} fill="url(#etfCum)" dot={false} />
+                    {d.has_price && <Line yAxisId="px" type="monotone" dataKey="price" stroke="#f59e0b" strokeWidth={1.5} dot={false} />}
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
+              {d.has_price && <div className="mt-1 flex gap-4 text-[10px] text-slate-500"><span className="flex items-center gap-1"><span className="inline-block h-2 w-3 rounded-sm bg-sky-400/60" />Cumulative ETF flow</span><span className="flex items-center gap-1"><span className="inline-block h-0.5 w-3 bg-amber-500" />BTC price</span></div>}
             </>
           )}
           <div className="mt-4 mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">By issuer (last 30 days)</div>
@@ -3289,6 +3507,7 @@ function WhaleWatch() {
       <SectionHead icon={Fish} title="Whale Watch" blurb={sec('whales').blurb} coin="BTC" />
       <AiReview section="whales" text="Albert is reviewing whale flows and ETF demand…" voice />
       <WhaleImpactCard />
+      <ExchangeNetFlowCard />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <Fish className="h-5 w-5 text-sky-400" />
@@ -5042,6 +5261,8 @@ export default function DashboardPage() {
     if (active === 'analogs') return <AnalogsSection />;
     if (active === 'smartmoney') return <DemoMetricsCard title="Smart Money" icon={Waves} panel={d.smart_money} sectionId="smartmoney" />;
     if (active === 'whales') return <WhaleWatch />;
+    if (active === 'network') return <NetworkSentimentSection />;
+    if (active === 'admin') return <AdminSection />;
     if (active === 'leverage') return <LeverageSection />;
     if (active === 'institutional') return (<div className="space-y-5"><DemoMetricsCard title="Institutional & Derivatives" icon={Landmark} panel={d.institutional} sectionId="institutional" />{(d.symbol || 'BTC') === 'BTC' && <EtfFlowsCard />}</div>);
     if (active === 'macro') return <PolicySection d={d} />;

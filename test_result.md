@@ -636,13 +636,37 @@ frontend:
 
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Phase A endpoints: /api/v1/fear-greed, /api/v1/network-health, /api/v1/exchange-flows, ETF price overlay, /api/v1/albert/brief"
+    - "Admin overview: /api/v1/admin/overview"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
-    -agent: "testing"
+    -agent: "main"
+    -message: |
+      NEW TEST FOCUS — Phase A features + Admin. All REAL/keyless data (no mocks). Test via external base
+      URL + /api prefix.
+      1) GET /api/v1/fear-greed -> status='ready', value int 0-100, label str, week_ago/month_ago ints,
+         history non-empty (each {value,label,ts}), read non-empty. Source alternative.me.
+      2) GET /api/v1/network-health -> status='ready', hashrate_ehs numeric, difficulty_change_pct numeric,
+         retarget_days numeric, fees{fastest,state}, mempool{count,congestion}, hashrate_series non-empty, read.
+      3) GET /api/v1/exchange-flows -> status='ready' (may take ~40s first call), series non-empty
+         (each {date,balance}), current numeric, net_7d/net_30d/net_90d numeric, trend str, read. refresh=1 works.
+      4) GET /api/v1/etf-flows -> now has has_price==true and cumulative points include a numeric 'price'
+         (BTC close) alongside 'cum'. cum_total large positive.
+      5) GET /api/v1/albert/brief -> status='ready', observations is a list (~4-5 strings), take non-empty
+         (unless LLM key unset -> status may be 'ready' with raw text or 'fallback', must NOT 500). 2nd call cached=true.
+      6) GET /api/v1/admin/overview -> status='ready', integrations list (>=10, each name/category/auth/status/cost;
+         active ones include OKX/mempool/tftc/CoinGecko/alternative.me/Gemini; inactive include CoinGlass/ElevenLabs/SendGrid),
+         integrations_active & integrations_total ints, freshness list (source+age_min), usage{llm_calls_total,
+         cached_insights,alerts_total,whales_tracked,runs_logged}, costs.emergent{model,status,llm_calls_total,
+         est_cost_total_usd,billing_note}, scheduler_jobs list, collections dict. No 500s.
+      REGRESSION: GET /api/v1/dashboard status='ready'; GET /api/v1/leverage?timeframe=4H status='ready'.
+      Do NOT test WebSockets.
+
+    -agent: "testing_prev"
     -message: |
       ✅ LEVERAGE SCREEN UI TEST COMPLETE - ALL VALIDATIONS PASSED
       
