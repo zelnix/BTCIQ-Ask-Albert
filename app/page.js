@@ -2890,7 +2890,7 @@ function LeverageSection() {
           <div className="flex h-6 overflow-hidden rounded-lg"><div className="bg-emerald-500/70" style={{ width: `${p.long_pct}%` }} /><div className="bg-red-500/70" style={{ width: `${p.short_pct}%` }} /></div>
           <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
             <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[11px] text-slate-500">L/S Account Ratio</div><div className="font-mono text-slate-100">{p.account_ratio} <span className="text-[11px] text-slate-500">(prev {p.account_ratio_prev})</span></div></div>
-            <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="flex items-center gap-1 text-[11px] text-slate-500">L/S Position Ratio<DemoBadge label="Est" /></div><div className="font-mono text-slate-100">{p.position_ratio}</div></div>
+            <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="flex items-center gap-1 text-[11px] text-slate-500">L/S Position Ratio<DemoBadge label="Inactive" /></div><div className="font-mono text-slate-500">Inactive</div></div>
           </div>
           <p className="mt-3 text-xs text-slate-400">Change over {d.timeframe}: <span className={`font-semibold ${(p.ratio_change_tf || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{(p.ratio_change_tf >= 0 ? '+' : '')}{p.ratio_change_tf}</span> · {p.trend}</p>
         </Card>
@@ -2934,62 +2934,32 @@ function LeverageSection() {
         </Card>
 
         <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-          <h3 className="mb-3 flex items-center gap-1 font-semibold text-white">Estimated Leverage<DemoBadge label="Est" /><InfoTip below text="An estimate of how much leverage is in the system relative to recent conditions. Higher leverage tends to amplify volatility. Shown as a percentile vs recent history." /></h3>
-          <div className="mb-3 flex flex-wrap items-end gap-3"><div className="text-2xl font-bold text-white">{el.ratio}</div><div className={`text-sm font-semibold ${riskColor(el.status)}`}>{el.status}</div><div className="text-[11px] text-slate-500">~{el.percentile}th pct · {(el.change_tf >= 0 ? '+' : '')}{el.change_tf} / {d.timeframe}</div></div>
-          <div className="h-20 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={el.series || []} margin={{ top: 2, right: 4, left: -24, bottom: 0 }}>
-                <YAxis hide domain={['auto', 'auto']} /><XAxis dataKey="t" hide />
-                <Line type="monotone" dataKey="v" stroke="#fbbf24" strokeWidth={1.6} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
+          <h3 className="mb-3 flex items-center gap-1 font-semibold text-white">Estimated Leverage<DemoBadge label="Inactive" /><InfoTip below text="An estimate of how much leverage is in the system relative to recent conditions. Higher leverage tends to amplify volatility. Requires a live leverage/exchange-reserve feed." /></h3>
+          <div className="flex h-28 flex-col items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-950/30 p-4 text-center">
+            <Lock className="mb-2 h-5 w-5 text-slate-600" />
+            <div className="text-sm font-semibold text-slate-400">Inactive</div>
+            <p className="mt-1 text-[11px] text-slate-500">{el.reason || 'Requires a paid derivatives-data feed to activate.'}</p>
           </div>
-          <p className="mt-2 text-[11px] text-slate-400">{el.interpretation}</p>
         </Card>
       </div>
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <h3 className="mb-3 flex items-center gap-1 font-semibold text-white">Liquidations<DemoBadge label="Est" /><InfoTip below text="Dollar value of leveraged positions force-closed as price moved against them. Long liquidations spike when price drops; short liquidations spike when price rises." /></h3>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div>
-            <div className="mb-2 grid grid-cols-3 gap-2 text-center text-sm">
-              {[['1h', lq.long_1h, lq.short_1h], ['4h', lq.long_4h, lq.short_4h], ['24h', lq.long_24h, lq.short_24h]].map(([w, l, sh], i) => (
-                <div key={i} className="rounded border border-slate-800 bg-slate-950/40 p-2"><div className="text-[10px] uppercase text-slate-500">{w}</div><div className="text-emerald-400">{fUsd(l)}</div><div className="text-red-400">{fUsd(sh)}</div></div>
-              ))}
-            </div>
-            <p className="text-[11px] text-slate-500">Green = long liquidations · Red = short liquidations</p>
-          </div>
-          <div className="h-32 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={liqBars} margin={{ top: 4, right: 4, left: -8, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                <XAxis dataKey="w" tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} axisLine={false} />
-                <YAxis tick={{ fontSize: 9, fill: '#64748b' }} tickLine={false} axisLine={false} tickFormatter={(v) => fUsd(v)} />
-                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} formatter={(v, n) => [fUsd(v), n === 'long' ? 'Long liq' : 'Short liq']} />
-                <Bar dataKey="long" fill="#34d399" radius={[3, 3, 0, 0]} /><Bar dataKey="short" fill="#f87171" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+        <h3 className="mb-3 flex items-center gap-1 font-semibold text-white">Liquidations<DemoBadge label="Inactive" /><InfoTip below text="Dollar value of leveraged positions force-closed as price moved against them. Long liquidations spike when price drops; short liquidations spike when price rises. Requires a live liquidations feed." /></h3>
+        <div className="flex h-28 flex-col items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-950/30 p-4 text-center">
+          <Lock className="mb-2 h-5 w-5 text-slate-600" />
+          <div className="text-sm font-semibold text-slate-400">Inactive</div>
+          <p className="mt-1 text-[11px] text-slate-500">{lq.reason || 'Real-time long/short liquidation totals require a paid feed (e.g. CoinGlass).'}</p>
         </div>
-        <p className="mt-3 text-sm">Net Liquidation Pressure: <span className="font-semibold text-slate-100">{lq.net_pressure}</span></p>
       </Card>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-          <div className="mb-3 flex flex-wrap items-center gap-2"><h3 className="flex items-center gap-1 font-semibold text-white">Liquidation Heatmap<DemoBadge label="Est" /><InfoTip below text="Estimated price zones where clusters of leveraged positions could be liquidated. These are estimates, NOT guaranteed liquidation prices." /></h3>
-            <div className="ml-auto flex overflow-hidden rounded-lg border border-slate-800 text-[11px]">{[['long', 'Long'], ['short', 'Short'], ['combined', 'Combined']].map(([k, l]) => (<button key={k} onClick={() => setHeatSide(k)} className={`px-2 py-1 font-semibold ${heatSide === k ? 'bg-sky-500/20 text-sky-300' : 'bg-slate-950/40 text-slate-500'}`}>{l}</button>))}</div>
+          <div className="mb-3 flex flex-wrap items-center gap-2"><h3 className="flex items-center gap-1 font-semibold text-white">Liquidation Heatmap<DemoBadge label="Inactive" /><InfoTip below text="Estimated price zones where clusters of leveraged positions could be liquidated. Requires a live liquidation-level feed (e.g. CoinGlass)." /></h3></div>
+          <div className="flex h-40 flex-col items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-950/30 p-4 text-center">
+            <Lock className="mb-2 h-6 w-6 text-slate-600" />
+            <div className="text-sm font-semibold text-slate-400">Inactive</div>
+            <p className="mt-1 max-w-xs text-[11px] text-slate-500">{(d.heatmap && d.heatmap.reason) || 'Liquidation-level heatmap data requires a paid feed. Current BTC price:'} {d.price ? <span className="font-mono text-sky-300">${Number(d.price).toLocaleString()}</span> : null}</p>
           </div>
-          <div className="space-y-1">
-            {[...heat].sort((a, b) => b.price - a.price).map((z, i) => (
-              <div key={i} className="flex items-center gap-2 text-[11px]">
-                <span className="w-16 font-mono text-slate-400">${Number(z.price).toLocaleString()}</span>
-                <div className="relative h-3.5 flex-1 rounded bg-slate-800/40"><div className={`h-3.5 rounded ${z.side === 'long' ? 'bg-emerald-500/60' : 'bg-red-500/60'}`} style={{ width: `${(z.intensity / maxInt) * 100}%` }} /></div>
-                <span className={`w-10 text-right ${z.side === 'long' ? 'text-emerald-400' : 'text-red-400'}`}>{z.distance_pct > 0 ? '+' : ''}{z.distance_pct}%</span>
-              </div>
-            ))}
-            <div className="!mt-2 flex items-center gap-2 border-y border-dashed border-sky-500/40 py-1 text-[11px]"><Magnet className="h-3.5 w-3.5 text-sky-400" /><span className="font-mono font-bold text-sky-300">${d.price ? Number(d.price).toLocaleString() : '—'}</span><span className="text-slate-500">current price</span></div>
-          </div>
-          <p className="mt-2 text-[10px] text-slate-600">Estimated zones — not guaranteed liquidation prices. Ready for a live provider (e.g. CoinGlass).</p>
         </Card>
 
         <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">

@@ -2089,45 +2089,12 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
     short_pct = round(100 - long_pct, 1)
     lsr_change = round(lsr - lsr_prev, 3)
     pos_trend = ('More long-heavy' if lsr_change > 0.02 else 'More short-heavy' if lsr_change < -0.02 else 'Little changed')
-    # position ratio (size-weighted) has no free feed -> derived estimate, flagged
-    position_ratio = round(lsr * (1 + (funding / 0.05) * 0.05), 2)
-
-    # ---- estimated leverage (DERIVED / DEMO) ----
-    # crude proxy that trends with OI & funding; percentile is illustrative.
-    seed = int(datetime.date.today().strftime('%Y%m%d'))
-    elr_base = 0.20 + min(0.15, abs(funding) * 3) + (0.03 if oi_state == 'Rising' else -0.02 if oi_state == 'Falling' else 0)
-    elr = round(max(0.12, elr_base + ((seed % 7) - 3) * 0.004), 3)
-    elr_pct = int(max(5, min(95, 40 + funding * 400 + (oi_change_tf or 0) * 1.5)))
-    elr_change = round((oi_change_tf or 0) * 0.004 + (funding - fr_avg) * 0.5, 3)
-    elr_status = _lev_band(elr_pct, [25, 50, 70, 88], ['Low', 'Normal', 'Elevated', 'High', 'Extreme'])
-    elr_series = []
-    for i in range(24):
-        elr_series.append({'t': i, 'v': round(elr * (0.9 + 0.2 * ((seed + i) % 5) / 5.0), 3)})
-
-    # ---- liquidations (DERIVED / DEMO) ----
-    # scaled from OI so magnitudes are plausible; split by positioning & recent move.
-    oi_ref = oi_usd or 2.0e9
+    # Size-weighted position ratio, liquidations, liquidation heatmap and an estimated-leverage
+    # percentile all require a paid derivatives-data feed (e.g. CoinGlass). Per product decision we
+    # do NOT fabricate these — they are surfaced as INACTIVE until a live source is connected.
     move = price_chg24 or 0
-    long_skew = max(0.15, min(0.85, long_pct / 100.0 + (-move) * 0.01))  # falling price hurts longs
-    def _liq(hours):
-        base = oi_ref * 0.006 * (hours / 24.0) * (1 + abs(move) * 0.05)
-        return round(base * long_skew), round(base * (1 - long_skew))
-    l1, s1 = _liq(1); l4, s4 = _liq(4); l24, s24 = _liq(24)
-    net_liq = l24 - s24
-    net_liq_state = _lev_band((net_liq / max(1, (l24 + s24))) * 100 + 50,
-                              [20, 42, 58, 80], ['Heavy Short Liquidations', 'Moderate Short Liquidations',
-                                                 'Balanced', 'Moderate Long Liquidations', 'Heavy Long Liquidations'])
 
-    # ---- liquidation heatmap (DERIVED / DEMO) ----
-    heat_zones = []
-    if price:
-        for pct, inten in [(2.5, 0.55), (5, 0.9), (7.5, 0.7), (10, 0.45)]:
-            heat_zones.append({'price': round(price * (1 - pct / 100)), 'side': 'long',
-                               'intensity': round(inten * long_skew + 0.1, 2), 'distance_pct': -pct})
-            heat_zones.append({'price': round(price * (1 + pct / 100)), 'side': 'short',
-                               'intensity': round(inten * (1 - long_skew) + 0.1, 2), 'distance_pct': pct})
-
-    # ---- squeeze risk (DERIVED from real signals) ----
+    # ---- squeeze risk (DERIVED from REAL signals: positioning, funding, OI trend, momentum) ----
     long_sq = int(max(0, min(100, 20 + (long_pct - 50) * 1.6 + max(0, funding) * 300
                              + max(0, oi_change_tf or 0) * 1.2 + max(0, -move) * 2)))
     short_sq = int(max(0, min(100, 20 + (short_pct - 50) * 1.6 + max(0, -funding) * 350
@@ -2135,9 +2102,9 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
     sq_label = lambda s: _lev_band(s, [30, 55, 75], ['Low', 'Moderate', 'Elevated', 'High'])
     long_sq_lbl, short_sq_lbl = sq_label(long_sq), sq_label(short_sq)
 
-    # ---- summary: pressure / bias / squeeze ----
-    pressure_score = int(max(0, min(100, elr_pct * 0.4 + abs(funding) * 300
-                                    + abs(long_pct - 50) * 1.2 + max(0, oi_change_tf or 0) * 1.5)))
+    # ---- summary: pressure / bias / squeeze (all from REAL signals) ----
+    pressure_score = int(max(0, min(100, abs(funding) * 350 + abs(long_pct - 50) * 2.2
+                                    + max(0, oi_change_tf or 0) * 2.0 + abs(lsr_change) * 60)))
     pressure = _lev_band(pressure_score, [25, 45, 65, 82], ['LOW', 'MODERATE', 'ELEVATED', 'HIGH', 'EXTREME'])
     if long_pct >= 55 or funding > 0.015:
         bias = 'Long Dominant'
@@ -2179,18 +2146,16 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
                       if funding > 0 else
                       "Negative funding means shorts are paying longs, indicating heavier leveraged short positioning."
                       if funding < 0 else "Funding is flat — neither side is paying a meaningful premium.")
-    elr_interp = (f"Estimated leverage sits around the {elr_pct}th percentile ({elr_status.lower()}) versus recent conditions. "
-                  "Higher leverage can amplify volatility when price moves quickly.")
 
-    # ---- BitMarkAI observations + assessment ----
+    # ---- BitMarkAI observations + assessment (from REAL data only) ----
     obs = []
     obs.append(f"Positioning is {long_pct:.0f}% long vs {short_pct:.0f}% short and has become {pos_trend.lower()} over the last {tf}.")
     obs.append(f"Open interest is {oi_state.lower()} ({(oi_change_tf or 0):+.1f}% over {tf}). " + _oi_price_read())
     obs.append(f"Funding is {funding:+.4f}% and {funding_trend.lower()} versus its recent average ({funding_bias.lower()}).")
-    obs.append(f"Estimated leverage is {elr_status.lower()} (~{elr_pct}th pct); liquidation clusters are heavier "
-               f"{'below' if long_skew >= 0.5 else 'above'} spot.")
-    obs.append(f"{'Downside long-liquidation risk' if squeeze == 'Long Squeeze Risk' else 'Upside short-squeeze risk' if squeeze == 'Short Squeeze Risk' else 'Two-sided liquidation risk'} "
-               f"is currently {'elevated' if max(long_sq, short_sq) >= 55 else 'moderate' if max(long_sq, short_sq) >= 30 else 'low'}.")
+    obs.append(f"The long/short account ratio is {lsr:.2f} (vs {lsr_prev:.2f} a {tf} ago), a {('rise' if lsr_change > 0 else 'fall' if lsr_change < 0 else 'flat read')} in relative long crowding.")
+    obs.append(f"{'Downside long-squeeze risk' if squeeze == 'Long Squeeze Risk' else 'Upside short-squeeze risk' if squeeze == 'Short Squeeze Risk' else 'Two-sided squeeze risk'} "
+               f"is currently {'elevated' if max(long_sq, short_sq) >= 55 else 'moderate' if max(long_sq, short_sq) >= 30 else 'low'} "
+               f"based on positioning, funding and OI trend.")
     if squeeze == 'Long Squeeze Risk':
         assess_title = 'Elevated Long-Side Risk'
     elif squeeze == 'Short Squeeze Risk':
@@ -2220,21 +2185,23 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
         'summary': {'pressure': pressure, 'pressure_score': pressure_score, 'bias': bias,
                     'squeeze': squeeze, 'interpretation': summary_interp},
         'positioning': {'long_pct': long_pct, 'short_pct': short_pct, 'account_ratio': round(lsr, 3),
-                        'account_ratio_prev': round(lsr_prev, 3), 'position_ratio': position_ratio,
-                        'ratio_change_tf': lsr_change, 'trend': pos_trend, 'series': ls_series,
-                        'position_ratio_demo': True},
+                        'account_ratio_prev': round(lsr_prev, 3), 'position_ratio': None,
+                        'position_ratio_active': False,
+                        'ratio_change_tf': lsr_change, 'trend': pos_trend, 'series': ls_series},
         'open_interest': {'value_usd': oi_usd, 'change_tf_pct': oi_change_tf, 'state': oi_state,
                           'series': oi_series, 'interpretation': _oi_price_read()},
         'funding': {'rate': round(funding, 5), 'direction': funding_dir, 'trend': funding_trend,
                     'avg_recent': round(fr_avg, 5), 'bias': funding_bias, 'exchanges': funding_exchanges,
                     'series': funding_series, 'interpretation': funding_interp,
                     'exchanges_note': 'Only OKX is a live free feed; multi-exchange funding needs a paid aggregator.'},
-        'estimated_leverage': {'ratio': elr, 'percentile': elr_pct, 'change_tf': elr_change,
-                               'status': elr_status, 'series': elr_series, 'demo': True,
-                               'interpretation': elr_interp},
-        'liquidations': {'long_1h': l1, 'short_1h': s1, 'long_4h': l4, 'short_4h': s4,
-                         'long_24h': l24, 'short_24h': s24, 'net_pressure': net_liq_state, 'demo': True},
-        'heatmap': {'price': price, 'zones': heat_zones, 'demo': True},
+        'estimated_leverage': {'active': False, 'status': 'Inactive',
+                               'reason': 'Requires a paid derivatives-data feed (e.g. CoinGlass / CryptoQuant).',
+                               'interpretation': ('Estimated leverage ratio is inactive — it needs a live '
+                                                  'exchange-reserve/leverage feed we do not fabricate.')},
+        'liquidations': {'active': False, 'status': 'Inactive',
+                         'reason': 'Real-time liquidation totals require a paid feed (e.g. CoinGlass).'},
+        'heatmap': {'active': False, 'status': 'Inactive', 'price': price,
+                    'reason': 'Liquidation-level heatmap data requires a paid feed (e.g. CoinGlass).'},
         'squeeze': {'long_risk': long_sq, 'long_label': long_sq_lbl, 'short_risk': short_sq,
                     'short_label': short_sq_lbl,
                     'long_explain': (f"Long positioning is {long_pct:.0f}% with {funding:+.4f}% funding and {oi_state.lower()} OI; "
@@ -2244,7 +2211,7 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
         'bitmark': {'observations': obs, 'assessment_title': assess_title, 'assessment_text': assess_text},
         'albert_call': {'impact_label': impact_label, 'impact_points': impact_points, 'explanation': impact_expl},
         'sources': ['OKX public API (open interest, funding, long/short account ratio, taker) — REAL',
-                    'Liquidations, liquidation heatmap, estimated-leverage percentile & position ratio — DERIVED/DEMO (no free feed; ready for a paid provider such as CoinGlass)'],
+                    'Liquidations, liquidation heatmap, estimated-leverage & size-weighted position ratio — INACTIVE (no free feed; connect a paid provider such as CoinGlass to activate)'],
         'disclaimer': ('Market data and BitMarkAI analysis are provided for informational purposes only and should not be '
                        'considered financial advice. Derivatives and leveraged trading involve substantial risk. Liquidation '
                        'levels and squeeze-risk indicators are estimates and may not reflect actual market outcomes.')}
