@@ -36,6 +36,9 @@ autostart=true
 autorestart=true
 ```
 
+### ⚠️ Key point — this is a BUILD-LEVEL change, not a republish
+My app was scaffolded from a **Next.js-only** template, so a normal republish keeps rebuilding a **frontend-only image** and never brings the backend up. This needs a **build-level change**: please **convert/migrate my deployment build to a fullstack template** that runs **both** services in the production container — Next.js on :3000 **and** the FastAPI backend on :8001. My codebase already passes the deployment readiness check, so once the build runs both services it should work immediately.
+
 ## Production environment variables that must be set
 (Backend reads these; if missing the backend degrades or fails.)
 - `EMERGENT_LLM_KEY`
