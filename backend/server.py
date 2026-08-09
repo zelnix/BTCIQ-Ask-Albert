@@ -1980,6 +1980,142 @@ def get_onchain_panels(symbol='BTC'):
     return {'smart_money': c.get('smart_money'), 'institutional': c.get('institutional')}
 
 
+# =====================================================================
+# WHALE WATCH (Phase 1) — curated, publicly-labeled BTC entity addresses.
+# Live balances via mempool.space (fallback blockchain.info), free/no key.
+# Tracks daily balance snapshots to derive accumulation/distribution + alerts.
+# =====================================================================
+whale_col = db['whale_wallets']
+WHALE_TTL_SEC = 45 * 60
+_whale_state = {'running': False}
+WHALE_SEED = [
+    {'address': '34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo', 'name': 'Binance', 'category': 'Exchange'},
+    {'address': '3M219KR5vEneNb47ewrPfWyb5jQ2DjxRP6', 'name': 'Binance', 'category': 'Exchange'},
+    {'address': 'bc1qgdjqv0av3q56jvd82tkdjpy7gdp9ut8tlqmgrpmv24sq90ecnvqqjwvw97', 'name': 'Bitfinex', 'category': 'Exchange'},
+    {'address': 'bc1qjasf9z3h7w3jspkhtgatgpyvvzgpa2wwd2lr0eh5tx44reyn2k7sfc27a4', 'name': 'Robinhood', 'category': 'Exchange'},
+    {'address': 'bc1qa5wkgaew2dkv56kfvj49j0av5nml45x9ek9hz6', 'name': 'U.S. Government (seized)', 'category': 'Government'},
+    {'address': '1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF', 'name': 'Dormant mega-whale (since 2011)', 'category': 'Whale'},
+    {'address': '12ib7dApVFvg82TXKycWBNpN8kFyiAN1dr', 'name': 'Early whale', 'category': 'Whale'},
+]
+
+
+def _addr_balance(addr):
+    js = _engine_get(f'https://mempool.space/api/address/{addr}')
+    try:
+        cs = js['chain_stats']
+        return {'balance': (cs['funded_txo_sum'] - cs['spent_txo_sum']) / 1e8, 'tx_count': cs.get('tx_count')}
+    except Exception:  # noqa
+        pass
+    js = _engine_get(f'https://blockchain.info/rawaddr/{addr}', params={'limit': 0})
+    try:
+        return {'balance': js['final_balance'] / 1e8, 'tx_count': js.get('n_tx')}
+    except Exception:  # noqa
+        return None
+
+
+def _fire_whale_alert(w, delta):
+    """Fire a coin-scoped (BTC) smart alert on a large whale balance move."""
+    try:
+        direction = 'moved out of' if delta < 0 else 'received by'
+        is_exch = w['category'] == 'Exchange'
+        # exchange outflow = bullish (less sell supply); whale accumulation = bullish
+        bullish = (delta < 0) if is_exch else (delta > 0)
+        sev = 'high' if abs(delta) >= 5000 else 'medium'
+        aid = f"whale_{w['address'][:10]}_{datetime.date.today().isoformat()}"
+        title = f"Whale move: {w['name']} {('outflow' if delta < 0 else 'inflow')} {abs(delta):,.0f} BTC"
+        msg = (f"{abs(delta):,.0f} BTC {direction} {w['name']} ({w['category']}). "
+               f"{'Coins leaving an exchange often reads bullish (less sell-side supply).' if (is_exch and delta < 0) else ''}"
+               f"{'Coins moving to an exchange can read bearish (potential sell-side).' if (is_exch and delta > 0) else ''}"
+               f"{'Large-holder accumulation.' if (not is_exch and delta > 0) else ''}"
+               f"{'Large-holder distribution.' if (not is_exch and delta < 0) else ''}").strip()
+        smart_alerts_col.update_one({'_id': aid}, {'$setOnInsert': {
+            '_id': aid, 'id': aid, 'ts': datetime.datetime.utcnow().isoformat(),
+            'as_of': datetime.date.today().isoformat(), 'symbol': 'BTC', 'category': 'Whale',
+            'severity': sev, 'title': title, 'message': msg,
+            'signal': 'Bullish' if bullish else 'Bearish', 'seen': False}}, upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+
+
+def _refresh_whales_bg():
+    if _whale_state.get('running'):
+        return
+    _whale_state['running'] = True
+    try:
+        today = datetime.date.today().isoformat()
+        pj = _engine_get('https://api.coingecko.com/api/v3/simple/price',
+                         params={'ids': 'bitcoin', 'vs_currencies': 'usd'})
+        price = None
+        try:
+            price = float(pj['bitcoin']['usd'])
+        except Exception:  # noqa
+            pass
+        for w in WHALE_SEED:
+            b = _addr_balance(w['address'])
+            if not b:
+                continue
+            bal = round(b['balance'], 4)
+            doc = whale_col.find_one({'_id': w['address']}) or {}
+            hist = doc.get('history') or []
+            prev_bal = hist[-1]['bal'] if hist else None
+            if not hist or hist[-1]['d'] != today:
+                # New day: check for a big move vs the last recorded snapshot -> alert
+                if prev_bal is not None and abs(bal - prev_bal) >= 1000:
+                    _fire_whale_alert(w, round(bal - prev_bal))
+                hist.append({'d': today, 'bal': bal})
+                hist = hist[-90:]
+            else:
+                hist[-1]['bal'] = bal
+            whale_col.update_one({'_id': w['address']}, {'$set': {
+                '_id': w['address'], 'address': w['address'], 'name': w['name'],
+                'category': w['category'], 'balance': bal, 'tx_count': b.get('tx_count'),
+                'history': hist, 'updated': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+            time.sleep(0.5)
+        whale_col.update_one({'_id': '_meta'}, {'$set': {
+            '_id': '_meta', 'fetched_ts': time.time(), 'price': price,
+            'fetched_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+    finally:
+        _whale_state['running'] = False
+
+
+def get_whales():
+    meta = whale_col.find_one({'_id': '_meta'}) or {}
+    if time.time() - meta.get('fetched_ts', 0) >= WHALE_TTL_SEC:
+        threading.Thread(target=_refresh_whales_bg, daemon=True).start()
+    price = meta.get('price')
+    items = list(whale_col.find({'_id': {'$ne': '_meta'}}, {'_id': 0}))
+    out = []
+    for w in items:
+        hist = w.get('history') or []
+        bal = w.get('balance')
+
+        def chg(days):
+            if bal is not None and len(hist) > days and hist[-1 - days].get('bal') is not None:
+                return round(bal - hist[-1 - days]['bal'], 2)
+            return None
+
+        c1, c7 = chg(1), chg(7)
+        ref = c7 if c7 is not None else c1
+        is_exch = w.get('category') == 'Exchange'
+        signal = 'Neutral'
+        if ref is not None and abs(ref) >= 1:
+            if is_exch:
+                signal = 'Bullish' if ref < 0 else 'Bearish'   # outflow bullish
+            else:
+                signal = 'Bullish' if ref > 0 else 'Bearish'   # accumulation bullish
+        spark = _spark([h['bal'] for h in hist], nd=0) if len(hist) >= 2 else None
+        out.append({
+            'name': w.get('name'), 'category': w.get('category'), 'address': w.get('address'),
+            'balance': bal, 'balance_usd': (round(bal * price) if (bal and price) else None),
+            'change_24h': c1, 'change_7d': c7, 'signal': signal, 'spark': spark,
+            'tx_count': w.get('tx_count'), 'updated': w.get('updated'),
+        })
+    out.sort(key=lambda x: -(x['balance'] or 0))
+    return {'whales': out, 'price': price, 'as_of': meta.get('fetched_at'),
+            'source': 'mempool.space · blockchain.com (labels curated)'}
+
 
 CHAT_SYSTEM = (
     "You are 'Albert', the friendly HuCentAI Quant analyst built into the BTCIQ Bitcoin dashboard "
@@ -3344,6 +3480,15 @@ def scorecard():
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error'}
+
+
+@app.get('/api/v1/whales')
+def whales_feed():
+    try:
+        return {'status': 'ready', **get_whales()}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error', 'whales': []}
 
 
 @app.get('/api/v1/alerts')

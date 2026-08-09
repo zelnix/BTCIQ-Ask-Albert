@@ -13,7 +13,7 @@ import {
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
   Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet, Plus, Clock,
-  ChevronDown, Coins,
+  ChevronDown, Coins, Fish,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -69,6 +69,8 @@ const SECTIONS = [
     blurb: "Finds which past Bitcoin trend episode today's conditions most resemble — using macro rates, the US dollar, equity & gold correlation, volatility, drawdown, momentum and halving-cycle position — then shows what happened next. Adjust the sliders to weight what matters to you. Educational pattern-matching, not a prediction." },
   { id: 'smartmoney', label: 'Smart Money', icon: Waves,
     blurb: 'On-chain "smart money" behaviour — valuation (MVRV, SOPR), network activity, holder accumulation and sentiment. Powered by real on-chain data (BGeometrics, blockchain.com, Glassnode) and Fear & Greed.' },
+  { id: 'whales', label: 'Whale Watch', icon: Fish,
+    blurb: 'Live balances of the largest, publicly-labeled Bitcoin wallets — major exchanges, ETF/treasury custody, governments and famous whales. Track who is accumulating or distributing, with balances fetched live on-chain. Names are curated from public labels.' },
   { id: 'institutional', label: 'Institutional & Derivatives', icon: Landmark,
     blurb: 'Institutional & derivatives footprint — futures open interest, funding, long/short positioning and taker flow (live via OKX). Spot-ETF net flows are marked Inactive until a paid ETF feed is connected.' },
   { id: 'macro', label: 'Macro & Policy', icon: Globe,
@@ -114,7 +116,7 @@ const sec = (id) => SECTIONS.find(s => s.id === id)
   || { id, label: id, icon: Info, blurb: '' };
 
 // Sections that are Bitcoin-specific and hidden from the nav when an altcoin is selected.
-const BTC_ONLY_SECTIONS = ['smartmoney', 'macro', 'events', 'timemachine'];
+const BTC_ONLY_SECTIONS = ['smartmoney', 'whales', 'macro', 'events', 'timemachine'];
 // Sections removed from the app entirely (superseded by the global coin picker).
 const REMOVED_SECTIONS = ['compare'];
 // The currently-selected coin flows through this context so deep components
@@ -1458,7 +1460,8 @@ function AlertsSection({ d, alertsData, onAck, filter = 'BTC', onFilter, coins =
     'Event Risk': 'text-orange-300 bg-orange-500/10 border-orange-500/25',
     Volatility: 'text-red-300 bg-red-500/10 border-red-500/25',
     News: 'text-violet-300 bg-violet-500/10 border-violet-500/25',
-    Setup: 'text-amber-300 bg-amber-500/10 border-amber-500/25' }[c] || 'text-slate-300 bg-slate-800/40 border-slate-700');
+    Setup: 'text-amber-300 bg-amber-500/10 border-amber-500/25',
+    Whale: 'text-cyan-300 bg-cyan-500/10 border-cyan-500/25' }[c] || 'text-slate-300 bg-slate-800/40 border-slate-700');
   const styleFor = (lvl) => lvl === 'danger' ? 'border-red-500/30 bg-red-500/5' : lvl === 'warning' ? 'border-amber-500/30 bg-amber-500/5' : lvl === 'success' ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-slate-800 bg-slate-950/40';
   const dot = (lvl) => lvl === 'danger' ? 'bg-red-400' : lvl === 'warning' ? 'bg-amber-400' : lvl === 'success' ? 'bg-emerald-400' : 'bg-sky-400';
   const fmtTs = (iso) => { try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return iso; } };
@@ -2736,6 +2739,83 @@ function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
   );
 }
 
+function WhaleWatch() {
+  const [data, setData] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  React.useEffect(() => {
+    let alive = true;
+    fetch('/api/v1/whales', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((j) => { if (alive) { setData(j); setLoading(false); } })
+      .catch(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+  const whales = (data && data.whales) || [];
+  const catStyle = (c) => ({
+    Exchange: 'text-sky-300 bg-sky-500/10 border-sky-500/25',
+    Government: 'text-amber-300 bg-amber-500/10 border-amber-500/25',
+    Whale: 'text-violet-300 bg-violet-500/10 border-violet-500/25',
+    Treasury: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/25',
+  }[c] || 'text-slate-300 bg-slate-800/40 border-slate-700');
+  const fBtc = (v) => v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' BTC';
+  const fUsd = (v) => v == null ? '' : '$' + (v >= 1e9 ? (v / 1e9).toFixed(2) + 'B' : (v / 1e6).toFixed(1) + 'M');
+  const fChg = (v) => v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' BTC';
+  const total = whales.reduce((s, w) => s + (w.balance || 0), 0);
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={Fish} title="Whale Watch" blurb={sec('whales').blurb} coin="BTC" />
+      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Fish className="h-5 w-5 text-sky-400" />
+          <h3 className="font-semibold text-white">Largest labeled Bitcoin wallets</h3>
+          <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Live</span>
+          <span className="ml-auto text-[11px] text-slate-500">{data && data.source}</span>
+        </div>
+        {loading ? (
+          <p className="text-sm text-slate-500">Loading live on-chain balances…</p>
+        ) : whales.length === 0 ? (
+          <p className="text-sm text-slate-500">No whale data yet — balances are fetched live and cached; check back in a moment.</p>
+        ) : (
+          <>
+            <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">Wallets tracked</div><div className="text-lg font-semibold text-white">{whales.length}</div></div>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">Combined balance</div><div className="text-lg font-semibold text-white">{fBtc(total)}</div></div>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">BTC price</div><div className="text-lg font-semibold text-white">{data.price ? '$' + Number(data.price).toLocaleString() : '—'}</div></div>
+            </div>
+            <div className="space-y-2">
+              {whales.map((w, i) => (
+                <div key={i} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+                  <CoinIcon symbol="BTC" size={20} />
+                  <div className="min-w-[150px] flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-slate-100">{w.name}</span>
+                      <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${catStyle(w.category)}`}>{w.category}</span>
+                    </div>
+                    <a href={`https://mempool.space/address/${w.address}`} target="_blank" rel="noreferrer" className="font-mono text-[11px] text-slate-500 hover:text-sky-400">{w.address.slice(0, 10)}…{w.address.slice(-6)}</a>
+                  </div>
+                  {w.spark && <Spark data={w.spark} color={sigHex(w.signal)} />}
+                  <div className="text-right">
+                    <div className="font-mono text-sm text-slate-100">{fBtc(w.balance)}</div>
+                    <div className="text-[11px] text-slate-500">{fUsd(w.balance_usd)}</div>
+                  </div>
+                  <div className="w-24 text-right">
+                    <div className="text-[10px] uppercase tracking-wide text-slate-600">7d change</div>
+                    <div className={`text-xs font-semibold ${w.change_7d == null ? 'text-slate-500' : w.change_7d >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fChg(w.change_7d)}</div>
+                  </div>
+                  <span className={`w-16 text-right text-xs font-semibold ${sigColor(w.signal)}`}>{w.signal}</span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-4 rounded-lg border border-slate-500/20 bg-slate-500/[0.05] p-3 text-[11px] text-slate-400">
+              Balances are fetched live from the Bitcoin blockchain (mempool.space / blockchain.com). Entity names are curated from public labels and may not cover every wallet an entity controls. Accumulation / distribution signals activate once a few days of history accrue. Exchange <span className="text-emerald-400">outflows</span> read bullish (coins leaving to storage); <span className="text-red-400">inflows</span> read bearish.
+            </p>
+          </>
+        )}
+      </Card>
+    </div>
+  );
+}
+
 function SettingsSection({ onManualRun }) {
   const symbol = React.useContext(SymbolContext);
   const [pass, setPass] = React.useState('');
@@ -2750,6 +2830,7 @@ function SettingsSection({ onManualRun }) {
     ['Cross-market (equities, DXY, gold)', 'Yahoo Finance / Stooq', 'Live'],
     ['News', 'RSS (CoinDesk, Cointelegraph, Fed…)', 'Live'],
     ['On-chain / Smart Money', 'BGeometrics · blockchain.com · Glassnode', 'Live'],
+    ['Whale wallets (balances)', 'mempool.space · blockchain.com', 'Live'],
     ['Derivatives (OI, funding, long/short)', 'OKX', 'Live'],
     ['Sentiment (Fear & Greed)', 'alternative.me', 'Live'],
     ['ETF flows / Institutional', 'ETF issuers / CME', 'Inactive — paid feed'],
@@ -4397,6 +4478,7 @@ export default function DashboardPage() {
     if (active === 'crossmarket') return <CrossMarketSection />;
     if (active === 'analogs') return <AnalogsSection />;
     if (active === 'smartmoney') return <DemoMetricsCard title="Smart Money" icon={Waves} panel={d.smart_money} sectionId="smartmoney" />;
+    if (active === 'whales') return <WhaleWatch />;
     if (active === 'institutional') return <DemoMetricsCard title="Institutional & Derivatives" icon={Landmark} panel={d.institutional} sectionId="institutional" />;
     if (active === 'macro') return <PolicySection d={d} />;
     if (active === 'news') return <NewsSection news={news} status={newsStatus} onRefresh={handleNewsRefresh} refreshing={newsRefreshing} />;
