@@ -5009,6 +5009,126 @@ def _section_focus_hint(section):
             f"something else, in which case answer that instead.")
 
 
+def _fmt_usd(v):
+    try:
+        return '$' + format(float(v), ',.0f')
+    except Exception:  # noqa
+        return 'n/a'
+
+
+def _section_live_context(section, symbol='BTC'):
+    """Return a compact block of REAL live numbers for the screen the user is on,
+    so Albert can cite exact OI, funding, whale flows, composite venues, macro, etc.
+    Each branch is guarded — never fabricate; omit anything unavailable."""
+    sid = (section or '').strip().lower()
+    if not sid or sid == 'overview':
+        return ''
+    L = []
+    try:
+        if sid == 'leverage':
+            d = get_leverage('4H') or {}
+            oi = d.get('open_interest') or {}
+            fu = d.get('funding') or {}
+            po = d.get('positioning') or {}
+            sm = d.get('summary') or {}
+            sq = d.get('squeeze') or {}
+            L.append('LEVERAGE SCREEN LIVE DATA (OKX, 4H timeframe):')
+            if d.get('price'):
+                L.append(f"- Price: {_fmt_usd(d['price'])}")
+            if oi:
+                L.append(f"- Open interest: {_fmt_usd(oi.get('value_usd'))} (change {oi.get('change_tf_pct')}% this TF), state {oi.get('state')}")
+            if fu:
+                L.append(f"- Funding rate: {fu.get('rate')}% ({fu.get('direction')}), bias {fu.get('bias')}, trend {fu.get('trend')}")
+            if po:
+                L.append(f"- Positioning: long {po.get('long_pct')}% / short {po.get('short_pct')}%, account long/short ratio {po.get('account_ratio')} (trend {po.get('trend')})")
+            if sm:
+                L.append(f"- Leverage pressure: {sm.get('pressure')} ({sm.get('pressure_score')}/100), bias {sm.get('bias')}, {sm.get('squeeze')}")
+            if sq:
+                L.append(f"- Squeeze risk: long {sq.get('long_risk')}/100 ({sq.get('long_label')}), short {sq.get('short_risk')}/100 ({sq.get('short_label')})")
+            L.append('- NOTE: liquidations, liquidation heatmap and estimated-leverage percentile have NO free feed — do NOT cite numbers for them; say "no [that] data available" if asked.')
+        elif sid == 'whales':
+            wi = compute_whale_impact() or {}
+            L.append('WHALE SCREEN LIVE DATA (on-chain reconstruction, ~30d):')
+            L.append(f"- Tracked whales total: {round(wi.get('total_balance') or 0):,} BTC ({_fmt_usd(wi.get('total_usd'))}). Held by holders: {round(wi.get('holder_balance') or 0):,} BTC; on exchanges: {round(wi.get('exchange_balance') or 0):,} BTC")
+            L.append(f"- 30-day net flow: {round(wi.get('net_flow_30d') or 0):,} BTC -> trend {wi.get('trend')}")
+            movers = (wi.get('contributors') or [])[:4]
+            if movers:
+                L.append('- Biggest movers (30d): ' + '; '.join(
+                    f"{m.get('name')} {('+' if (m.get('delta_30d') or 0) >= 0 else '')}{round(m.get('delta_30d') or 0):,} BTC [{m.get('signal')}]" for m in movers))
+            try:
+                tx = (get_whale_tx_feed() or {}).get('feed') or []
+                big = [t for t in tx if (t.get('amount') or 0) >= 500][:3]
+                if big:
+                    L.append('- Recent large moves: ' + '; '.join(
+                        f"{round(t.get('amount') or 0):,} BTC {t.get('direction')} {t.get('entity')} [{t.get('signal')}]" for t in big))
+            except Exception:  # noqa
+                pass
+            try:
+                ef = get_etf_flows() or {}
+                daily = ef.get('daily') or []
+                totals = [x.get('total') for x in daily if x.get('total') is not None]
+                if totals:
+                    L.append(f"- US spot ETF net flows: 1d ${round(totals[0])}M, 7d ${round(sum(totals[:7]))}M, since-launch cumulative ${round((ef.get('cum_total') or 0))}M")
+            except Exception:  # noqa
+                pass
+        elif sid == 'dataaudit':
+            L.append('DATA AUDIT LIVE DATA:')
+            try:
+                cp = composite_price() or {}
+                if cp.get('status') == 'ready':
+                    vtxt = ', '.join(f"{v.get('source')} {_fmt_usd(v.get('price'))}" for v in (cp.get('venues') or []) if v.get('ok'))
+                    L.append(f"- Composite BTC price: {_fmt_usd(cp.get('composite'))} (confidence {cp.get('confidence')}) from {cp.get('venue_count')} venues; {vtxt}; spread {cp.get('spread_pct')}%. Outliers: {cp.get('outliers') or 'none'}")
+            except Exception:  # noqa
+                pass
+            try:
+                xa = _misc_get('cross_asset', 15 * 60, _compute_cross_asset) or {}
+                if xa.get('btc_dominance'):
+                    L.append(f"- Cross-asset: BTC dominance {xa.get('btc_dominance')}%, ETH/BTC {xa.get('eth_btc')}, total mcap ${round((xa.get('total_market_cap_usd') or 0)/1e9)}B, regime {xa.get('regime')}")
+            except Exception:  # noqa
+                pass
+            try:
+                ns = _misc_get('news_signals', 60 * 60, _compute_news_signals) or {}
+                if ns.get('tone_latest') is not None:
+                    L.append(f"- GDELT news tone: {ns.get('tone_latest')} ({ns.get('mood')}), 21d avg {ns.get('tone_avg_21d')}, direction {ns.get('direction')}")
+                else:
+                    L.append('- GDELT news tone: no data available (feed rate-limited).')
+            except Exception:  # noqa
+                pass
+            try:
+                fr = _misc_get('macro_fred', 6 * 3600, _compute_macro_fred) if FRED_API_KEY else None
+                rows = (fr or {}).get('series') or []
+                if rows:
+                    L.append('- US macro (FRED): ' + ', '.join(f"{r.get('label')} {r.get('value')}" for r in rows))
+            except Exception:  # noqa
+                pass
+        elif sid in ('institutional', 'smartmoney'):
+            panels = get_onchain_panels(symbol) or {}
+            panel = panels.get('institutional' if sid == 'institutional' else 'smart_money') or {}
+            mets = panel.get('metrics') or []
+            if mets:
+                L.append(('INSTITUTIONAL & DERIVATIVES' if sid == 'institutional' else 'SMART MONEY') + ' LIVE DATA:')
+                if panel.get('headline'):
+                    L.append(f"- Read: {panel.get('headline')}")
+                for m in mets[:8]:
+                    L.append(f"- {m.get('name')}: {m.get('value')} [{m.get('signal')}]")
+        elif sid == 'network':
+            try:
+                fg = _misc_get('fear_greed', 30 * 60, compute_fear_greed) or {}
+                nh = _misc_get('network_health', 10 * 60, compute_network_health) or {}
+                L.append('NETWORK & SENTIMENT LIVE DATA:')
+                if fg.get('value') is not None:
+                    L.append(f"- Fear & Greed: {fg.get('value')} ({fg.get('label')}); 1w ago {fg.get('week_ago')}, 1m ago {fg.get('month_ago')}")
+                if nh.get('hashrate_ehs') is not None:
+                    fees = nh.get('fees') or {}
+                    L.append(f"- Hashrate {nh.get('hashrate_ehs')} EH/s, next difficulty {nh.get('difficulty_change_pct')}%, fastest fee {fees.get('fastest')} sat/vB ({fees.get('state')})")
+            except Exception:  # noqa
+                pass
+    except Exception:  # noqa
+        traceback.print_exc()
+        return ''
+    return ('\n'.join(L)) if len(L) > 1 else ''
+
+
 
 @app.post('/api/v1/chat')
 def chat_endpoint(payload: dict = Body(...)):
@@ -5021,11 +5141,15 @@ def chat_endpoint(payload: dict = Body(...)):
                 'text': 'The Ask Quant chat model is not configured on this server.'}
     try:
         ctx = build_chat_context((payload.get('symbol') or 'BTC'))
+        section = payload.get('section')
+        live = _section_live_context(section, (payload.get('symbol') or 'BTC'))
+        if live:
+            ctx = ctx + "\n\n===== CURRENT SCREEN LIVE DATA (cite these exact numbers) =====\n" + live
         hist = list(chat_col.find({'session_id': session_id}, {'_id': 0}).sort('created_at', 1))
         hist_txt = ''
         for h in hist[-5:]:
             hist_txt += f"User: {h.get('user')}\nQuant: {h.get('assistant')}\n"
-        focus = _section_focus_hint(payload.get('section'))
+        focus = _section_focus_hint(section)
         user_text = ((f"{focus}\n" if focus else '')
                      + (f"Recent conversation:\n{hist_txt}\n" if hist_txt else '')
                      + f"Question: {message}")

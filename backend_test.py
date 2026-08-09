@@ -1,592 +1,296 @@
 #!/usr/bin/env python3
 """
-Backend API Test Suite for BTCIQ Alert Coin Filter Feature
-Tests coin-scoped Smart Alerts filtering and acknowledgment
+Backend test for Ask Albert per-screen data grounding (POST /api/v1/chat with section).
+Tests 5 cases: leverage, whales, dataaudit, overview, empty message.
 """
 
 import requests
+import time
 import json
-import sys
-from typing import Dict, List, Any
 
-# Base URL from environment
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+BASE_URL = "https://quant-features.preview.emergentagent.com/api/v1"
+TIMEOUT = 90  # LLM calls can take time
 
-def print_test_header(test_name: str):
-    """Print a formatted test header"""
-    print(f"\n{'='*80}")
-    print(f"TEST: {test_name}")
-    print(f"{'='*80}")
-
-def print_success(message: str):
-    """Print success message"""
-    print(f"✅ {message}")
-
-def print_error(message: str):
-    """Print error message"""
-    print(f"❌ {message}")
-
-def print_info(message: str):
-    """Print info message"""
-    print(f"ℹ️  {message}")
-
-def test_get_alerts_btc():
-    """Test 1: GET /api/v1/alerts?symbol=BTC - should return only BTC alerts"""
-    print_test_header("GET /api/v1/alerts?symbol=BTC")
+def test_chat_grounding():
+    """Test Ask Albert per-screen live data grounding."""
     
-    try:
-        url = f"{BASE_URL}/v1/alerts?symbol=BTC"
-        print_info(f"Requesting: {url}")
-        
-        response = requests.get(url, timeout=30)
-        print_info(f"Status Code: {response.status_code}")
-        
-        if response.status_code != 200:
-            print_error(f"Expected status 200, got {response.status_code}")
-            return False
-        
-        data = response.json()
-        print_info(f"Response keys: {list(data.keys())}")
-        
-        # Validate response structure
-        if data.get('status') != 'ready':
-            print_error(f"Expected status='ready', got '{data.get('status')}'")
-            return False
-        print_success("Response status is 'ready'")
-        
-        # Check required fields
-        if 'alerts' not in data:
-            print_error("Missing 'alerts' field in response")
-            return False
-        if 'unseen' not in data:
-            print_error("Missing 'unseen' field in response")
-            return False
-        if 'total' not in data:
-            print_error("Missing 'total' field in response")
-            return False
-        print_success("All required fields present (alerts, unseen, total)")
-        
-        alerts = data['alerts']
-        unseen = data['unseen']
-        total = data['total']
-        
-        print_info(f"Total alerts: {total}, Unseen: {unseen}, Returned: {len(alerts)}")
-        
-        # Validate that all returned alerts are BTC or legacy (no symbol field)
-        btc_count = 0
-        legacy_count = 0
-        non_btc_count = 0
-        
-        for alert in alerts:
-            symbol = alert.get('symbol')
-            if symbol == 'BTC':
-                btc_count += 1
-            elif symbol is None or symbol == '':
-                legacy_count += 1
-            else:
-                non_btc_count += 1
-                print_error(f"Found non-BTC alert with symbol='{symbol}': {alert.get('id', 'unknown')}")
-        
-        print_info(f"BTC alerts: {btc_count}, Legacy alerts (no symbol): {legacy_count}, Non-BTC: {non_btc_count}")
-        
-        if non_btc_count > 0:
-            print_error(f"Found {non_btc_count} non-BTC alerts in BTC-filtered results")
-            return False
-        
-        print_success(f"All {len(alerts)} alerts are BTC or legacy (no ETH/SOL alerts)")
-        
-        # Validate counts are non-negative integers
-        if not isinstance(unseen, int) or unseen < 0:
-            print_error(f"Invalid unseen count: {unseen}")
-            return False
-        if not isinstance(total, int) or total < 0:
-            print_error(f"Invalid total count: {total}")
-            return False
-        print_success(f"Counts are valid: unseen={unseen}, total={total}")
-        
-        print_success("TEST PASSED: BTC filter returns only BTC/legacy alerts")
-        return True, data
-        
-    except Exception as e:
-        print_error(f"Test failed with exception: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False, None
-
-def test_get_alerts_sol():
-    """Test 2: GET /api/v1/alerts?symbol=SOL - should return only SOL alerts"""
-    print_test_header("GET /api/v1/alerts?symbol=SOL")
+    print("=" * 80)
+    print("TESTING: Ask Albert per-screen data grounding (POST /api/v1/chat)")
+    print("=" * 80)
     
-    try:
-        url = f"{BASE_URL}/v1/alerts?symbol=SOL"
-        print_info(f"Requesting: {url}")
-        
-        response = requests.get(url, timeout=30)
-        print_info(f"Status Code: {response.status_code}")
-        
-        if response.status_code != 200:
-            print_error(f"Expected status 200, got {response.status_code}")
-            return False
-        
-        data = response.json()
-        
-        # Validate response structure
-        if data.get('status') != 'ready':
-            print_error(f"Expected status='ready', got '{data.get('status')}'")
-            return False
-        print_success("Response status is 'ready'")
-        
-        alerts = data['alerts']
-        unseen = data['unseen']
-        total = data['total']
-        
-        print_info(f"Total alerts: {total}, Unseen: {unseen}, Returned: {len(alerts)}")
-        
-        # Validate that all returned alerts have symbol='SOL'
-        sol_count = 0
-        non_sol_count = 0
-        setup_category_count = 0
-        
-        for alert in alerts:
-            symbol = alert.get('symbol')
-            category = alert.get('category')
-            
-            if symbol == 'SOL':
-                sol_count += 1
-                if category == 'Setup':
-                    setup_category_count += 1
-            else:
-                non_sol_count += 1
-                print_error(f"Found non-SOL alert with symbol='{symbol}': {alert.get('id', 'unknown')}")
-        
-        print_info(f"SOL alerts: {sol_count}, Non-SOL: {non_sol_count}, Setup category: {setup_category_count}")
-        
-        if non_sol_count > 0:
-            print_error(f"Found {non_sol_count} non-SOL alerts in SOL-filtered results")
-            return False
-        
-        if len(alerts) > 0:
-            print_success(f"All {len(alerts)} alerts have symbol='SOL'")
-            if setup_category_count > 0:
-                print_success(f"Found {setup_category_count} 'Setup' category alert(s) as expected")
-        else:
-            print_info("No SOL alerts found (may be expected if none exist)")
-        
-        print_success("TEST PASSED: SOL filter returns only SOL alerts")
-        return True, data
-        
-    except Exception as e:
-        print_error(f"Test failed with exception: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False, None
-
-def test_get_alerts_eth():
-    """Test 3: GET /api/v1/alerts?symbol=ETH - should be graceful (may be empty)"""
-    print_test_header("GET /api/v1/alerts?symbol=ETH")
-    
-    try:
-        url = f"{BASE_URL}/v1/alerts?symbol=ETH"
-        print_info(f"Requesting: {url}")
-        
-        response = requests.get(url, timeout=30)
-        print_info(f"Status Code: {response.status_code}")
-        
-        if response.status_code != 200:
-            print_error(f"Expected status 200, got {response.status_code}")
-            return False
-        
-        data = response.json()
-        
-        # Validate response structure
-        if data.get('status') != 'ready':
-            print_error(f"Expected status='ready', got '{data.get('status')}'")
-            return False
-        print_success("Response status is 'ready'")
-        
-        alerts = data['alerts']
-        unseen = data['unseen']
-        total = data['total']
-        
-        print_info(f"Total alerts: {total}, Unseen: {unseen}, Returned: {len(alerts)}")
-        
-        # Validate that all returned alerts have symbol='ETH' (if any)
-        if len(alerts) > 0:
-            eth_count = 0
-            non_eth_count = 0
-            
-            for alert in alerts:
-                symbol = alert.get('symbol')
-                if symbol == 'ETH':
-                    eth_count += 1
-                else:
-                    non_eth_count += 1
-                    print_error(f"Found non-ETH alert with symbol='{symbol}': {alert.get('id', 'unknown')}")
-            
-            print_info(f"ETH alerts: {eth_count}, Non-ETH: {non_eth_count}")
-            
-            if non_eth_count > 0:
-                print_error(f"Found {non_eth_count} non-ETH alerts in ETH-filtered results")
-                return False
-            
-            print_success(f"All {len(alerts)} alerts have symbol='ETH'")
-        else:
-            print_info("No ETH alerts found (graceful - empty list is acceptable)")
-        
-        # Validate no 500 error
-        print_success("No HTTP 500 error - graceful handling")
-        
-        print_success("TEST PASSED: ETH filter is graceful (no 500 error)")
-        return True, data
-        
-    except Exception as e:
-        print_error(f"Test failed with exception: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False, None
-
-def test_get_alerts_no_symbol():
-    """Test 4a: GET /api/v1/alerts (no symbol) - should return union of all coins"""
-    print_test_header("GET /api/v1/alerts (no symbol parameter)")
-    
-    try:
-        url = f"{BASE_URL}/v1/alerts"
-        print_info(f"Requesting: {url}")
-        
-        response = requests.get(url, timeout=30)
-        print_info(f"Status Code: {response.status_code}")
-        
-        if response.status_code != 200:
-            print_error(f"Expected status 200, got {response.status_code}")
-            return False
-        
-        data = response.json()
-        
-        # Validate response structure
-        if data.get('status') != 'ready':
-            print_error(f"Expected status='ready', got '{data.get('status')}'")
-            return False
-        print_success("Response status is 'ready'")
-        
-        alerts = data['alerts']
-        unseen = data['unseen']
-        total = data['total']
-        
-        print_info(f"Total alerts: {total}, Unseen: {unseen}, Returned: {len(alerts)}")
-        
-        # Count alerts by symbol
-        symbol_counts = {}
-        for alert in alerts:
-            symbol = alert.get('symbol', 'legacy')
-            symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
-        
-        print_info(f"Alerts by symbol: {symbol_counts}")
-        
-        print_success(f"Returned union of all alerts (total={total})")
-        return True, data
-        
-    except Exception as e:
-        print_error(f"Test failed with exception: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False, None
-
-def test_get_alerts_all():
-    """Test 4b: GET /api/v1/alerts?symbol=ALL - should return union of all coins"""
-    print_test_header("GET /api/v1/alerts?symbol=ALL")
-    
-    try:
-        url = f"{BASE_URL}/v1/alerts?symbol=ALL"
-        print_info(f"Requesting: {url}")
-        
-        response = requests.get(url, timeout=30)
-        print_info(f"Status Code: {response.status_code}")
-        
-        if response.status_code != 200:
-            print_error(f"Expected status 200, got {response.status_code}")
-            return False
-        
-        data = response.json()
-        
-        # Validate response structure
-        if data.get('status') != 'ready':
-            print_error(f"Expected status='ready', got '{data.get('status')}'")
-            return False
-        print_success("Response status is 'ready'")
-        
-        alerts = data['alerts']
-        unseen = data['unseen']
-        total = data['total']
-        
-        print_info(f"Total alerts: {total}, Unseen: {unseen}, Returned: {len(alerts)}")
-        
-        # Count alerts by symbol
-        symbol_counts = {}
-        for alert in alerts:
-            symbol = alert.get('symbol', 'legacy')
-            symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
-        
-        print_info(f"Alerts by symbol: {symbol_counts}")
-        
-        print_success(f"Returned union of all alerts (total={total})")
-        return True, data
-        
-    except Exception as e:
-        print_error(f"Test failed with exception: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False, None
-
-def test_union_comparison(no_symbol_data, all_data, btc_data, sol_data):
-    """Test 4c: Verify union (no symbol and ALL) >= individual coin totals"""
-    print_test_header("Verify UNION totals >= individual coin totals")
-    
-    try:
-        if not no_symbol_data or not all_data or not btc_data or not sol_data:
-            print_error("Missing data from previous tests")
-            return False
-        
-        no_symbol_total = no_symbol_data.get('total', 0)
-        all_total = all_data.get('total', 0)
-        btc_total = btc_data.get('total', 0)
-        sol_total = sol_data.get('total', 0)
-        
-        print_info(f"No symbol total: {no_symbol_total}")
-        print_info(f"ALL total: {all_total}")
-        print_info(f"BTC total: {btc_total}")
-        print_info(f"SOL total: {sol_total}")
-        
-        # Verify no_symbol and ALL return the same total
-        if no_symbol_total != all_total:
-            print_error(f"No symbol total ({no_symbol_total}) != ALL total ({all_total})")
-            return False
-        print_success(f"No symbol and ALL return same total: {no_symbol_total}")
-        
-        # Verify union total >= BTC total
-        if no_symbol_total < btc_total:
-            print_error(f"Union total ({no_symbol_total}) < BTC total ({btc_total})")
-            return False
-        print_success(f"Union total ({no_symbol_total}) >= BTC total ({btc_total})")
-        
-        # Verify union total >= SOL total
-        if no_symbol_total < sol_total:
-            print_error(f"Union total ({no_symbol_total}) < SOL total ({sol_total})")
-            return False
-        print_success(f"Union total ({no_symbol_total}) >= SOL total ({sol_total})")
-        
-        print_success("TEST PASSED: Union totals are correct")
-        return True
-        
-    except Exception as e:
-        print_error(f"Test failed with exception: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def test_ack_by_symbol(sol_data, btc_data):
-    """Test 5: POST /api/v1/alerts/ack with {symbol: 'SOL'} - should mark only SOL unseen as read"""
-    print_test_header("POST /api/v1/alerts/ack with {symbol: 'SOL'}")
-    
-    try:
-        if not sol_data or not btc_data:
-            print_error("Missing data from previous tests")
-            return False
-        
-        sol_unseen_before = sol_data.get('unseen', 0)
-        btc_unseen_before = btc_data.get('unseen', 0)
-        
-        print_info(f"SOL unseen before ack: {sol_unseen_before}")
-        print_info(f"BTC unseen before ack: {btc_unseen_before}")
-        
-        # Acknowledge SOL alerts
-        url = f"{BASE_URL}/v1/alerts/ack"
-        payload = {"symbol": "SOL"}
-        print_info(f"POST {url} with payload: {payload}")
-        
-        response = requests.post(url, json=payload, timeout=30)
-        print_info(f"Status Code: {response.status_code}")
-        
-        if response.status_code != 200:
-            print_error(f"Expected status 200, got {response.status_code}")
-            return False
-        
-        data = response.json()
-        print_info(f"Response: {data}")
-        
-        if data.get('status') != 'ok':
-            print_error(f"Expected status='ok', got '{data.get('status')}'")
-            return False
-        print_success("Ack response status is 'ok'")
-        
-        sol_unseen_after_ack = data.get('unseen', -1)
-        print_info(f"SOL unseen after ack (from response): {sol_unseen_after_ack}")
-        
-        # Verify SOL unseen count is now 0 (or at least decreased)
-        if sol_unseen_before > 0 and sol_unseen_after_ack != 0:
-            print_error(f"Expected SOL unseen=0 after ack, got {sol_unseen_after_ack}")
-            return False
-        
-        if sol_unseen_before > 0:
-            print_success(f"SOL unseen count changed from {sol_unseen_before} to {sol_unseen_after_ack}")
-        else:
-            print_info("SOL had no unseen alerts to begin with")
-        
-        # Now check BTC unseen count is UNAFFECTED
-        print_info("Verifying BTC unseen count is unaffected...")
-        btc_response = requests.get(f"{BASE_URL}/v1/alerts?symbol=BTC", timeout=30)
-        btc_data_after = btc_response.json()
-        btc_unseen_after = btc_data_after.get('unseen', -1)
-        
-        print_info(f"BTC unseen after SOL ack: {btc_unseen_after}")
-        
-        if btc_unseen_after != btc_unseen_before:
-            print_error(f"BTC unseen count changed from {btc_unseen_before} to {btc_unseen_after} (should be unchanged)")
-            return False
-        
-        print_success(f"BTC unseen count unchanged: {btc_unseen_before}")
-        
-        print_success("TEST PASSED: Symbol-scoped ack works correctly (SOL marked, BTC unaffected)")
-        return True
-        
-    except Exception as e:
-        print_error(f"Test failed with exception: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def test_ack_by_ids():
-    """Test 6: POST /api/v1/alerts/ack with {ids: [...]} - should mark specific alerts as seen"""
-    print_test_header("POST /api/v1/alerts/ack with {ids: [...]}")
-    
-    try:
-        # First, get some alerts to find an ID
-        url = f"{BASE_URL}/v1/alerts"
-        print_info(f"Getting alerts to find an ID...")
-        
-        response = requests.get(url, timeout=30)
-        if response.status_code != 200:
-            print_error(f"Failed to get alerts: status {response.status_code}")
-            return False
-        
-        data = response.json()
-        alerts = data.get('alerts', [])
-        
-        if len(alerts) == 0:
-            print_info("No alerts available to test ID-based ack (acceptable)")
-            print_success("TEST PASSED: No alerts to test, but endpoint structure is correct")
-            return True
-        
-        # Get the first alert ID
-        test_alert_id = alerts[0].get('id')
-        if not test_alert_id:
-            print_error("First alert has no 'id' field")
-            return False
-        
-        print_info(f"Using alert ID: {test_alert_id}")
-        
-        # Acknowledge this specific alert
-        ack_url = f"{BASE_URL}/v1/alerts/ack"
-        payload = {"ids": [test_alert_id]}
-        print_info(f"POST {ack_url} with payload: {payload}")
-        
-        ack_response = requests.post(ack_url, json=payload, timeout=30)
-        print_info(f"Status Code: {ack_response.status_code}")
-        
-        if ack_response.status_code != 200:
-            print_error(f"Expected status 200, got {ack_response.status_code}")
-            return False
-        
-        ack_data = ack_response.json()
-        print_info(f"Response: {ack_data}")
-        
-        if ack_data.get('status') != 'ok':
-            print_error(f"Expected status='ok', got '{ack_data.get('status')}'")
-            return False
-        print_success("Ack response status is 'ok'")
-        
-        print_success("TEST PASSED: ID-based ack works correctly")
-        return True
-        
-    except Exception as e:
-        print_error(f"Test failed with exception: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return False
-
-def main():
-    """Run all Alert Coin Filter tests"""
-    print("\n" + "="*80)
-    print("BTCIQ ALERT COIN FILTER - BACKEND TEST SUITE")
-    print("="*80)
-    print(f"Base URL: {BASE_URL}")
-    print("="*80)
+    test_cases = [
+        {
+            "name": "LEVERAGE SECTION",
+            "session_id": "t1",
+            "message": "What is the exact open interest, funding rate and squeeze risk right now?",
+            "section": "leverage",
+            "expected_keywords": ["open interest", "funding", "squeeze"],
+            "anti_mock_keywords": ["no liquidation", "no heatmap", "not available", "unavailable"],
+            "description": "Should mention OI/funding/squeeze numbers AND state NO liquidation/heatmap data"
+        },
+        {
+            "name": "WHALES SECTION",
+            "session_id": "t2",
+            "message": "Are whales accumulating or distributing? Give exact BTC flow numbers.",
+            "section": "whales",
+            "expected_keywords": ["btc", "flow", "binance", "coinbase", "etf"],
+            "anti_mock_keywords": [],
+            "description": "Should mention net BTC flow and named entities (e.g., Binance) and/or ETF flows"
+        },
+        {
+            "name": "DATA AUDIT SECTION",
+            "session_id": "t3",
+            "message": "What is the composite price, how confident are we, and what is the macro backdrop?",
+            "section": "dataaudit",
+            "expected_keywords": ["composite", "price", "confidence", "high", "medium", "low", "fed", "treasury", "macro"],
+            "anti_mock_keywords": [],
+            "description": "Should mention composite price + HIGH/MEDIUM/LOW confidence + FRED macro (Fed Funds/10Y)"
+        },
+        {
+            "name": "OVERVIEW SECTION",
+            "session_id": "t4",
+            "message": "Give me the 10-second read on Bitcoin right now.",
+            "section": "overview",
+            "expected_keywords": [],
+            "anti_mock_keywords": [],
+            "description": "Non-empty general answer"
+        },
+        {
+            "name": "EMPTY MESSAGE",
+            "session_id": "t5",
+            "message": "",
+            "section": "overview",
+            "expected_keywords": ["empty", "question"],
+            "anti_mock_keywords": [],
+            "description": "Should return friendly error (no 500)"
+        }
+    ]
     
     results = []
-    test_data = {}
     
-    # Test 1: BTC filter
-    result, btc_data = test_get_alerts_btc()
-    results.append(("GET /api/v1/alerts?symbol=BTC", result))
-    test_data['btc'] = btc_data
+    for i, test in enumerate(test_cases, 1):
+        print(f"\n{'=' * 80}")
+        print(f"TEST {i}/{len(test_cases)}: {test['name']}")
+        print(f"{'=' * 80}")
+        print(f"Description: {test['description']}")
+        print(f"Session ID: {test['session_id']}")
+        print(f"Section: {test['section']}")
+        print(f"Message: {test['message'][:80]}{'...' if len(test['message']) > 80 else ''}")
+        
+        try:
+            # Make request
+            url = f"{BASE_URL}/chat"
+            payload = {
+                "session_id": test['session_id'],
+                "message": test['message'],
+                "section": test['section']
+            }
+            
+            print(f"\nSending POST {url}")
+            print(f"Payload: {json.dumps(payload, indent=2)}")
+            
+            start_time = time.time()
+            response = requests.post(url, json=payload, timeout=TIMEOUT)
+            elapsed = time.time() - start_time
+            
+            print(f"Response time: {elapsed:.2f}s")
+            print(f"HTTP Status: {response.status_code}")
+            
+            # Check HTTP 200
+            if response.status_code != 200:
+                print(f"❌ FAILED: Expected HTTP 200, got {response.status_code}")
+                print(f"Response: {response.text[:500]}")
+                results.append({
+                    "test": test['name'],
+                    "passed": False,
+                    "reason": f"HTTP {response.status_code}"
+                })
+                continue
+            
+            data = response.json()
+            print(f"Response keys: {list(data.keys())}")
+            
+            # Check for error field (empty message case)
+            if test['name'] == "EMPTY MESSAGE":
+                if 'error' in data and data['error'] == 'empty message':
+                    print(f"✅ PASSED: Empty message handled gracefully")
+                    print(f"Error message: {data.get('text', '')}")
+                    results.append({
+                        "test": test['name'],
+                        "passed": True,
+                        "text_length": len(data.get('text', '')),
+                        "text_preview": data.get('text', '')[:200]
+                    })
+                    continue
+                else:
+                    print(f"❌ FAILED: Expected 'error' field with 'empty message'")
+                    print(f"Response: {json.dumps(data, indent=2)[:500]}")
+                    results.append({
+                        "test": test['name'],
+                        "passed": False,
+                        "reason": "Missing error field for empty message"
+                    })
+                    continue
+            
+            # Check required fields
+            if 'text' not in data:
+                print(f"❌ FAILED: Missing 'text' field")
+                print(f"Response: {json.dumps(data, indent=2)[:500]}")
+                results.append({
+                    "test": test['name'],
+                    "passed": False,
+                    "reason": "Missing 'text' field"
+                })
+                continue
+            
+            if 'model' not in data:
+                print(f"❌ FAILED: Missing 'model' field")
+                results.append({
+                    "test": test['name'],
+                    "passed": False,
+                    "reason": "Missing 'model' field"
+                })
+                continue
+            
+            text = data['text']
+            model = data['model']
+            text_length = len(text)
+            
+            print(f"\nModel: {model}")
+            print(f"Text length: {text_length} chars")
+            print(f"Text preview (first 200 chars): {text[:200]}")
+            print(f"Text preview (last 100 chars): ...{text[-100:]}")
+            
+            # Check text length (>200 chars, NOT truncated to a few words)
+            if text_length < 200:
+                print(f"❌ FAILED: Text too short ({text_length} chars < 200 chars)")
+                print(f"Full text: {text}")
+                results.append({
+                    "test": test['name'],
+                    "passed": False,
+                    "reason": f"Text too short ({text_length} chars)",
+                    "text_length": text_length,
+                    "text_preview": text[:200]
+                })
+                continue
+            
+            # Check for expected keywords (if any)
+            text_lower = text.lower()
+            found_keywords = []
+            missing_keywords = []
+            
+            if test['expected_keywords']:
+                for keyword in test['expected_keywords']:
+                    if keyword.lower() in text_lower:
+                        found_keywords.append(keyword)
+                    else:
+                        missing_keywords.append(keyword)
+                
+                print(f"\nKeyword check:")
+                print(f"  Expected keywords: {test['expected_keywords']}")
+                print(f"  Found: {found_keywords}")
+                if missing_keywords:
+                    print(f"  Missing: {missing_keywords}")
+            
+            # Check for anti-mock keywords (leverage case)
+            anti_mock_found = []
+            if test['anti_mock_keywords']:
+                for keyword in test['anti_mock_keywords']:
+                    if keyword.lower() in text_lower:
+                        anti_mock_found.append(keyword)
+                
+                print(f"\nAnti-mock check (should mention NO liquidation/heatmap data):")
+                print(f"  Anti-mock keywords: {test['anti_mock_keywords']}")
+                print(f"  Found: {anti_mock_found}")
+                
+                if not anti_mock_found:
+                    print(f"⚠️  WARNING: Expected anti-mock statement (NO liquidation/heatmap data) not found")
+            
+            # Determine pass/fail
+            passed = True
+            reason = "All checks passed"
+            
+            # For leverage, we need at least one anti-mock keyword
+            if test['name'] == "LEVERAGE SECTION" and not anti_mock_found:
+                passed = False
+                reason = "Missing anti-mock statement (NO liquidation/heatmap data)"
+            
+            # For whales, we need at least one expected keyword
+            if test['name'] == "WHALES SECTION" and not found_keywords:
+                passed = False
+                reason = "Missing expected keywords (BTC flow, entity names, ETF)"
+            
+            # For dataaudit, we need at least 2 expected keywords
+            if test['name'] == "DATA AUDIT SECTION" and len(found_keywords) < 2:
+                passed = False
+                reason = f"Missing expected keywords (found {len(found_keywords)}/3+)"
+            
+            if passed:
+                print(f"\n✅ PASSED: {test['name']}")
+            else:
+                print(f"\n❌ FAILED: {test['name']} - {reason}")
+            
+            results.append({
+                "test": test['name'],
+                "passed": passed,
+                "reason": reason,
+                "text_length": text_length,
+                "text_preview": text[:200],
+                "found_keywords": found_keywords,
+                "anti_mock_found": anti_mock_found,
+                "model": model,
+                "elapsed": elapsed
+            })
+            
+        except requests.exceptions.Timeout:
+            print(f"❌ FAILED: Request timeout (>{TIMEOUT}s)")
+            results.append({
+                "test": test['name'],
+                "passed": False,
+                "reason": f"Timeout (>{TIMEOUT}s)"
+            })
+        except Exception as e:
+            print(f"❌ FAILED: Exception: {e}")
+            import traceback
+            traceback.print_exc()
+            results.append({
+                "test": test['name'],
+                "passed": False,
+                "reason": f"Exception: {e}"
+            })
     
-    # Test 2: SOL filter
-    result, sol_data = test_get_alerts_sol()
-    results.append(("GET /api/v1/alerts?symbol=SOL", result))
-    test_data['sol'] = sol_data
+    # Summary
+    print("\n" + "=" * 80)
+    print("SUMMARY")
+    print("=" * 80)
     
-    # Test 3: ETH filter
-    result, eth_data = test_get_alerts_eth()
-    results.append(("GET /api/v1/alerts?symbol=ETH", result))
-    test_data['eth'] = eth_data
+    passed_count = sum(1 for r in results if r['passed'])
+    total_count = len(results)
     
-    # Test 4a: No symbol (union)
-    result, no_symbol_data = test_get_alerts_no_symbol()
-    results.append(("GET /api/v1/alerts (no symbol)", result))
-    test_data['no_symbol'] = no_symbol_data
-    
-    # Test 4b: ALL symbol (union)
-    result, all_data = test_get_alerts_all()
-    results.append(("GET /api/v1/alerts?symbol=ALL", result))
-    test_data['all'] = all_data
-    
-    # Test 4c: Union comparison
-    result = test_union_comparison(no_symbol_data, all_data, btc_data, sol_data)
-    results.append(("Union totals comparison", result))
-    
-    # Test 5: Ack by symbol
-    result = test_ack_by_symbol(sol_data, btc_data)
-    results.append(("POST /api/v1/alerts/ack {symbol: 'SOL'}", result))
-    
-    # Test 6: Ack by IDs
-    result = test_ack_by_ids()
-    results.append(("POST /api/v1/alerts/ack {ids: [...]}", result))
-    
-    # Print summary
-    print("\n" + "="*80)
-    print("TEST SUMMARY")
-    print("="*80)
-    
-    passed = 0
-    failed = 0
-    
-    for test_name, result in results:
-        if result:
-            print(f"✅ PASSED: {test_name}")
-            passed += 1
+    for result in results:
+        status = "✅ PASSED" if result['passed'] else "❌ FAILED"
+        print(f"{status}: {result['test']}")
+        if not result['passed']:
+            print(f"  Reason: {result['reason']}")
         else:
-            print(f"❌ FAILED: {test_name}")
-            failed += 1
+            if 'text_length' in result:
+                print(f"  Text length: {result['text_length']} chars")
+            if 'text_preview' in result:
+                print(f"  Preview: {result['text_preview'][:100]}...")
+            if 'found_keywords' in result and result['found_keywords']:
+                print(f"  Found keywords: {result['found_keywords']}")
+            if 'anti_mock_found' in result and result['anti_mock_found']:
+                print(f"  Anti-mock found: {result['anti_mock_found']}")
     
-    print("="*80)
-    print(f"Total: {len(results)} tests | Passed: {passed} | Failed: {failed}")
-    print("="*80)
+    print(f"\nTotal: {passed_count}/{total_count} tests passed")
     
-    if failed > 0:
-        print("\n❌ SOME TESTS FAILED")
-        sys.exit(1)
+    if passed_count == total_count:
+        print("\n🎉 ALL TESTS PASSED!")
+        return True
     else:
-        print("\n✅ ALL TESTS PASSED")
-        sys.exit(0)
+        print(f"\n⚠️  {total_count - passed_count} test(s) failed")
+        return False
 
 if __name__ == "__main__":
-    main()
+    success = test_chat_grounding()
+    exit(0 if success else 1)
