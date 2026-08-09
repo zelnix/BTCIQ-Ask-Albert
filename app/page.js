@@ -2292,7 +2292,7 @@ function ScorecardSection({ d }) {
               {cards.map(([key, label, value, sub, color]) => (
                 <button key={key} onClick={() => setModal(key)} className="group relative block w-full text-left transition hover:-translate-y-0.5">
                   <Stat label={label} value={value} sub={sub} color={color} />
-                  <span className="absolute right-2 top-2 flex items-center gap-0.5 rounded-full bg-slate-800/70 px-1.5 py-0.5 text-[9px] font-semibold text-slate-400 group-hover:text-sky-300"><Info className="h-3 w-3" />Albert</span>
+                  <span className="absolute right-2 top-2 text-slate-500 group-hover:text-sky-300"><Info className="h-3.5 w-3.5" /></span>
                 </button>
               ))}
             </div>
@@ -2316,15 +2316,6 @@ function ScorecardSection({ d }) {
           </>
         );
       })()}
-
-      <InfoBlock>
-        <ul className="mt-1 space-y-1 text-slate-400">
-          <li><span className="font-semibold text-slate-200">Directional accuracy</span> — how often the up/down call was right. 50% is a coin flip; higher is better.</li>
-          <li><span className="font-semibold text-slate-200">Brier score</span> — how honest the probabilities are (0 = perfect, 0.25 = a 50/50 guess). Lower is better.</li>
-          <li><span className="font-semibold text-slate-200">Mean absolute error</span> — on average, how far the base-case price landed from reality (%).</li>
-          <li><span className="font-semibold text-slate-200">Range hit rate</span> — how often price actually finished inside the base range we quoted.</li>
-        </ul>
-      </InfoBlock>
 
       {Object.keys(byRegime).length > 0 && (
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
