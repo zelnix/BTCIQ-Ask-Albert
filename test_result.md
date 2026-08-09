@@ -415,7 +415,7 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive validation via external URL. GET /api/v1/dashboard -> risk object with all required fields: level (Low/Normal/Elevated/High/Extreme), score (int 0-100), state_scale (list of 5), expected_move {24H/7D/30D each with pct/low/high}, realised_vol_annual (number), vol_percentile (int 0-100), downside_zone/upside_zone (object with price+distance_pct or null), macro_event_risk, data_uncertainty, drivers (list with name/state/value/demo), demo (object with implied_vol/leverage_risk/liquidation_risk/orderbook_liquidity), note. Validated expected_move ranges: low < close < high for all horizons ✅. All fields present and valid. Data is REAL except DEMO metrics (clearly flagged with demo=true and 'needs key' in source)."
-  - task: "Smart Money & Institutional DEMO (dashboard.smart_money, dashboard.institutional) - illustrative on-chain and ETF flow views"
+  - task: "Smart Money & Institutional REAL DATA (dashboard.smart_money, dashboard.institutional) - live on-chain and derivatives data from free sources"
     implemented: true
     working: true
     file: "backend/server.py"
@@ -426,6 +426,9 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive validation via external URL. GET /api/v1/dashboard -> smart_money and institutional objects. smart_money: demo=true ✅, source mentions 'needs key' ✅, headline (non-empty string) ✅, metrics (non-empty list, each with name/value/signal) ✅. institutional: demo=true ✅, source mentions 'needs key' ✅, headline (non-empty string) ✅, metrics (non-empty list, each with name/value/signal) ✅. Both objects clearly flagged as DEMO with illustrative data. All validations passed."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED NEW REAL DATA VALIDATION via external URL. Both panels now return demo=false with REAL live data from free sources. SMART_MONEY: demo=false ✅, source='BGeometrics · blockchain.com · alt.me · Glassnode' ✅, headline='On-chain smart money mixed / neutral' ✅, 5 metrics validated (MVRV Z-score=0.42 Bullish, SOPR=1.003 Neutral, Active addresses (30d)=-12.4% Bearish, Fear & Greed (Fear)=31 Neutral, Exchange balance (14d)=+0.48% Bearish) ✅. All metrics have required fields (name/value/signal) ✅. INSTITUTIONAL: demo=false ✅, source='OKX (derivatives) · ETF flow inactive' (mentions OKX) ✅, headline='Derivatives leaning bullish' ✅, 5 metrics validated (Futures open interest=$2.02B (+3.2% 7d) Neutral, Funding rate=+0.0032% Bullish, Long/short account ratio=1.16 Neutral, Taker buy/sell ratio=1.11 Bullish, Spot ETF net flow (1d)=Inactive — paid feed required Neutral) ✅. CRITICAL: 'Spot ETF net flow (1d)' metric has inactive=true (marked Inactive as expected, no free ETF feed) ✅. REGRESSION: All core dashboard fields still present (status='ready', signal, quant_score, regime, forecasts, decision, risk, smart_alerts) ✅. Data sources: BGeometrics/bitcoin-data.com, blockchain.com, alternative.me Fear & Greed, OKX public API, Glassnode Light key. No HTTP 500 errors. All validations passed. Data is REAL."
   - task: "Manual forecast passcode gate + audit (POST /api/v1/bitmark/run, GET /api/v1/audit) - admin-only manual forecast trigger with audit trail"
     implemented: true
     working: true
@@ -1648,11 +1651,23 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      NEW TEST FOCUS — Alert Coin Filter. Smart Alerts are now coin-scoped (symbol field per alert).
-      Test GET /api/v1/alerts?symbol={BTC|ETH|SOL|ALL} filtering + POST /api/v1/alerts/ack with a
-      {symbol} body (coin-scoped ack) and with {ids} (specific ack). Verify BTC alerts never appear
-      under ETH/SOL and vice versa, that ALL/no-symbol returns the union, and unseen/total counts are
-      scoped to the requested coin. No 500s. Do NOT test frontend (will be verified separately).
+      NEW TEST FOCUS — Real Smart Money + Institutional/Derivatives panels (free data engine).
+      Test GET /api/v1/dashboard (BTC). The top-level `smart_money` and `institutional` objects should
+      now be REAL (demo:false) once the background engine has populated (it caches in the onchain_engine
+      collection; first compute may still show demo:true DEMO fallback, so if demo:true, POST
+      /api/v1/refresh, wait ~40s, and re-GET — it should flip to demo:false).
+      Validate on GET /api/v1/dashboard:
+        1) smart_money: object with demo:false, non-empty source string (mentions BGeometrics/blockchain.com/
+           Glassnode), headline (non-empty), metrics: non-empty list where each item has name/value/signal
+           (signal in Bullish/Bearish/Neutral). Expect metrics like 'MVRV Z-score', 'SOPR',
+           'Active addresses (30d)', 'Fear & Greed (...)'.
+        2) institutional: object with demo:false, source mentions OKX, headline non-empty, metrics non-empty.
+           Expect 'Futures open interest', 'Funding rate', 'Long/short account ratio', 'Taker buy/sell ratio',
+           and a 'Spot ETF net flow (1d)' row that has inactive:true (marked Inactive — no free feed).
+        3) No 500s. Values are real numbers (not the old seeded DEMO ranges).
+      Also confirm BTC dashboard still returns status:'ready' with all prior fields (regression).
+      Do NOT test frontend. Data is REAL (BGeometrics/bitcoin-data.com, blockchain.com, alternative.me,
+      OKX public API, Glassnode Light key).
     -agent: "testing"
     -message: |
       ✅ ALERT COIN FILTER BACKEND TEST COMPLETE - ALL TESTS PASSED (8/8)
@@ -1677,3 +1692,57 @@ agent_communication:
       
       NO ISSUES FOUND. Feature is production-ready. Data is REAL (MongoDB).
 
+
+    -agent: "testing"
+    -message: |
+      ✅ SMART MONEY & INSTITUTIONAL REAL DATA PANELS TEST COMPLETE
+      
+      Tested GET /api/v1/dashboard via external URL (https://quant-features.preview.emergentagent.com/api/v1/dashboard)
+      to validate the NEW real "Smart Money" and "Institutional & Derivatives" data panels that replaced the old DEMO panels.
+      
+      RESULT: All validations PASSED ✅
+      
+      TEST EXECUTION:
+      1. GET /api/v1/dashboard returned status='ready' with both panels already at demo=false (no refresh needed)
+      2. Both panels now use REAL live data from free sources (BGeometrics, blockchain.com, alternative.me, OKX, Glassnode Light)
+      
+      SMART_MONEY PANEL VALIDATED:
+      - demo=false ✅ (was demo=true in old DEMO version)
+      - source='BGeometrics · blockchain.com · alt.me · Glassnode' (non-empty, mentions expected providers) ✅
+      - headline='On-chain smart money mixed / neutral' (non-empty string) ✅
+      - metrics: 5 items, all with required fields (name/value/signal) ✅
+        1. MVRV Z-score: 0.42 (Bullish)
+        2. SOPR: 1.003 (Neutral)
+        3. Active addresses (30d): -12.4% (Bearish)
+        4. Fear & Greed (Fear): 31 (Neutral)
+        5. Exchange balance (14d): +0.48% (Bearish)
+      - All expected metrics present: MVRV Z-score ✅, SOPR ✅, Active addresses ✅, Fear & Greed ✅
+      
+      INSTITUTIONAL PANEL VALIDATED:
+      - demo=false ✅ (was demo=true in old DEMO version)
+      - source='OKX (derivatives) · ETF flow inactive' (non-empty, mentions OKX) ✅
+      - headline='Derivatives leaning bullish' (non-empty string) ✅
+      - metrics: 5 items, all with required fields (name/value/signal) ✅
+        1. Futures open interest: $2.02B (+3.2% 7d) (Neutral)
+        2. Funding rate: +0.0032% (Bullish)
+        3. Long/short account ratio: 1.16 (Neutral)
+        4. Taker buy/sell ratio: 1.11 (Bullish)
+        5. Spot ETF net flow (1d): Inactive — paid feed required (Neutral) [INACTIVE]
+      - All expected metrics present: Futures open interest ✅, Funding rate ✅, Long/short account ratio ✅, 
+        Taker buy/sell ratio ✅, Spot ETF net flow ✅
+      - CRITICAL: 'Spot ETF net flow (1d)' metric has inactive=true (marked Inactive as expected, no free ETF feed) ✅
+      
+      REGRESSION TEST PASSED:
+      - GET /api/v1/dashboard still returns status='ready' ✅
+      - All core fields present: signal ✅, quant_score ✅, regime ✅, forecasts ✅, decision ✅, risk ✅, smart_alerts ✅
+      - No HTTP 500 errors at any point ✅
+      
+      DATA SOURCES CONFIRMED:
+      - BGeometrics / bitcoin-data.com (on-chain metrics)
+      - blockchain.com (on-chain data)
+      - alternative.me (Fear & Greed Index)
+      - OKX public API (derivatives data: open interest, funding rate, long/short ratio, taker buy/sell ratio)
+      - Glassnode Light key (on-chain metrics)
+      
+      NO ISSUES FOUND. Both panels now use REAL live data (demo=false). The old DEMO fallback has been successfully 
+      replaced with free live data sources. Feature is production-ready.

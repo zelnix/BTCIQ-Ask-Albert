@@ -68,9 +68,9 @@ const SECTIONS = [
   { id: 'analogs', label: 'Happening Again', icon: History,
     blurb: "Finds which past Bitcoin trend episode today's conditions most resemble — using macro rates, the US dollar, equity & gold correlation, volatility, drawdown, momentum and halving-cycle position — then shows what happened next. Adjust the sliders to weight what matters to you. Educational pattern-matching, not a prediction." },
   { id: 'smartmoney', label: 'Smart Money', icon: Waves,
-    blurb: 'On-chain "smart money" behaviour — whale wallets, exchange reserves and long-term holders. Shown as clearly-labelled demo values until an on-chain data key is connected.' },
-  { id: 'institutional', label: 'Institutional', icon: Landmark,
-    blurb: 'Institutional footprint — spot-ETF flows and CME futures positioning. Shown as clearly-labelled demo values until an ETF/CME data key is connected.' },
+    blurb: 'On-chain "smart money" behaviour — valuation (MVRV, SOPR), network activity, holder accumulation and sentiment. Powered by real on-chain data (BGeometrics, blockchain.com, Glassnode) and Fear & Greed.' },
+  { id: 'institutional', label: 'Institutional & Derivatives', icon: Landmark,
+    blurb: 'Institutional & derivatives footprint — futures open interest, funding, long/short positioning and taker flow (live via OKX). Spot-ETF net flows are marked Inactive until a paid ETF feed is connected.' },
   { id: 'macro', label: 'Macro & Policy', icon: Globe,
     blurb: 'Are global money conditions helping or hurting Bitcoin? Central-bank policy, a liquidity gauge, cross-market correlations and a regulation tracker.' },
   { id: 'news', label: 'News', icon: Newspaper,
@@ -2597,8 +2597,8 @@ function AskQuantSection({ d }) {
 }
 
 /* ---------------- Stage-1: Risk / Smart Money / Institutional / Settings --------------- */
-function DemoBadge({ label = 'DEMO DATA' }) {
-  return <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-300">{label}</span>;
+function DemoBadge({ label = 'Inactive' }) {
+  return <span className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-slate-300">{label}</span>;
 }
 const sigColor = (s) => s === 'Bullish' ? 'text-emerald-400' : s === 'Bearish' ? 'text-red-400' : 'text-slate-400';
 const riskStateColor = (s) => ({ Low: 'text-emerald-400', Normal: 'text-lime-400', Deep: 'text-emerald-400',
@@ -2660,7 +2660,7 @@ function RiskSection({ d }) {
       </div>
 
       <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-        <div className="mb-3 flex items-center gap-2"><h3 className="flex items-center gap-1 text-sm font-semibold text-white">Risk Drivers<InfoTip below text="The individual factors feeding the risk score (volatility, leverage, liquidity, macro). Each shows its current state; items tagged DEMO are placeholders until a paid feed is added." /></h3><span className="text-[11px] text-slate-500">real + illustrative</span></div>
+        <div className="mb-3 flex items-center gap-2"><h3 className="flex items-center gap-1 text-sm font-semibold text-white">Risk Drivers<InfoTip below text="The individual factors feeding the risk score (volatility, leverage, liquidity, macro). Each shows its current state; items tagged Inactive are placeholders until a paid feed is added." /></h3><span className="text-[11px] text-slate-500">real + inactive</span></div>
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {r.drivers.map((dr, i) => (
             <div key={i} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 text-sm">
@@ -2671,7 +2671,7 @@ function RiskSection({ d }) {
             </div>
           ))}
         </div>
-        <p className="mt-3 text-[11px] text-slate-600">Metrics tagged DEMO DATA (implied volatility, leverage/funding, liquidation clusters, order-book depth) are illustrative placeholders until a paid derivatives/order-book feed key is added. All other metrics are computed from real market data.</p>
+        <p className="mt-3 text-[11px] text-slate-600">Metrics tagged Inactive (implied volatility, leverage/funding, liquidation clusters, order-book depth) are placeholders until a paid derivatives/order-book feed is connected. All other metrics are computed from real market data.</p>
       </Card>
     </div>
   );
@@ -2679,6 +2679,7 @@ function RiskSection({ d }) {
 
 function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
   if (!panel) return <ComingSoonSection section={sec(sectionId)} />;
+  const inactive = !!panel.demo;
   return (
     <div className="space-y-5">
       <SectionHead icon={Icon} title={title} blurb={sec(sectionId).blurb} />
@@ -2686,21 +2687,28 @@ function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <Icon className="h-5 w-5 text-sky-400" />
           <h3 className="flex items-center gap-1 font-semibold text-white">{panel.headline}<InfoTip below text="A snapshot of what this data category is signalling. Each row shows a metric, its current value, and whether it reads bullish, bearish or neutral for BTC." /></h3>
-          <DemoBadge />
+          {inactive ? <DemoBadge /> : <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Live</span>}
           <span className="ml-auto text-[11px] text-slate-500">{panel.source}</span>
         </div>
         <div className="space-y-2">
           {panel.metrics.map((m, i) => (
-            <div key={i} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3 text-sm">
+            <div key={i} className={`flex items-center gap-3 rounded-lg border p-3 text-sm ${m.inactive ? 'border-slate-800/60 bg-slate-950/20 opacity-60' : 'border-slate-800 bg-slate-950/40'}`}>
               <span className="flex-1 text-slate-300">{m.name}</span>
+              {m.inactive && <DemoBadge />}
               <span className="font-mono text-slate-200">{m.value}</span>
-              <span className={`w-16 text-right text-xs font-semibold ${sigColor(m.signal)}`}>{m.signal}</span>
+              {!m.inactive && <span className={`w-16 text-right text-xs font-semibold ${sigColor(m.signal)}`}>{m.signal}</span>}
             </div>
           ))}
         </div>
-        <div className="mt-4 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] p-3 text-[11px] text-amber-200/80">
-          <span className="font-semibold">DEMO DATA:</span> the values above are illustrative placeholders shown to demonstrate the panel. They are not live. Provide a {panel.source} to activate real data.
-        </div>
+        {inactive ? (
+          <div className="mt-4 rounded-lg border border-slate-500/25 bg-slate-500/[0.06] p-3 text-[11px] text-slate-300/80">
+            <span className="font-semibold">Inactive:</span> live data isn’t connected for this panel yet, so the values above are illustrative placeholders. Connect {panel.source} to activate real data.
+          </div>
+        ) : (
+          <div className="mt-4 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.05] p-3 text-[11px] text-emerald-200/80">
+            Live on-chain / derivatives data from {panel.source}. Any row marked <span className="font-semibold">Inactive</span> needs a paid feed and is not yet connected.
+          </div>
+        )}
       </Card>
     </div>
   );
@@ -2719,10 +2727,12 @@ function SettingsSection({ onManualRun }) {
     ['Dominance / market cap', 'CoinGecko', 'Live'],
     ['Cross-market (equities, DXY, gold)', 'Yahoo Finance / Stooq', 'Live'],
     ['News', 'RSS (CoinDesk, Cointelegraph, Fed…)', 'Live'],
-    ['On-chain / Smart Money', 'Glassnode', 'Needs key — DEMO'],
-    ['ETF flows / Institutional', 'ETF issuers / CME', 'Needs key — DEMO'],
-    ['Derivatives (IV, funding, liquidations)', 'Deribit / CoinGlass', 'Needs key — DEMO'],
-    ['Social sentiment', 'LunarCrush', 'Needs key — DEMO'],
+    ['On-chain / Smart Money', 'BGeometrics · blockchain.com · Glassnode', 'Live'],
+    ['Derivatives (OI, funding, long/short)', 'OKX', 'Live'],
+    ['Sentiment (Fear & Greed)', 'alternative.me', 'Live'],
+    ['ETF flows / Institutional', 'ETF issuers / CME', 'Inactive — paid feed'],
+    ['Order-book / IV / liquidations', 'Deribit / CoinGlass', 'Inactive — paid feed'],
+    ['Social sentiment', 'LunarCrush', 'Inactive — paid feed'],
   ];
   return (
     <div className="space-y-5">
@@ -4365,7 +4375,7 @@ export default function DashboardPage() {
     if (active === 'crossmarket') return <CrossMarketSection />;
     if (active === 'analogs') return <AnalogsSection />;
     if (active === 'smartmoney') return <DemoMetricsCard title="Smart Money" icon={Waves} panel={d.smart_money} sectionId="smartmoney" />;
-    if (active === 'institutional') return <DemoMetricsCard title="Institutional" icon={Landmark} panel={d.institutional} sectionId="institutional" />;
+    if (active === 'institutional') return <DemoMetricsCard title="Institutional & Derivatives" icon={Landmark} panel={d.institutional} sectionId="institutional" />;
     if (active === 'macro') return <PolicySection d={d} />;
     if (active === 'news') return <NewsSection news={news} status={newsStatus} onRefresh={handleNewsRefresh} refreshing={newsRefreshing} />;
     if (active === 'risk') return <RiskSection d={d} />;

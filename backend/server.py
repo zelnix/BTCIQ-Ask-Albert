@@ -1666,6 +1666,241 @@ def get_smart_money_panel():
     return cache.get('data')
 
 
+# =====================================================================
+# FREE ON-CHAIN + DERIVATIVES ENGINE (BTCIQ)
+# Real Smart Money (on-chain) + Institutional/Derivatives panels from free,
+# server-reachable sources: BGeometrics (bitcoin-data.com), blockchain.com,
+# alternative.me (Fear & Greed), OKX public API, + Glassnode Light (bonus).
+# Cached in Mongo, background refresh ~2h. ETF net flow shown as Inactive
+# (no free, server-reachable feed).
+# =====================================================================
+onchain_col = db['onchain_engine']
+ONCHAIN_TTL_SEC = 2 * 3600
+_onchain_state = {'running': False}
+
+
+def _engine_get(url, params=None, headers=None, timeout=12):
+    try:
+        r = requests.get(url, params=params or {}, headers=headers or {}, timeout=timeout)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:  # noqa
+        traceback.print_exc()
+    return None
+
+
+def _bdata_last(metric):
+    return _engine_get(f'https://bitcoin-data.com/v1/{metric}/last')
+
+
+def _bc_chart(name, timespan='30days'):
+    js = _engine_get('https://api.blockchain.info/charts/' + name,
+                     params={'timespan': timespan, 'format': 'json'})
+    if js and isinstance(js.get('values'), list):
+        return js['values']
+    return None
+
+
+def _fng():
+    js = _engine_get('https://api.alternative.me/fng/', params={'limit': 2})
+    try:
+        return js['data']
+    except Exception:  # noqa
+        return None
+
+
+def _okx(path, params=None):
+    js = _engine_get('https://www.okx.com' + path, params=params)
+    if js and str(js.get('code')) == '0':
+        return js.get('data')
+    return None
+
+
+def build_smart_money_engine(gn_series=None):
+    metrics, tally = [], {'b': 0, 'r': 0}
+
+    def add(name, value, s, inactive=False):
+        if not inactive:
+            if s == 'Bullish':
+                tally['b'] += 1
+            elif s == 'Bearish':
+                tally['r'] += 1
+        m = {'name': name, 'value': value, 'signal': s}
+        if inactive:
+            m['inactive'] = True
+        metrics.append(m)
+
+    mz = _bdata_last('mvrv-zscore')
+    if mz and mz.get('mvrvZscore') is not None:
+        try:
+            z = float(mz['mvrvZscore'])
+            s = 'Bullish' if z < 1 else 'Bearish' if z > 5 else 'Neutral'
+            add('MVRV Z-score', f'{z:.2f}', s)
+        except Exception:  # noqa
+            pass
+    sp = _bdata_last('sopr')
+    if sp and sp.get('sopr') is not None:
+        try:
+            v = float(sp['sopr'])
+            s = 'Bullish' if v < 0.98 else 'Bearish' if v > 1.03 else 'Neutral'
+            add('SOPR', f'{v:.3f}', s)
+        except Exception:  # noqa
+            pass
+    aa = _bc_chart('n-unique-addresses', '30days')
+    if aa and len(aa) >= 2:
+        try:
+            a0, a1 = float(aa[0]['y']), float(aa[-1]['y'])
+            chg = round((a1 - a0) / a0 * 100, 1) if a0 else None
+            if chg is not None:
+                s = 'Bullish' if chg > 3 else 'Bearish' if chg < -8 else 'Neutral'
+                add('Active addresses (30d)', f'{"+" if chg >= 0 else ""}{chg}%', s)
+        except Exception:  # noqa
+            pass
+    fg = _fng()
+    if fg:
+        try:
+            val = int(fg[0]['value'])
+            cls = fg[0].get('value_classification', '')
+            # Contrarian read: extreme fear = accumulation opportunity, extreme greed = caution.
+            s = 'Bullish' if val <= 25 else 'Bearish' if val >= 75 else 'Neutral'
+            add(f'Fear & Greed ({cls})', str(val), s)
+        except Exception:  # noqa
+            pass
+    if gn_series:
+        exch_chg = _gn_change_pct(gn_series.get('exch_balance'))
+        if exch_chg is not None:
+            s = 'Bullish' if exch_chg < -0.3 else 'Bearish' if exch_chg > 0.3 else 'Neutral'
+            add('Exchange balance (14d)', f'{"+" if exch_chg >= 0 else ""}{exch_chg}%', s)
+        accum = _gn_val(gn_series.get('accum'))
+        if accum is not None:
+            try:
+                accum = float(accum)
+                s = 'Bullish' if accum >= 0.6 else 'Bearish' if accum <= 0.4 else 'Neutral'
+                add('Accumulation trend score', f'{accum:.2f}', s)
+            except Exception:  # noqa
+                pass
+        lth_chg = _gn_change_pct(gn_series.get('lth'))
+        if lth_chg is not None:
+            s = 'Bullish' if lth_chg > 0.1 else 'Bearish' if lth_chg < -0.1 else 'Neutral'
+            add('Long-term holder supply (14d)', f'{"+" if lth_chg >= 0 else ""}{lth_chg}%', s)
+
+    if not metrics:
+        return None
+    net = tally['b'] - tally['r']
+    headline = ('On-chain smart money accumulating' if net >= 2
+                else 'On-chain smart money distributing' if net <= -2
+                else 'On-chain smart money mixed / neutral')
+    src = 'BGeometrics · blockchain.com · alt.me' + (' · Glassnode' if gn_series else '')
+    return {'demo': False, 'source': src, 'headline': headline, 'metrics': metrics,
+            'as_of': datetime.datetime.utcnow().isoformat()}
+
+
+def build_derivatives_engine():
+    metrics, tally = [], {'b': 0, 'r': 0}
+
+    def add(name, value, s, inactive=False, count=True):
+        if not inactive and count:
+            if s == 'Bullish':
+                tally['b'] += 1
+            elif s == 'Bearish':
+                tally['r'] += 1
+        m = {'name': name, 'value': value, 'signal': s}
+        if inactive:
+            m['inactive'] = True
+        metrics.append(m)
+
+    oi = _okx('/api/v5/public/open-interest', {'instType': 'SWAP', 'instId': 'BTC-USDT-SWAP'})
+    oih = _okx('/api/v5/rubik/stat/contracts/open-interest-volume', {'ccy': 'BTC', 'period': '1D'})
+    oi_chg = None
+    if oih and len(oih) >= 2:
+        try:
+            latest = float(oih[0][1])
+            idx = min(7, len(oih) - 1)
+            prev = float(oih[idx][1])
+            oi_chg = round((latest - prev) / prev * 100, 1) if prev else None
+        except Exception:  # noqa
+            pass
+    if oi:
+        try:
+            oi_usd = float(oi[0]['oiUsd'])
+            val = f'${oi_usd / 1e9:.2f}B'
+            if oi_chg is not None:
+                val += f' ({"+" if oi_chg >= 0 else ""}{oi_chg}% 7d)'
+            add('Futures open interest', val, 'Neutral', count=False)
+        except Exception:  # noqa
+            pass
+    fr = _okx('/api/v5/public/funding-rate', {'instId': 'BTC-USDT-SWAP'})
+    if fr:
+        try:
+            rate = float(fr[0]['fundingRate']) * 100  # % per funding interval
+            s = ('Bearish' if rate > 0.03 else 'Bullish' if rate > 0.002
+                 else 'Bearish' if rate < 0 else 'Neutral')
+            add('Funding rate', f'{rate:+.4f}%', s)
+        except Exception:  # noqa
+            pass
+    ls = _okx('/api/v5/rubik/stat/contracts/long-short-account-ratio', {'ccy': 'BTC', 'period': '1D'})
+    if ls:
+        try:
+            ratio = float(ls[0][1])
+            s = 'Bearish' if ratio > 2 else 'Bullish' if ratio < 1 else 'Neutral'
+            add('Long/short account ratio', f'{ratio:.2f}', s)
+        except Exception:  # noqa
+            pass
+    tv = _okx('/api/v5/rubik/stat/taker-volume', {'ccy': 'BTC', 'instType': 'SPOT', 'period': '1D'})
+    if tv:
+        try:
+            sell = float(tv[0][1])
+            buy = float(tv[0][2])
+            r = buy / sell if sell else None
+            if r:
+                s = 'Bullish' if r > 1.05 else 'Bearish' if r < 0.95 else 'Neutral'
+                add('Taker buy/sell ratio', f'{r:.2f}', s)
+        except Exception:  # noqa
+            pass
+    # ETF net flow: no free, server-reachable feed -> shown as Inactive
+    add('Spot ETF net flow (1d)', 'Inactive — paid feed required', 'Neutral', inactive=True)
+
+    if not [m for m in metrics if not m.get('inactive')]:
+        return None
+    net = tally['b'] - tally['r']
+    headline = ('Derivatives leaning bullish' if net >= 2
+                else 'Derivatives leaning bearish' if net <= -2
+                else 'Derivatives mixed / neutral')
+    return {'demo': False, 'source': 'OKX (derivatives) · ETF flow inactive',
+            'headline': headline, 'metrics': metrics,
+            'as_of': datetime.datetime.utcnow().isoformat()}
+
+
+def _refresh_onchain_bg():
+    if _onchain_state.get('running'):
+        return
+    _onchain_state['running'] = True
+    try:
+        gc = glassnode_col.find_one({'_id': 'smart_money_btc'}) or {}
+        gn = gc.get('series')
+        if GLASSNODE_API_KEY and (time.time() - gc.get('fetched_ts', 0) >= GLASSNODE_TTL_SEC):
+            threading.Thread(target=_refresh_glassnode_bg, daemon=True).start()
+        sm = build_smart_money_engine(gn)
+        dv = build_derivatives_engine()
+        onchain_col.update_one({'_id': 'btc'}, {'$set': {
+            '_id': 'btc', 'fetched_ts': time.time(),
+            'fetched_at': datetime.datetime.utcnow().isoformat(),
+            'smart_money': sm, 'institutional': dv}}, upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+    finally:
+        _onchain_state['running'] = False
+
+
+def get_onchain_panels():
+    """Return cached {smart_money, institutional} real panels; refresh in background when stale."""
+    c = onchain_col.find_one({'_id': 'btc'}) or {}
+    now = time.time()
+    if (not c.get('smart_money') and not c.get('institutional')) or (now - c.get('fetched_ts', 0) >= ONCHAIN_TTL_SEC):
+        threading.Thread(target=_refresh_onchain_bg, daemon=True).start()
+    return {'smart_money': c.get('smart_money'), 'institutional': c.get('institutional')}
+
+
 
 CHAT_SYSTEM = (
     "You are 'Albert', the friendly HuCentAI Quant analyst built into the BTCIQ Bitcoin dashboard "
@@ -2761,8 +2996,9 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
     try:
-        smart_money = get_smart_money_panel() or compute_smart_money_demo(last_close, quant['regime']['regime'])
-        institutional = compute_institutional_demo(last_close)
+        _panels = get_onchain_panels()
+        smart_money = _panels.get('smart_money') or compute_smart_money_demo(last_close, quant['regime']['regime'])
+        institutional = _panels.get('institutional') or compute_institutional_demo(last_close)
     except Exception:  # noqa
         traceback.print_exc()
 
