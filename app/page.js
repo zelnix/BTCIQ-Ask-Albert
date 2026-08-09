@@ -5938,6 +5938,9 @@ export default function DashboardPage() {
   const [status, setStatus] = useState(__dashCache ? 'ready' : 'loading');
   const [error, setError] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [passPrompt, setPassPrompt] = useState(false);
+  const [passInput, setPassInput] = useState('');
+  const [passError, setPassError] = useState('');
   const [ticker, setTicker] = useState(__tickerCache);
   const [active, setActive] = useState('overview');
   const [showReport, setShowReport] = useState(false);
@@ -6064,9 +6067,9 @@ export default function DashboardPage() {
     return () => { alive = false; clearInterval(t); clearInterval(dref); };
   }, [load, symbol]);
 
-  const handleRefresh = async () => {
-    const passcode = (typeof window !== 'undefined' && window.localStorage.getItem('btciq_admin_passcode')) || '';
+  const doRefresh = async (passcode) => {
     setRefreshing(true);
+    setPassError('');
     try {
       const r = await fetch('/api/v1/refresh', {
         method: 'POST',
@@ -6075,17 +6078,38 @@ export default function DashboardPage() {
       });
       if (r.status === 401) {
         setRefreshing(false);
-        if (typeof window !== 'undefined') window.alert('Admin passcode required — set it in Settings to run a full recompute.');
+        setPassPrompt(true);
+        setPassError('Incorrect passcode. Please try again.');
         return;
       }
       if (r.status === 429) {
         setRefreshing(false);
+        setPassPrompt(false);
         if (typeof window !== 'undefined') window.alert('Too many refreshes — please wait a moment and try again.');
         return;
       }
-    } catch (e) { /* noop */ }
-    const id = setInterval(load, 4000);
-    setTimeout(() => clearInterval(id), 90000);
+      // Accepted — remember the passcode and start polling for the fresh run.
+      if (typeof window !== 'undefined' && passcode) window.localStorage.setItem('btciq_admin_passcode', passcode);
+      setPassPrompt(false);
+      setPassInput('');
+      const id = setInterval(load, 4000);
+      setTimeout(() => clearInterval(id), 90000);
+    } catch (e) {
+      setRefreshing(false);
+      setPassError('Network error — please try again.');
+    }
+  };
+
+  const handleRefresh = () => {
+    const stored = (typeof window !== 'undefined' && window.localStorage.getItem('btciq_admin_passcode')) || '';
+    if (!stored) { setPassError(''); setPassInput(''); setPassPrompt(true); return; }
+    doRefresh(stored);
+  };
+
+  const submitPasscode = () => {
+    const p = (passInput || '').trim();
+    if (!p) { setPassError('Enter the admin passcode.'); return; }
+    doRefresh(p);
   };
 
   if (!data && (status === 'loading' || status === 'computing')) {
@@ -6200,9 +6224,38 @@ export default function DashboardPage() {
               className="gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800">
               <ClipboardList className="h-4 w-4" /><span className="hidden sm:inline">Report</span>
             </Button>
-            <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="gap-2 bg-gradient-to-r from-sky-500 to-violet-600 text-white shadow-lg shadow-violet-500/20 hover:from-sky-400 hover:to-violet-500">
-              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />{refreshing ? 'Retraining' : 'Retrain'}
-            </Button>
+            <div className="relative">
+              <Button onClick={handleRefresh} disabled={refreshing} size="sm" className="gap-2 bg-gradient-to-r from-sky-500 to-violet-600 text-white shadow-lg shadow-violet-500/20 hover:from-sky-400 hover:to-violet-500">
+                <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />{refreshing ? 'Retraining' : 'Retrain'}
+              </Button>
+              {passPrompt && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setPassPrompt(false)} />
+                  <div className="absolute right-0 z-50 mt-2 w-72 rounded-xl border border-slate-700 bg-slate-900 p-3 shadow-2xl shadow-black/50">
+                    <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-white">
+                      <Lock className="h-4 w-4 text-amber-400" />Admin passcode
+                    </div>
+                    <p className="mb-2 text-[11px] leading-relaxed text-slate-400">A full retrain is an admin action. Enter the passcode to run it now.</p>
+                    <input
+                      type="password"
+                      autoFocus
+                      value={passInput}
+                      onChange={(e) => { setPassInput(e.target.value); setPassError(''); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter') submitPasscode(); if (e.key === 'Escape') setPassPrompt(false); }}
+                      placeholder="Enter admin passcode"
+                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500"
+                    />
+                    {passError && <p className="mt-1.5 text-[11px] font-medium text-red-400">{passError}</p>}
+                    <div className="mt-2.5 flex items-center justify-end gap-2">
+                      <button onClick={() => setPassPrompt(false)} className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-slate-200">Cancel</button>
+                      <button onClick={submitPasscode} disabled={refreshing} className="rounded-lg bg-gradient-to-r from-sky-500 to-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:from-sky-400 hover:to-violet-500 disabled:opacity-60">
+                        {refreshing ? 'Running…' : 'Run retrain'}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
 
           {/* Mobile nav */}
