@@ -1927,8 +1927,25 @@ def build_derivatives_engine(symbol='BTC'):
                 add('Taker buy/sell ratio', f'{r:.2f}', s, spark=tv_spark)
         except Exception:  # noqa
             pass
-    # Spot ETF net flow: no free, server-reachable feed. Only BTC & ETH have US spot ETFs.
-    if sym in ('BTC', 'ETH'):
+    # Spot ETF net flow: REAL for BTC (bitbo/Farside mirror). ETH has no free table.
+    etf_active = False
+    if sym == 'BTC':
+        try:
+            es = etf_summary()
+        except Exception:  # noqa
+            es = None
+        if es and es.get('net_1d') is not None:
+            etf_active = True
+            n1 = es['net_1d']
+            sig1 = 'Bullish' if n1 > 20 else 'Bearish' if n1 < -20 else 'Neutral'
+            add(f'Spot ETF net flow (1d)', f'${n1:+,.0f}M', sig1, spark=es.get('spark'))
+            n7 = es.get('net_7d')
+            if n7 is not None:
+                sig7 = 'Bullish' if n7 > 50 else 'Bearish' if n7 < -50 else 'Neutral'
+                add(f'Spot ETF net flow (7d)', f'${n7:+,.0f}M', sig7)
+        else:
+            add('Spot ETF net flow (1d)', 'Inactive — paid feed required', 'Neutral', inactive=True)
+    elif sym == 'ETH':
         add('Spot ETF net flow (1d)', 'Inactive — paid feed required', 'Neutral', inactive=True)
 
     if not [m for m in metrics if not m.get('inactive')]:
@@ -1937,7 +1954,11 @@ def build_derivatives_engine(symbol='BTC'):
     headline = ('Derivatives leaning bullish' if net >= 2
                 else 'Derivatives leaning bearish' if net <= -2
                 else 'Derivatives mixed / neutral')
-    src = f'OKX ({sym} derivatives)' + (' · ETF flow inactive' if sym in ('BTC', 'ETH') else '')
+    src = f'OKX ({sym} derivatives)'
+    if sym == 'BTC':
+        src += ' · ETF flows (Farside/bitbo)' if etf_active else ' · ETF flow inactive'
+    elif sym == 'ETH':
+        src += ' · ETF flow inactive'
     return {'demo': False, 'source': src, 'headline': headline, 'metrics': metrics,
             'as_of': datetime.datetime.utcnow().isoformat()}
 
@@ -1978,6 +1999,168 @@ def get_onchain_panels(symbol='BTC'):
     if empty or (now - c.get('fetched_ts', 0) >= ONCHAIN_TTL_SEC):
         threading.Thread(target=_refresh_onchain_bg, args=(sym,), daemon=True).start()
     return {'smart_money': c.get('smart_money'), 'institutional': c.get('institutional')}
+
+
+# =====================================================================
+# ETF FLOWS (REAL, keyless) — US spot Bitcoin ETF daily net flows.
+# Source: bitbo.io ETF-flows table (mirrors Farside data). Farside itself
+# is Cloudflare-blocked from this server, but bitbo serves the same numbers
+# as a plain HTML table we can parse. Values are USD millions ($M).
+# Cached in Mongo, background refresh ~3h.
+# =====================================================================
+etf_col = db['etf_flows']
+ETF_TTL_SEC = 3 * 3600
+_etf_state = {'running': False}
+ETF_UA = {'User-Agent': ('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+                         '(KHTML, like Gecko) Chrome/121 Safari/537.36')}
+_MONTHS = {'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
+           'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12}
+
+
+def _etf_num(s):
+    s = (s or '').replace(',', '').replace('$', '').strip()
+    if s in ('', '-', '—', 'n/a', 'N/A'):
+        return None
+    try:
+        return round(float(s), 1)
+    except Exception:  # noqa
+        return None
+
+
+def _parse_bitbo_etf():
+    """Scrape bitbo.io spot BTC ETF flow table -> structured daily flows.
+    Returns {issuers:[...], daily:[{date, flows:{ticker:val}, total}], summary:{...}} or None."""
+    import re as _re
+    import html as _html
+    try:
+        r = requests.get('https://bitbo.io/treasuries/etf-flows/', headers=ETF_UA, timeout=25)
+        if r.status_code != 200:
+            return None
+        t = r.text
+        i = t.lower().find('<table')
+        j = t.lower().find('</table>', i)
+        if i < 0 or j < 0:
+            return None
+        tbl = t[i:j + 8]
+        trs = _re.findall(r'<tr.*?</tr>', tbl, _re.S)
+        if len(trs) < 2:
+            return None
+
+        def cells(tr):
+            cs = _re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', tr, _re.S)
+            return [_html.unescape(_re.sub(r'<[^>]+>', '', c)).strip() for c in cs]
+
+        header = cells(trs[0])
+        if not header or header[0].lower() != 'date':
+            # some layouts put header in a thead-less first row; try to detect
+            for tr in trs[:2]:
+                h = cells(tr)
+                if h and h[0].lower() == 'date':
+                    header = h
+                    break
+        # issuers = header cols between Date and Totals
+        try:
+            tot_idx = next(k for k, h in enumerate(header) if h.lower() in ('totals', 'total'))
+        except StopIteration:
+            tot_idx = len(header) - 1
+        issuers = header[1:tot_idx]
+
+        daily, summary = [], {}
+        summary_labels = {'total', 'average', 'maximum', 'minimum'}
+        for tr in trs[1:]:
+            c = cells(tr)
+            if not c or len(c) < 2:
+                continue
+            label = c[0].strip()
+            low = label.lower()
+            if low in summary_labels:
+                summary[low] = _etf_num(c[tot_idx]) if tot_idx < len(c) else None
+                continue
+            # parse date like 'Aug 06, 2026'
+            m = _re.match(r'([A-Za-z]{3})\s+(\d{1,2}),\s+(\d{4})', label)
+            if not m:
+                continue
+            mon = _MONTHS.get(m.group(1)[:3].title())
+            if not mon:
+                continue
+            try:
+                dt = datetime.date(int(m.group(3)), mon, int(m.group(2)))
+            except Exception:  # noqa
+                continue
+            flows = {}
+            for k, tick in enumerate(issuers):
+                idx = k + 1
+                flows[tick] = _etf_num(c[idx]) if idx < len(c) else None
+            total = _etf_num(c[tot_idx]) if tot_idx < len(c) else None
+            if total is None:
+                total = round(sum(v for v in flows.values() if v is not None), 1)
+            daily.append({'date': dt.isoformat(), 'flows': flows, 'total': total})
+        if not daily:
+            return None
+        # sort most-recent-first
+        daily.sort(key=lambda d: d['date'], reverse=True)
+        return {'issuers': issuers, 'daily': daily, 'summary': summary,
+                'source': 'bitbo.io (Farside mirror)'}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return None
+
+
+def _refresh_etf_bg():
+    if _etf_state.get('running'):
+        return
+    _etf_state['running'] = True
+    try:
+        data = _parse_bitbo_etf()
+        if data and data.get('daily'):
+            data['_id'] = 'btc'
+            data['fetched_ts'] = time.time()
+            data['fetched_at'] = datetime.datetime.utcnow().isoformat()
+            etf_col.update_one({'_id': 'btc'}, {'$set': data}, upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+    finally:
+        _etf_state['running'] = False
+
+
+def get_etf_flows(refresh=False):
+    c = etf_col.find_one({'_id': 'btc'}, {'_id': 0}) or {}
+    stale = (time.time() - c.get('fetched_ts', 0)) >= ETF_TTL_SEC
+    if refresh or not c.get('daily') or stale:
+        if not c.get('daily'):
+            _refresh_etf_bg()  # synchronous first-time fetch so UI has data
+            c = etf_col.find_one({'_id': 'btc'}, {'_id': 0}) or {}
+        else:
+            threading.Thread(target=_refresh_etf_bg, daemon=True).start()
+    return c
+
+
+def etf_summary():
+    """Compact ETF-flow summary for the Institutional panel (BTC only)."""
+    c = get_etf_flows()
+    daily = c.get('daily') or []
+    if not daily:
+        return None
+    totals = [d.get('total') for d in daily if d.get('total') is not None]
+    if not totals:
+        return None
+    net_1d = totals[0]
+    net_7d = round(sum(totals[:7]), 1)
+    # sparkline ascending (oldest -> newest) of daily totals
+    spark = _spark(list(reversed(totals[:14])), n=14, nd=1)
+    # leading issuer of the latest day
+    latest = daily[0]
+    top = None
+    fl = latest.get('flows') or {}
+    if fl:
+        try:
+            top = max(((k, v) for k, v in fl.items() if v is not None), key=lambda x: x[1])
+        except ValueError:
+            top = None
+    return {'net_1d': net_1d, 'net_7d': net_7d, 'spark': spark,
+            'latest_date': latest.get('date'), 'top_issuer': (top[0] if top else None),
+            'top_issuer_flow': (top[1] if top else None)}
+
 
 
 # =====================================================================
@@ -2118,6 +2301,219 @@ def get_whales():
     out.sort(key=lambda x: -(x['balance'] or 0))
     return {'whales': out, 'price': price, 'as_of': meta.get('fetched_at'),
             'source': 'mempool.space · blockchain.com (labels curated)'}
+
+
+# =====================================================================
+# WHALE HISTORY / IMPACT (Phase 2) — REAL balance-over-time reconstructed
+# from each address's actual on-chain transaction history (mempool.space),
+# working backward from the current balance. No paid API, no mock data.
+# Cached in Mongo (whale_history) ~6h.
+# =====================================================================
+whale_hist_col = db['whale_history']
+WHALE_HIST_TTL_SEC = 6 * 3600
+_whale_name_by_addr = {w['address']: w['name'] for w in WHALE_SEED}
+_whale_cat_by_addr = {w['address']: w['category'] for w in WHALE_SEED}
+
+
+def _mempool_txs(address, max_txs=75):
+    """Fetch up to max_txs confirmed txs (newest first) via mempool.space pagination."""
+    out, last = [], None
+    for _ in range(4):
+        url = f'https://mempool.space/api/address/{address}/txs'
+        if last:
+            url += f'/chain/{last}'
+        page = _engine_get(url)
+        if not isinstance(page, list) or not page:
+            break
+        out.extend(page)
+        last = page[-1].get('txid')
+        if len(out) >= max_txs or len(page) < 25:
+            break
+        time.sleep(0.25)
+    return out[:max_txs]
+
+
+def _addr_delta(t, address):
+    recv = sum(v.get('value', 0) for v in t.get('vout', [])
+               if v.get('scriptpubkey_address') == address)
+    sent = sum((vi.get('prevout') or {}).get('value', 0) for vi in t.get('vin', [])
+               if (vi.get('prevout') or {}).get('scriptpubkey_address') == address)
+    return (recv - sent) / 1e8
+
+
+def _reconstruct_balance_series(address, current_balance, max_txs=75):
+    """Return REAL balance-over-time [{date, bal}] ascending, reconstructed from tx history."""
+    txs = _mempool_txs(address, max_txs)
+    txs = [t for t in txs if (t.get('status') or {}).get('confirmed')]
+    if not txs or current_balance is None:
+        return []
+    running = float(current_balance)
+    pts = []
+    for k, t in enumerate(txs):
+        bt = (t.get('status') or {}).get('block_time')
+        if bt:
+            d = datetime.datetime.utcfromtimestamp(bt).date().isoformat()
+            pts.append({'date': d, 'bal': round(running, 4)})
+        running -= _addr_delta(t, address)  # step back to balance before this tx
+    # add the earliest reconstructed level as a baseline point
+    if txs:
+        last_bt = (txs[-1].get('status') or {}).get('block_time')
+        if last_bt:
+            d = datetime.datetime.utcfromtimestamp(last_bt).date().isoformat()
+            pts.append({'date': d, 'bal': round(running + _addr_delta(txs[-1], address), 4)})
+    # collapse to one point per day (keep the last/most-recent balance that day), ascending
+    by_day = {}
+    for p in reversed(pts):  # oldest -> newest
+        by_day[p['date']] = p['bal']
+    series = [{'date': d, 'bal': by_day[d]} for d in sorted(by_day)]
+    return series
+
+
+def get_whale_history(address, refresh=False):
+    doc = whale_hist_col.find_one({'_id': address}, {'_id': 0}) or {}
+    stale = (time.time() - doc.get('fetched_ts', 0)) >= WHALE_HIST_TTL_SEC
+    if refresh or not doc.get('series') or stale:
+        w = whale_col.find_one({'_id': address}) or {}
+        cur = w.get('balance')
+        series = _reconstruct_balance_series(address, cur)
+        if series:
+            doc = {'series': series, 'balance': cur,
+                   'fetched_ts': time.time(),
+                   'fetched_at': datetime.datetime.utcnow().isoformat()}
+            whale_hist_col.update_one({'_id': address}, {'$set': {'_id': address, **doc}}, upsert=True)
+    return doc
+
+
+def compute_whale_impact():
+    """Aggregate whale accumulation/distribution over ~90d from reconstructed series,
+    plus current concentration. REAL data only (no correlation faking)."""
+    meta = whale_col.find_one({'_id': '_meta'}) or {}
+    price = meta.get('price')
+    whales = list(whale_col.find({'_id': {'$ne': '_meta'}}, {'_id': 0}))
+    non_exch = [w for w in whales if w.get('category') != 'Exchange']
+    exch = [w for w in whales if w.get('category') == 'Exchange']
+    total = round(sum((w.get('balance') or 0) for w in whales), 2)
+    net_30d = 0.0
+    contributors = []
+    for w in whales:
+        h = get_whale_history(w['address'])
+        s = h.get('series') or []
+        if len(s) >= 2:
+            # net change over up to last 30 daily points
+            window = s[-31:] if len(s) > 31 else s
+            delta = round((window[-1]['bal'] or 0) - (window[0]['bal'] or 0), 2)
+            if abs(delta) >= 1:
+                is_exch = w.get('category') == 'Exchange'
+                # exchange outflow (delta<0) = bullish; holder accumulation (delta>0) = bullish
+                bullish = (delta < 0) if is_exch else (delta > 0)
+                net_30d += (-delta if is_exch else delta)
+                contributors.append({
+                    'name': w.get('name'), 'category': w.get('category'),
+                    'address': w.get('address'), 'delta_30d': delta,
+                    'signal': 'Bullish' if bullish else 'Bearish',
+                    'from': window[0]['date'], 'to': window[-1]['date']})
+    contributors.sort(key=lambda x: -abs(x['delta_30d']))
+    net_30d = round(net_30d, 2)
+    trend = ('Accumulation' if net_30d > 500 else 'Distribution' if net_30d < -500 else 'Neutral')
+    return {
+        'total_balance': total,
+        'total_usd': (round(total * price) if (total and price) else None),
+        'holder_balance': round(sum((w.get('balance') or 0) for w in non_exch), 2),
+        'exchange_balance': round(sum((w.get('balance') or 0) for w in exch), 2),
+        'net_flow_30d': net_30d, 'trend': trend,
+        'contributors': contributors[:12],
+        'price': price, 'as_of': meta.get('fetched_at'),
+        'note': ('Aggregate net accumulation across curated whales (exchange outflows counted '
+                 'as bullish supply reduction). Balance history reconstructed from real on-chain '
+                 'transactions — depth varies by how active each address is.'),
+        'source': 'mempool.space (on-chain reconstruction)'}
+
+
+# =====================================================================
+# LARGE-TRANSACTION FEED (Phase 3) — a single, time-sorted feed of notable
+# on-chain moves across ALL curated whales, each entry LABELED with the
+# known entity. REAL & keyless (mempool.space). Deep entity clustering of
+# UNKNOWN wallets still requires a paid provider and is intentionally NOT done.
+# =====================================================================
+whale_tx_col = db['whale_tx_feed']
+WHALE_TX_TTL_SEC = 20 * 60
+_whale_tx_state = {'running': False}
+
+
+def _build_whale_tx_feed(min_btc=50.0, per_addr=25):
+    meta = whale_col.find_one({'_id': '_meta'}) or {}
+    price = meta.get('price')
+    feed = []
+    for w in WHALE_SEED:
+        addr = w['address']
+        txs = _mempool_txs(addr, per_addr)
+        for t in txs:
+            st = t.get('status') or {}
+            if not st.get('confirmed'):
+                continue
+            delta = _addr_delta(t, addr)
+            amt = abs(delta)
+            if amt < min_btc:
+                continue
+            is_exch = w['category'] == 'Exchange'
+            inflow = delta > 0  # coins moved INTO this entity's wallet
+            # exchange inflow -> potential sell pressure (bearish); outflow -> bullish
+            if is_exch:
+                impact = 'Bearish (exchange inflow)' if inflow else 'Bullish (exchange outflow)'
+                signal = 'Bearish' if inflow else 'Bullish'
+            else:
+                impact = 'Bullish (accumulation)' if inflow else 'Bearish (distribution)'
+                signal = 'Bullish' if inflow else 'Bearish'
+            feed.append({
+                'txid': t.get('txid'),
+                'time': st.get('block_time'),
+                'date': datetime.datetime.utcfromtimestamp(st['block_time']).isoformat() if st.get('block_time') else None,
+                'entity': w['name'], 'category': w['category'], 'address': addr,
+                'direction': 'in' if inflow else 'out',
+                'amount': round(amt, 2),
+                'amount_usd': (round(amt * price) if price else None),
+                'signal': signal, 'impact': impact,
+            })
+    # de-dup by txid+address (an internal transfer can appear on both ends) and sort recent-first
+    seen, uniq = set(), []
+    for e in sorted(feed, key=lambda x: (x['time'] or 0), reverse=True):
+        k = (e['txid'], e['address'])
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(e)
+    return {'feed': uniq, 'price': price, 'min_btc': min_btc,
+            'as_of': datetime.datetime.utcnow().isoformat(),
+            'source': 'mempool.space · curated entity labels'}
+
+
+def _refresh_whale_tx_bg(min_btc=50.0):
+    if _whale_tx_state.get('running'):
+        return
+    _whale_tx_state['running'] = True
+    try:
+        data = _build_whale_tx_feed(min_btc)
+        data['_id'] = 'feed'
+        data['fetched_ts'] = time.time()
+        whale_tx_col.update_one({'_id': 'feed'}, {'$set': data}, upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+    finally:
+        _whale_tx_state['running'] = False
+
+
+def get_whale_tx_feed(refresh=False):
+    c = whale_tx_col.find_one({'_id': 'feed'}, {'_id': 0}) or {}
+    stale = (time.time() - c.get('fetched_ts', 0)) >= WHALE_TX_TTL_SEC
+    if refresh or not c.get('feed') or stale:
+        if not c.get('feed'):
+            _refresh_whale_tx_bg()  # synchronous first fill
+            c = whale_tx_col.find_one({'_id': 'feed'}, {'_id': 0}) or {}
+        else:
+            threading.Thread(target=_refresh_whale_tx_bg, daemon=True).start()
+    return c
+
+
 
 
 CHAT_SYSTEM = (
@@ -3342,6 +3738,13 @@ def _startup():
         scheduler = BackgroundScheduler(timezone='UTC')
         scheduler.add_job(run_compute_bg, 'cron', hour=0, minute=5, id='daily_refresh')
         scheduler.add_job(run_news_bg, 'interval', hours=1, id='news_refresh')
+        # Whale Watch: refresh balances daily (new snapshot -> fires whale-move alerts) + keep it fresh.
+        scheduler.add_job(_refresh_whales_bg, 'cron', hour=0, minute=12, id='whale_daily')
+        scheduler.add_job(_refresh_whales_bg, 'interval', hours=6, id='whale_refresh')
+        # ETF flows: refresh a few times/day (US ETF data updates evening US time).
+        scheduler.add_job(_refresh_etf_bg, 'interval', hours=3, id='etf_refresh')
+        # Large-transaction feed: keep the labeled whale-tx feed fresh.
+        scheduler.add_job(_refresh_whale_tx_bg, 'interval', minutes=30, id='whale_tx_refresh')
         scheduler.start()
     except Exception:  # noqa
         traceback.print_exc()
@@ -3349,6 +3752,10 @@ def _startup():
         threading.Thread(target=run_compute_bg, daemon=True).start()
     if news_col.count_documents({}) == 0:
         threading.Thread(target=run_news_bg, daemon=True).start()
+    if whale_col.count_documents({'_id': {'$ne': '_meta'}}) == 0:
+        threading.Thread(target=_refresh_whales_bg, daemon=True).start()
+    if etf_col.count_documents({'_id': 'btc'}) == 0:
+        threading.Thread(target=_refresh_etf_bg, daemon=True).start()
 
 
 @app.get('/api/v1/health')
@@ -3430,6 +3837,17 @@ def dashboard(symbol: str = 'BTC'):
         return {'status': 'error' if st == 'error' else 'computing', 'error': _state['error']}
     # Add smart_alerts to the response (not stored in the run doc to save space)
     doc['smart_alerts'] = get_smart_alerts()
+    # Overlay freshest live Smart Money / Institutional panels (real on-chain + OKX
+    # derivatives + ETF flows) so they update on their own ~2-3h cadence rather than
+    # being frozen at the last daily compute.
+    try:
+        _live = get_onchain_panels('BTC')
+        if _live.get('smart_money'):
+            doc['smart_money'] = _live['smart_money']
+        if _live.get('institutional'):
+            doc['institutional'] = _live['institutional']
+    except Exception:  # noqa
+        traceback.print_exc()
     return {'status': 'ready', 'compute_status': _state['status'], **doc}
 
 
@@ -3524,6 +3942,108 @@ def whale_activity(address: str, limit: int = 12):
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error', 'activity': []}
+
+
+@app.get('/api/v1/whales/history')
+def whale_history_feed(address: str, refresh: int = 0):
+    """REAL balance-over-time for one whale, reconstructed from on-chain tx history."""
+    try:
+        meta = whale_col.find_one({'_id': '_meta'}) or {}
+        price = meta.get('price')
+        h = get_whale_history(address, refresh=bool(refresh))
+        series = h.get('series') or []
+        if not series:
+            return {'status': 'empty', 'address': address, 'points': []}
+        bal = h.get('balance')
+
+        def chg(days):
+            if len(series) < 2:
+                return None
+            cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+            past = [p for p in series if p['date'] <= cutoff]
+            base = past[-1]['bal'] if past else series[0]['bal']
+            return round((series[-1]['bal'] or 0) - (base or 0), 2)
+
+        points = [{'date': p['date'], 'bal': p['bal'],
+                   'usd': (round(p['bal'] * price) if (p['bal'] and price) else None)}
+                  for p in series]
+        return {'status': 'ready', 'address': address,
+                'name': _whale_name_by_addr.get(address, 'Whale'),
+                'category': _whale_cat_by_addr.get(address, 'Whale'),
+                'balance': bal, 'price': price,
+                'change_30d': chg(30), 'change_90d': chg(90),
+                'span_from': series[0]['date'], 'span_to': series[-1]['date'],
+                'points': points, 'as_of': h.get('fetched_at'),
+                'source': 'mempool.space (on-chain reconstruction)'}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error', 'points': []}
+
+
+@app.get('/api/v1/whales/impact')
+def whale_impact_feed():
+    """Aggregate whale accumulation/distribution trend (REAL, reconstructed on-chain)."""
+    try:
+        return {'status': 'ready', **compute_whale_impact()}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error', 'contributors': []}
+
+
+@app.get('/api/v1/whales/transactions')
+def whale_tx_feed(min_btc: float = 50.0, limit: int = 40, refresh: int = 0):
+    """Labeled large-transaction feed across all curated whales (REAL, keyless)."""
+    try:
+        c = get_whale_tx_feed(refresh=bool(refresh))
+        feed = c.get('feed') or []
+        if min_btc and min_btc != c.get('min_btc'):
+            feed = [e for e in feed if (e.get('amount') or 0) >= min_btc]
+        feed = feed[:max(1, min(limit, 100))]
+        if not feed and not c.get('feed'):
+            return {'status': 'computing', 'feed': []}
+        return {'status': 'ready', 'feed': feed, 'price': c.get('price'),
+                'min_btc': min_btc, 'as_of': c.get('as_of'),
+                'source': c.get('source', 'mempool.space · curated entity labels')}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error', 'feed': []}
+
+
+
+@app.get('/api/v1/etf-flows')
+def etf_flows_feed(refresh: int = 0):
+    """US spot Bitcoin ETF daily net flows ($M) — REAL, keyless (Farside via bitbo mirror)."""
+    try:
+        c = get_etf_flows(refresh=bool(refresh))
+        daily = c.get('daily') or []
+        if not daily:
+            return {'status': 'computing', 'daily': []}
+        totals = [d.get('total') for d in daily if d.get('total') is not None]
+        net_1d = totals[0] if totals else None
+        net_7d = round(sum(totals[:7]), 1) if totals else None
+        net_30d = round(sum(totals[:30]), 1) if totals else None
+        # cumulative over the visible window (oldest -> newest)
+        cum, running = [], 0.0
+        for d in reversed(daily):
+            running += (d.get('total') or 0)
+            cum.append({'date': d['date'], 'cum': round(running, 1)})
+        # per-issuer window totals (leaderboard)
+        issuers = c.get('issuers') or []
+        board = []
+        for tick in issuers:
+            s = round(sum((d.get('flows') or {}).get(tick) or 0 for d in daily), 1)
+            board.append({'ticker': tick, 'window_total': s})
+        board.sort(key=lambda x: x['window_total'], reverse=True)
+        return {'status': 'ready', 'symbol': 'BTC', 'unit': 'USD millions',
+                'issuers': issuers, 'daily': daily, 'cumulative': cum,
+                'leaderboard': board, 'summary': c.get('summary') or {},
+                'net_1d': net_1d, 'net_7d': net_7d, 'net_30d': net_30d,
+                'source': c.get('source', 'bitbo.io (Farside mirror)'),
+                'as_of': c.get('fetched_at'), 'latest_date': daily[0].get('date')}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error', 'daily': []}
+
 
 
 @app.get('/api/v1/alerts')

@@ -136,6 +136,49 @@ backend:
         -working: "NA"
         -agent: "main"
         -comment: "NEW. /compare/coins lists supported coins (BTC/ETH/SOL). /compare/coin?symbol=X runs the same quant pipeline (fetch ccxt daily -> build_features -> compute_quant_analysis) and returns {status:'ready', cached, data:{symbol,name,price,day_change_pct,quant_score,quant_label,regime,forecast_24h,forecast_7d,bullish,risk,support,resistance,spark[60],as_of}}. Cached per symbol per UTC day in compare_coins collection. First call ~6s (computes), 2nd call cached=true fast. Test all 3 symbols return ready with numeric price/quant_score and 60-point spark. Test refresh=1 recomputes (cached=false). Test unsupported symbol (e.g. DOGE) returns status 'error' reason 'unsupported_symbol' (NOT 500)."
+  - task: "Whale Intelligence Phase 1 — ETF Flows (GET /api/v1/etf-flows + institutional panel ETF line REAL)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW Phase 1. GET /api/v1/etf-flows returns REAL US spot Bitcoin ETF daily net flows ($M) scraped from bitbo.io (a Farside mirror; Farside itself is Cloudflare-blocked from this server). Response: {status:'ready', unit:'USD millions', issuers:[13 tickers e.g. IBIT/FBTC/GBTC...], daily:[{date,flows:{ticker:val},total}] (most-recent-first), cumulative:[{date,cum}] (oldest->newest), leaderboard:[{ticker,window_total}] sorted desc, summary:{total,average,maximum,minimum}, net_1d, net_7d, net_30d, source, latest_date, as_of}. Cached in etf_flows collection (TTL 3h), refreshed by scheduler every 3h; first call fills synchronously. ALSO: build_derivatives_engine now injects REAL 'Spot ETF net flow (1d)' and '(7d)' metrics (with sparkline) into the Institutional panel for BTC (no longer 'Inactive'); source string becomes 'OKX (BTC derivatives) · ETF flows (Farside/bitbo)'. ETH still 'Inactive' (no free ETH ETF table). Dashboard route now OVERLAYS live smart_money/institutional panels onto the stored run doc so ETF/derivatives refresh on their own ~2-3h cadence. Test: GET /api/v1/etf-flows returns status='ready' with non-empty daily (each row date YYYY-MM-DD, flows dict, numeric total), net_1d/net_7d/net_30d numeric, leaderboard non-empty, issuers includes 'IBIT'. GET /api/v1/dashboard institutional.metrics contains 'Spot ETF net flow (1d)' NOT marked inactive with a $ value + spark, and source mentions 'Farside/bitbo'. refresh=1 works, no 500s."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Phase 1 validation via external URL (https://quant-features.preview.emergentagent.com). All 3 tests passed (3/3): (1) GET /api/v1/etf-flows returns status='ready', unit='USD millions', issuers includes 'IBIT' (13 total issuers) ✅, daily data: 8 entries with date (2026-08-06 format YYYY-MM-DD), flows dict, numeric total (91.7) ✅, net_1d=$91.7M, net_7d=$646.1M, net_30d=$646.1M (all numeric) ✅, cumulative: 8 entries ✅, leaderboard: 13 entries ✅, summary present ✅. (2) GET /api/v1/etf-flows?refresh=1 works without 500 error ✅. (3) GET /api/v1/dashboard institutional panel validated: 'Spot ETF net flow (1d)' metric found, NOT marked inactive ✅, value='$+92M' (matches $...M pattern) ✅, spark array with 8 points ✅, 'Spot ETF net flow (7d)' metric found ✅, source='OKX (BTC derivatives) · ETF flows (Farside/bitbo)' mentions Farside/bitbo ✅. All validations passed. Data is REAL (bitbo.io mirror of Farside). No HTTP 500 errors."
+  - task: "Whale Intelligence Phase 2 — Historical balances + impact (GET /api/v1/whales/history, /api/v1/whales/impact)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW Phase 2. REAL balance-over-time reconstructed from each address's actual on-chain tx history (mempool.space, working backward from the current balance) — no paid API, no mock data. GET /api/v1/whales/history?address=ADDR returns {status:'ready', address, name, category, balance, price, change_30d, change_90d, span_from, span_to, points:[{date,bal,usd}] ascending, source}. Cached in whale_history collection (TTL 6h); refresh=1 forces rebuild. Depth varies by address activity (dormant whales -> long history; busy exchanges -> shorter). GET /api/v1/whales/impact returns {status:'ready', total_balance, total_usd, holder_balance, exchange_balance, net_flow_30d, trend (Accumulation/Distribution/Neutral), contributors:[{name,category,address,delta_30d,signal,from,to}], price, note, source}. Exchange OUTFLOWS counted as bullish (supply reduction); holder accumulation counted as bullish. Test: history for a dormant whale (e.g. 1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF) returns status='ready' with non-empty points (each date YYYY-MM-DD, numeric bal), change_30d/90d numeric, span_from<=span_to. impact returns status='ready' with numeric total_balance>0, trend in [Accumulation,Distribution,Neutral], contributors list (each with delta_30d numeric and signal Bullish/Bearish). Impact first call may take 30-60s (reconstructs all 10 whales); no 500s."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Phase 2 validation via external URL. All 4 tests passed (4/4): (1) GET /api/v1/whales/history?address=1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF (dormant whale) returns status='ready' ✅, points: 61 entries with date (2025-01-31 format YYYY-MM-DD), numeric bal (79957.2673), usd (5180511306) ✅, change_30d=0.0, change_90d=0.0 (numeric) ✅, span_from=2025-01-31 <= span_to=2026-08-05 ✅, balance=79957.27 BTC > 0 ✅. (2) GET /api/v1/whales/history?address=34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo (Binance exchange) returns status='ready' (no 500 error) ✅, 65 points returned ✅. (3) GET /api/v1/whales/history?refresh=1 works without 500 error ✅. (4) GET /api/v1/whales/impact returns status='ready' ✅, total_balance=974,751.49 BTC > 0 ✅, total_usd=$63,155,123,789 (numeric) ✅, holder_balance=302,407.6 BTC, exchange_balance=672,343.89 BTC (numeric) ✅, net_flow_30d=-40,955.78 BTC (numeric) ✅, trend='Distribution' (in [Accumulation, Distribution, Neutral]) ✅, contributors: 2 entries with name='Binance', category, address, delta_30d (numeric), signal='Bearish' (in [Bullish, Bearish]) ✅. All validations passed. Data is REAL (mempool.space on-chain reconstruction). No HTTP 500 errors."
+  - task: "Whale Intelligence Phase 3 — Labeled large-transaction feed (GET /api/v1/whales/transactions)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW Phase 3. GET /api/v1/whales/transactions?min_btc=50&limit=40 returns a single time-sorted feed of NOTABLE on-chain moves across ALL 10 curated whales, each entry LABELED with the known entity. REAL & keyless (mempool.space). Response: {status:'ready', feed:[{txid,time(unix),date(iso),entity,category,address,direction(in/out),amount(BTC),amount_usd,signal(Bullish/Bearish),impact}], price, min_btc, as_of, source}. Impact logic: exchange INFLOW -> Bearish (potential sell pressure), exchange OUTFLOW -> Bullish; non-exchange accumulation(in) -> Bullish, distribution(out) -> Bearish. De-duplicated by (txid,address), sorted recent-first. Cached in whale_tx_feed collection (TTL 20min), scheduler every 30min; first call fills synchronously (~30-60s). NOTE: deep entity clustering of UNKNOWN wallets intentionally NOT done (requires paid provider). Test: status='ready' with non-empty feed; each entry has entity/category/direction in [in,out]/amount>=min_btc/signal in [Bullish,Bearish]. min_btc filter honored. limit honored. refresh=1 works. No 500s."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Phase 3 validation via external URL. All 4 tests passed (4/4): (1) GET /api/v1/whales/transactions?min_btc=50&limit=40 returns status='ready' ✅, feed: 10 entries (non-empty) ✅, each entry has all required fields: txid, entity='Binance' (labeled name), category, direction='in' (in [in, out]) ✅, amount=3984.27 BTC >= 50 ✅, amount_usd (numeric) ✅, signal='Bearish' (in [Bullish, Bearish]) ✅, impact (string), date (ISO format with 'T') ✅. (2) GET /api/v1/whales/transactions?min_btc=500 filter test: 9 entries returned, ALL have amount >= 500 BTC ✅ (min_btc filter honored). (3) GET /api/v1/whales/transactions?limit=10 limit test: exactly 10 entries returned ✅ (limit honored). (4) GET /api/v1/whales/transactions?refresh=1 works without 500 error ✅. All validations passed. Data is REAL (mempool.space labeled transactions). No HTTP 500 errors."
+
 
     implemented: true
     working: false
@@ -535,7 +578,9 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Happening Again multi-coin — GET /api/v1/analogs?symbol=BTC|ETH|SOL"
+    - "Whale Intelligence Phase 1 — ETF Flows (GET /api/v1/etf-flows + institutional panel ETF line REAL)"
+    - "Whale Intelligence Phase 2 — Historical balances + impact (GET /api/v1/whales/history, /api/v1/whales/impact)"
+    - "Whale Intelligence Phase 3 — Labeled large-transaction feed (GET /api/v1/whales/transactions)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -543,21 +588,39 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      NEW TEST FOCUS — GET /api/v1/analogs?symbol={BTC|ETH|SOL} (via external base URL + /api/v1/analogs?symbol=SOL etc.).
-      The Happening Again analog engine is now MULTI-COIN. Each symbol computes lazily & caches per
-      symbol/day; first hit may return {"status":"computing"} while it fetches ~10y Yahoo data for the
-      coin + macros (NDX/Gold/DXY/TNX). POLL each symbol until {"status":"ready"} (up to ~60s each).
-      Validate for EACH of BTC, ETH, SOL:
-        1) status eventually 'ready'; response has symbol == the requested symbol.
-        2) signals: for BTC = 8 signals INCLUDING key 'cycle'; for ETH & SOL = 7 signals and MUST NOT
-           include 'cycle' (halving is BTC-only). Keys otherwise: rates_dir, dxy_dir, nasdaq_corr,
-           gold_corr, vol_regime, drawdown, momentum.
-        3) episodes: non-empty list; each has match (0-100) and a non-empty path (list of {off,v}).
-        4) day_fingerprints: non-empty; each item has date, fp (dict of the coin's signal keys),
-           fwd_30/fwd_90/fwd_180, and fwd_path (list of 16 {off,v}, off 0..180 step 12, off=0 v==100).
-        5) current (dict), norm (dict), current_path (non-empty), episode_count present. No 500s.
-      Also confirm the three symbols return DIFFERENT as_of/history_from where expected (SOL history_from
-      ~2020, ETH ~2017, BTC ~2016) and different episode sets. Data is REAL (Yahoo). Do NOT test WebSockets.
+      NEW TEST FOCUS — Whale Intelligence backend (Phases 1-3). All REAL data, no mocks.
+      Test via external base URL with /api prefix.
+
+      PHASE 1 — ETF Flows:
+        * GET /api/v1/etf-flows -> status='ready', unit='USD millions', issuers includes 'IBIT',
+          daily non-empty (each row: date YYYY-MM-DD, flows dict, numeric total, most-recent-first),
+          net_1d/net_7d/net_30d numeric, cumulative non-empty (oldest->newest), leaderboard non-empty
+          (sorted desc by window_total), summary present. refresh=1 works. No 500s.
+        * GET /api/v1/dashboard -> institutional.metrics MUST contain 'Spot ETF net flow (1d)' that is
+          NOT inactive, has a '$...M' value and a 'spark' array, and institutional.source mentions
+          'Farside/bitbo'. Also a 'Spot ETF net flow (7d)' metric present. (Data source is bitbo.io,
+          a Farside mirror, since Farside is Cloudflare-blocked from this server.)
+
+      PHASE 2 — Whale history + impact:
+        * GET /api/v1/whales/history?address=1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF -> status='ready',
+          points non-empty (each: date YYYY-MM-DD, numeric bal, usd), change_30d & change_90d numeric,
+          span_from <= span_to, balance>0. refresh=1 works. Try one exchange address too (e.g. Binance
+          34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo) — may have fewer points but still status='ready'/'empty' (no 500).
+        * GET /api/v1/whales/impact -> status='ready', total_balance>0, total_usd numeric, holder_balance
+          & exchange_balance numeric, net_flow_30d numeric, trend in [Accumulation,Distribution,Neutral],
+          contributors list (each: name, category, address, delta_30d numeric, signal Bullish/Bearish).
+          FIRST CALL MAY TAKE 30-60s (reconstructs all 10 whales). No 500s.
+
+      PHASE 3 — Labeled large-tx feed:
+        * GET /api/v1/whales/transactions?min_btc=50&limit=40 -> status='ready', feed non-empty, each
+          entry has txid, entity (labeled), category, direction in [in,out], amount>=min_btc,
+          amount_usd numeric, signal in [Bullish,Bearish], impact string, date ISO. Verify min_btc
+          filter (e.g. min_btc=500 returns only amounts>=500) and limit honored. refresh=1 works. No 500s.
+          FIRST CALL MAY TAKE 30-60s.
+
+      REGRESSION: GET /api/v1/dashboard still status='ready' with existing fields (decision, risk,
+      forecasts, quant_score, smart_money, smart_alerts). GET /api/v1/whales still returns 10 whales.
+      Data is REAL (bitbo/Farside, mempool.space, OKX, CoinGecko price). Do NOT test WebSockets.
 
 
       This endpoint computes lazily and may return {status:'computing'} on first hit while it fetches
@@ -1710,6 +1773,21 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
+      LATEST TEST FOCUS — Albert reviews must stay ON-TOPIC per section + Whale Watch alerts/endpoints.
+      LATENCY: albert/insight generates via Gemini on cache miss (20-60s), cached per section+symbol+day.
+      Use timeout >= 75s and test sections ONE AT A TIME.
+      A) For section in [alerts, scorecard, risk, smartmoney, institutional, events]:
+         GET /api/v1/albert/insight?section=<s>&symbol=BTC -> 200, non-empty text, and SPECIFIC to that
+         section (alerts: counts/unread + categories/impacts; scorecard: accuracy/Brier/range; risk:
+         level/vol/macro; smartmoney: MVRV/SOPR/active/FnG; institutional: OI/funding/long-short/taker;
+         events: upcoming CPI/jobs/FOMC + timing). Report first ~200 chars each.
+      B) GET /api/v1/whales -> 10 whales w/ name/category/balance/signal + price.
+      C) GET /api/v1/whale-activity?address=bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h -> activity w/ direction/amount/txid.
+      D) GET /api/v1/alerts?symbol=BTC -> ready; any 'Whale' category item must have symbol 'BTC'. No 500s.
+      Do NOT test frontend.
+
+    -agent: "main"
+    -message: |
       NEW TEST FOCUS — Albert section reviews (LLM). GET /api/v1/albert/insight?section={id}&symbol=BTC now
       supports these additional sections with tailored data context: smartmoney, institutional, events,
       alerts, whales, timemachine (plus existing performance/news/risk).
@@ -1854,3 +1932,62 @@ agent_communication:
       - After refresh, all panels returned demo=false with real data
       
       NO CRITICAL ISSUES. All validations passed. Data is REAL. No HTTP 500 errors. Feature is production-ready.
+
+
+    -agent: "testing"
+    -message: |
+      ✅ WHALE INTELLIGENCE (PHASES 1-3) BACKEND TEST COMPLETE - ALL TESTS PASSED (13/13)
+      
+      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (whale_intelligence_test.py).
+      
+      PHASE 1 — ETF FLOWS (3/3 PASSED):
+      1. ✅ GET /api/v1/etf-flows → status='ready', unit='USD millions', issuers includes 'IBIT' (13 total), 
+         daily: 8 entries (date=2026-08-06, flows dict, total=91.7), net_1d=$91.7M, net_7d=$646.1M, net_30d=$646.1M, 
+         cumulative: 8 entries, leaderboard: 13 entries, summary present
+      2. ✅ GET /api/v1/etf-flows?refresh=1 → works without 500 error
+      3. ✅ GET /api/v1/dashboard institutional panel → 'Spot ETF net flow (1d)' metric found (NOT inactive), 
+         value='$+92M', spark array (8 points), 'Spot ETF net flow (7d)' present, 
+         source='OKX (BTC derivatives) · ETF flows (Farside/bitbo)'
+      
+      PHASE 2 — WHALE HISTORY + IMPACT (4/4 PASSED):
+      1. ✅ GET /api/v1/whales/history?address=1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF (dormant whale) → 
+         status='ready', points: 61 entries (date YYYY-MM-DD, numeric bal/usd), change_30d=0.0, change_90d=0.0, 
+         span_from=2025-01-31 <= span_to=2026-08-05, balance=79,957.27 BTC
+      2. ✅ GET /api/v1/whales/history?address=34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo (Binance exchange) → 
+         status='ready', 65 points, no 500 error
+      3. ✅ GET /api/v1/whales/history?refresh=1 → works without 500 error
+      4. ✅ GET /api/v1/whales/impact → status='ready', total_balance=974,751.49 BTC, total_usd=$63.2B, 
+         holder_balance=302,407.6 BTC, exchange_balance=672,343.89 BTC, net_flow_30d=-40,955.78 BTC, 
+         trend='Distribution', contributors: 2 entries (name='Binance', signal='Bearish')
+      
+      PHASE 3 — LABELED LARGE-TRANSACTION FEED (4/4 PASSED):
+      1. ✅ GET /api/v1/whales/transactions?min_btc=50&limit=40 → status='ready', feed: 10 entries, 
+         each with txid, entity='Binance' (labeled), category, direction='in' (in/out), amount=3984.27 BTC >= 50, 
+         amount_usd (numeric), signal='Bearish' (Bullish/Bearish), impact, date (ISO)
+      2. ✅ GET /api/v1/whales/transactions?min_btc=500 → 9 entries, ALL amount >= 500 BTC (filter works)
+      3. ✅ GET /api/v1/whales/transactions?limit=10 → exactly 10 entries (limit honored)
+      4. ✅ GET /api/v1/whales/transactions?refresh=1 → works without 500 error
+      
+      REGRESSION TESTS (2/2 PASSED):
+      1. ✅ GET /api/v1/dashboard → status='ready', all existing fields present (decision, risk, forecasts, 
+         quant_score, smart_money, smart_alerts)
+      2. ✅ GET /api/v1/whales → status='ready', returns 10 whales as expected
+      
+      DATA SOURCES CONFIRMED:
+      - ETF flows: bitbo.io (Farside mirror) - REAL daily net flows for 13 US spot Bitcoin ETF issuers
+      - Whale history: mempool.space - REAL on-chain transaction reconstruction (no paid API)
+      - Whale impact: mempool.space - REAL balance aggregation across 10 curated whales
+      - Whale transactions: mempool.space - REAL labeled large transactions (entity names from curated list)
+      - Price data: OKX, CoinGecko
+      
+      KEY OBSERVATIONS:
+      - All endpoints return REAL data (no mocks)
+      - All refresh=1 parameters work correctly
+      - All filters (min_btc, limit) honored
+      - All date formats are YYYY-MM-DD or ISO
+      - All numeric fields validated (balance, USD values, flows)
+      - All enum fields validated (trend, signal, direction)
+      - No HTTP 500 errors at any point
+      - First calls may take 30-60s (whale reconstruction), subsequent calls cached
+      
+      NO CRITICAL ISSUES FOUND. All 3 phases are production-ready. Feature is fully functional with REAL data.

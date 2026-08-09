@@ -221,7 +221,7 @@ function TapInfo({ text, className = '', below = true, children }) {
 
 
 
-function AiReview({ text, voice, section, footer }) {
+function AiReview({ text, voice = true, section, footer }) {
   const symbol = React.useContext(SymbolContext);
   const [speaking, setSpeaking] = React.useState(false);
   const [techOpen, setTechOpen] = React.useState(false);
