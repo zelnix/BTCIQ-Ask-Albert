@@ -1963,6 +1963,309 @@ def build_derivatives_engine(symbol='BTC'):
             'as_of': datetime.datetime.utcnow().isoformat()}
 
 
+# =====================================================================
+# LEVERAGE ENGINE — long/short positioning, OI, funding, (est.) leverage,
+# liquidations, squeeze risk & heatmap. Core metrics are REAL (OKX public
+# API). Liquidations, liquidation heatmap and the estimated-leverage
+# percentile have no free/server-reachable source, so they are DERIVED
+# from the real metrics and CLEARLY FLAGGED demo=True (structured so a
+# live provider — e.g. CoinGlass — can drop in later).
+# =====================================================================
+lev_col = db['leverage_engine']
+LEV_TTL_SEC = 5 * 60
+_lev_state = {}
+_TF_HOURS = {'1H': 1, '4H': 4, '1D': 24, '7D': 168}
+
+
+def _okx_candles(inst, bar='1H', limit=120):
+    js = _okx('/api/v5/market/candles', {'instId': inst, 'bar': bar, 'limit': str(limit)})
+    out = []
+    for r in (js or []):
+        try:
+            out.append({'t': int(r[0]), 'c': float(r[4])})
+        except Exception:  # noqa
+            pass
+    return out  # newest first
+
+
+def _lev_band(score, cuts, labels):
+    for c, l in zip(cuts, labels):
+        if score < c:
+            return l
+    return labels[-1]
+
+
+def compute_leverage(timeframe='4H', symbol='BTC'):
+    sym = (symbol or 'BTC').upper()
+    inst = f'{sym}-USDT-SWAP'
+    tf = timeframe if timeframe in _TF_HOURS else '4H'
+    hrs = _TF_HOURS[tf]
+    bar = '1D' if tf == '7D' else '1H'
+    steps = 7 if tf == '7D' else hrs
+    now_iso = datetime.datetime.utcnow().isoformat()
+
+    # ---- price ----
+    price, price_chg24 = None, None
+    try:
+        tk = ticker(sym)
+        price = tk.get('price'); price_chg24 = tk.get('change24h')
+    except Exception:  # noqa
+        pass
+
+    # ---- open interest (REAL) ----
+    oi_usd, oi_series, oi_change_tf = None, [], None
+    oi = _okx('/api/v5/public/open-interest', {'instType': 'SWAP', 'instId': inst})
+    period = '1D' if tf == '7D' else '1H'
+    oih = _okx('/api/v5/rubik/stat/contracts/open-interest-volume', {'ccy': sym, 'period': period})
+    candles = _okx_candles(inst, bar, 120)
+    price_by_t = {}
+    for c in candles:
+        price_by_t[c['t'] // (3600000 if bar == '1H' else 86400000)] = c['c']
+    if oi:
+        try:
+            oi_usd = float(oi[0]['oiUsd'])
+        except Exception:  # noqa
+            pass
+    if oih:
+        try:
+            rows = list(reversed(oih))  # oldest -> newest, [ts, oi, vol]
+            for r in rows[-60:]:
+                ts = int(r[0])
+                key = ts // (3600000 if bar == '1H' else 86400000)
+                oi_series.append({'t': ts, 'oi': round(float(r[1])), 'price': price_by_t.get(key)})
+            latest = float(oih[0][1])
+            idx = min(steps, len(oih) - 1)
+            prev = float(oih[idx][1])
+            oi_change_tf = round((latest - prev) / prev * 100, 1) if prev else None
+            if oi_usd is None:
+                oi_usd = latest
+        except Exception:  # noqa
+            pass
+    oi_state = ('Rising' if (oi_change_tf or 0) > 1.5 else 'Falling' if (oi_change_tf or 0) < -1.5 else 'Stable')
+
+    # ---- funding (REAL) ----
+    funding, funding_series = None, []
+    fr = _okx('/api/v5/public/funding-rate', {'instId': inst})
+    frh = _okx('/api/v5/public/funding-rate-history', {'instId': inst, 'limit': '60'})
+    if fr:
+        try:
+            funding = float(fr[0]['fundingRate']) * 100
+        except Exception:  # noqa
+            pass
+    fr_avg = None
+    if frh:
+        try:
+            vals = [float(r['fundingRate']) * 100 for r in reversed(frh)]
+            for r in reversed(frh):
+                funding_series.append({'t': int(r['fundingTime']), 'rate': round(float(r['fundingRate']) * 100, 5)})
+            fr_avg = sum(vals[-9:]) / max(1, len(vals[-9:]))
+            if funding is None and vals:
+                funding = vals[-1]
+        except Exception:  # noqa
+            pass
+    funding = funding if funding is not None else 0.0
+    fr_avg = fr_avg if fr_avg is not None else funding
+    funding_dir = 'Positive' if funding > 0 else 'Negative' if funding < 0 else 'Flat'
+    funding_trend = ('Rising' if funding > fr_avg + 0.002 else 'Falling' if funding < fr_avg - 0.002 else 'Stable')
+    funding_bias = ('Long Bias' if funding > 0.01 else 'Short Bias' if funding < -0.005 else 'Neutral')
+    # exchange-level: OKX real; others need paid feed (flagged)
+    funding_exchanges = [{'name': 'OKX', 'rate': round(funding, 5), 'demo': False}]
+
+    # ---- long/short positioning (REAL account ratio) ----
+    lsr, lsr_prev, ls_series = None, None, []
+    ls = _okx('/api/v5/rubik/stat/contracts/long-short-account-ratio', {'ccy': sym, 'period': period})
+    if ls:
+        try:
+            lsr = float(ls[0][1])
+            idx = min(steps, len(ls) - 1)
+            lsr_prev = float(ls[idx][1])
+            for r in reversed(ls[-60:]):
+                ls_series.append({'t': int(r[0]), 'ratio': round(float(r[1]), 3)})
+        except Exception:  # noqa
+            pass
+    lsr = lsr if lsr else 1.0
+    lsr_prev = lsr_prev if lsr_prev else lsr
+    long_pct = round(lsr / (1 + lsr) * 100, 1)
+    short_pct = round(100 - long_pct, 1)
+    lsr_change = round(lsr - lsr_prev, 3)
+    pos_trend = ('More long-heavy' if lsr_change > 0.02 else 'More short-heavy' if lsr_change < -0.02 else 'Little changed')
+    # position ratio (size-weighted) has no free feed -> derived estimate, flagged
+    position_ratio = round(lsr * (1 + (funding / 0.05) * 0.05), 2)
+
+    # ---- estimated leverage (DERIVED / DEMO) ----
+    # crude proxy that trends with OI & funding; percentile is illustrative.
+    seed = int(datetime.date.today().strftime('%Y%m%d'))
+    elr_base = 0.20 + min(0.15, abs(funding) * 3) + (0.03 if oi_state == 'Rising' else -0.02 if oi_state == 'Falling' else 0)
+    elr = round(max(0.12, elr_base + ((seed % 7) - 3) * 0.004), 3)
+    elr_pct = int(max(5, min(95, 40 + funding * 400 + (oi_change_tf or 0) * 1.5)))
+    elr_change = round((oi_change_tf or 0) * 0.004 + (funding - fr_avg) * 0.5, 3)
+    elr_status = _lev_band(elr_pct, [25, 50, 70, 88], ['Low', 'Normal', 'Elevated', 'High', 'Extreme'])
+    elr_series = []
+    for i in range(24):
+        elr_series.append({'t': i, 'v': round(elr * (0.9 + 0.2 * ((seed + i) % 5) / 5.0), 3)})
+
+    # ---- liquidations (DERIVED / DEMO) ----
+    # scaled from OI so magnitudes are plausible; split by positioning & recent move.
+    oi_ref = oi_usd or 2.0e9
+    move = price_chg24 or 0
+    long_skew = max(0.15, min(0.85, long_pct / 100.0 + (-move) * 0.01))  # falling price hurts longs
+    def _liq(hours):
+        base = oi_ref * 0.006 * (hours / 24.0) * (1 + abs(move) * 0.05)
+        return round(base * long_skew), round(base * (1 - long_skew))
+    l1, s1 = _liq(1); l4, s4 = _liq(4); l24, s24 = _liq(24)
+    net_liq = l24 - s24
+    net_liq_state = _lev_band((net_liq / max(1, (l24 + s24))) * 100 + 50,
+                              [20, 42, 58, 80], ['Heavy Short Liquidations', 'Moderate Short Liquidations',
+                                                 'Balanced', 'Moderate Long Liquidations', 'Heavy Long Liquidations'])
+
+    # ---- liquidation heatmap (DERIVED / DEMO) ----
+    heat_zones = []
+    if price:
+        for pct, inten in [(2.5, 0.55), (5, 0.9), (7.5, 0.7), (10, 0.45)]:
+            heat_zones.append({'price': round(price * (1 - pct / 100)), 'side': 'long',
+                               'intensity': round(inten * long_skew + 0.1, 2), 'distance_pct': -pct})
+            heat_zones.append({'price': round(price * (1 + pct / 100)), 'side': 'short',
+                               'intensity': round(inten * (1 - long_skew) + 0.1, 2), 'distance_pct': pct})
+
+    # ---- squeeze risk (DERIVED from real signals) ----
+    long_sq = int(max(0, min(100, 20 + (long_pct - 50) * 1.6 + max(0, funding) * 300
+                             + max(0, oi_change_tf or 0) * 1.2 + max(0, -move) * 2)))
+    short_sq = int(max(0, min(100, 20 + (short_pct - 50) * 1.6 + max(0, -funding) * 350
+                              + max(0, oi_change_tf or 0) * 1.2 + max(0, move) * 2)))
+    sq_label = lambda s: _lev_band(s, [30, 55, 75], ['Low', 'Moderate', 'Elevated', 'High'])
+    long_sq_lbl, short_sq_lbl = sq_label(long_sq), sq_label(short_sq)
+
+    # ---- summary: pressure / bias / squeeze ----
+    pressure_score = int(max(0, min(100, elr_pct * 0.4 + abs(funding) * 300
+                                    + abs(long_pct - 50) * 1.2 + max(0, oi_change_tf or 0) * 1.5)))
+    pressure = _lev_band(pressure_score, [25, 45, 65, 82], ['LOW', 'MODERATE', 'ELEVATED', 'HIGH', 'EXTREME'])
+    if long_pct >= 55 or funding > 0.015:
+        bias = 'Long Dominant'
+    elif short_pct >= 55 or funding < -0.01:
+        bias = 'Short Dominant'
+    else:
+        bias = 'Balanced'
+    if long_sq >= short_sq + 12:
+        squeeze = 'Long Squeeze Risk'
+    elif short_sq >= long_sq + 12:
+        squeeze = 'Short Squeeze Risk'
+    else:
+        squeeze = 'Neutral'
+
+    # ---- interpretations (rule-based, measured language) ----
+    def _oi_price_read():
+        pr_up = (move or 0) >= 0
+        if oi_state == 'Rising' and pr_up:
+            return "Price and open interest are rising together, suggesting fresh leveraged longs are driving the move."
+        if oi_state == 'Rising' and not pr_up:
+            return "Open interest is rising while price softens, which may indicate new shorts building or longs adding into weakness."
+        if oi_state == 'Falling' and pr_up:
+            return "Price is rising as open interest falls, which can reflect short covering rather than fresh leveraged buying."
+        if oi_state == 'Falling' and not pr_up:
+            return "Both price and open interest are falling, consistent with leveraged positions being unwound (de-risking)."
+        return "Open interest is broadly stable, suggesting leveraged participation is holding steady."
+
+    summary_interp = (
+        f"Leverage pressure reads {pressure}. Positioning is {long_pct:.0f}% long / {short_pct:.0f}% short "
+        f"({bias.lower()}), funding is {funding:+.4f}% ({funding_bias.lower()}) and open interest is {oi_state.lower()} "
+        f"({(oi_change_tf or 0):+.1f}% over {tf}). "
+        + ("A larger concentration of leveraged longs could increase downside liquidation risk if support gives way."
+           if squeeze == 'Long Squeeze Risk' else
+           "Crowded shorts holding into a firm market could be forced to cover on a move higher, raising short-squeeze risk."
+           if squeeze == 'Short Squeeze Risk' else
+           "Long and short squeeze risks look broadly balanced right now."))
+
+    funding_interp = ("Positive funding means longs are paying shorts, indicating stronger demand for leveraged long exposure."
+                      if funding > 0 else
+                      "Negative funding means shorts are paying longs, indicating heavier leveraged short positioning."
+                      if funding < 0 else "Funding is flat — neither side is paying a meaningful premium.")
+    elr_interp = (f"Estimated leverage sits around the {elr_pct}th percentile ({elr_status.lower()}) versus recent conditions. "
+                  "Higher leverage can amplify volatility when price moves quickly.")
+
+    # ---- BitMarkAI observations + assessment ----
+    obs = []
+    obs.append(f"Positioning is {long_pct:.0f}% long vs {short_pct:.0f}% short and has become {pos_trend.lower()} over the last {tf}.")
+    obs.append(f"Open interest is {oi_state.lower()} ({(oi_change_tf or 0):+.1f}% over {tf}). " + _oi_price_read())
+    obs.append(f"Funding is {funding:+.4f}% and {funding_trend.lower()} versus its recent average ({funding_bias.lower()}).")
+    obs.append(f"Estimated leverage is {elr_status.lower()} (~{elr_pct}th pct); liquidation clusters are heavier "
+               f"{'below' if long_skew >= 0.5 else 'above'} spot.")
+    obs.append(f"{'Downside long-liquidation risk' if squeeze == 'Long Squeeze Risk' else 'Upside short-squeeze risk' if squeeze == 'Short Squeeze Risk' else 'Two-sided liquidation risk'} "
+               f"is currently {'elevated' if max(long_sq, short_sq) >= 55 else 'moderate' if max(long_sq, short_sq) >= 30 else 'low'}.")
+    if squeeze == 'Long Squeeze Risk':
+        assess_title = 'Elevated Long-Side Risk'
+    elif squeeze == 'Short Squeeze Risk':
+        assess_title = 'Elevated Short-Side Risk'
+    else:
+        assess_title = 'Balanced Leverage Environment'
+    assess_text = (f"{summary_interp} These are probabilistic reads of positioning and leverage, not forecasts of a specific price move.")
+
+    # ---- Albert's Call impact (leverage is ONE input) ----
+    impact_points = int(round((short_sq - long_sq) / 6.0))
+    impact_points = max(-15, min(15, impact_points))
+    if impact_points < -2:
+        impact_label = 'Bearish Pressure'
+    elif impact_points > 2:
+        impact_label = 'Bullish Pressure'
+    else:
+        impact_label = 'Neutral'
+    impact_expl = (
+        (f"Elevated long positioning and {oi_state.lower()} open interest are adding modest downside risk to the broader "
+         f"BTCIQ assessment." if impact_points < 0 else
+         f"Crowded shorts into a firm tape are adding modest upside risk to the broader BTCIQ assessment." if impact_points > 0 else
+         "Leverage is broadly balanced and is a neutral input to the broader BTCIQ assessment.")
+        + " Leverage is only one of many signals in Albert's Call.")
+
+    return {
+        'symbol': sym, 'timeframe': tf, 'price': price, 'price_change_24h': price_chg24, 'as_of': now_iso,
+        'summary': {'pressure': pressure, 'pressure_score': pressure_score, 'bias': bias,
+                    'squeeze': squeeze, 'interpretation': summary_interp},
+        'positioning': {'long_pct': long_pct, 'short_pct': short_pct, 'account_ratio': round(lsr, 3),
+                        'account_ratio_prev': round(lsr_prev, 3), 'position_ratio': position_ratio,
+                        'ratio_change_tf': lsr_change, 'trend': pos_trend, 'series': ls_series,
+                        'position_ratio_demo': True},
+        'open_interest': {'value_usd': oi_usd, 'change_tf_pct': oi_change_tf, 'state': oi_state,
+                          'series': oi_series, 'interpretation': _oi_price_read()},
+        'funding': {'rate': round(funding, 5), 'direction': funding_dir, 'trend': funding_trend,
+                    'avg_recent': round(fr_avg, 5), 'bias': funding_bias, 'exchanges': funding_exchanges,
+                    'series': funding_series, 'interpretation': funding_interp,
+                    'exchanges_note': 'Only OKX is a live free feed; multi-exchange funding needs a paid aggregator.'},
+        'estimated_leverage': {'ratio': elr, 'percentile': elr_pct, 'change_tf': elr_change,
+                               'status': elr_status, 'series': elr_series, 'demo': True,
+                               'interpretation': elr_interp},
+        'liquidations': {'long_1h': l1, 'short_1h': s1, 'long_4h': l4, 'short_4h': s4,
+                         'long_24h': l24, 'short_24h': s24, 'net_pressure': net_liq_state, 'demo': True},
+        'heatmap': {'price': price, 'zones': heat_zones, 'demo': True},
+        'squeeze': {'long_risk': long_sq, 'long_label': long_sq_lbl, 'short_risk': short_sq,
+                    'short_label': short_sq_lbl,
+                    'long_explain': (f"Long positioning is {long_pct:.0f}% with {funding:+.4f}% funding and {oi_state.lower()} OI; "
+                                     "a loss of nearby support could force leveraged longs to close."),
+                    'short_explain': (f"Short positioning is {short_pct:.0f}% while BTC holds firm; "
+                                      "a rapid move higher could force leveraged shorts to cover.")},
+        'bitmark': {'observations': obs, 'assessment_title': assess_title, 'assessment_text': assess_text},
+        'albert_call': {'impact_label': impact_label, 'impact_points': impact_points, 'explanation': impact_expl},
+        'sources': ['OKX public API (open interest, funding, long/short account ratio, taker) — REAL',
+                    'Liquidations, liquidation heatmap, estimated-leverage percentile & position ratio — DERIVED/DEMO (no free feed; ready for a paid provider such as CoinGlass)'],
+        'disclaimer': ('Market data and BitMarkAI analysis are provided for informational purposes only and should not be '
+                       'considered financial advice. Derivatives and leveraged trading involve substantial risk. Liquidation '
+                       'levels and squeeze-risk indicators are estimates and may not reflect actual market outcomes.')}
+
+
+def get_leverage(timeframe='4H', refresh=False):
+    key = f'BTC:{timeframe}'
+    c = lev_col.find_one({'_id': key}, {'_id': 0}) or {}
+    stale = (time.time() - c.get('fetched_ts', 0)) >= LEV_TTL_SEC
+    if refresh or not c.get('data') or stale:
+        try:
+            data = compute_leverage(timeframe)
+            lev_col.update_one({'_id': key}, {'$set': {'_id': key, 'data': data,
+                               'fetched_ts': time.time()}}, upsert=True)
+            return data
+        except Exception:  # noqa
+            traceback.print_exc()
+    return c.get('data')
+
+
+
 def _refresh_onchain_bg(symbol='BTC'):
     sym = (symbol or 'BTC').upper()
     if _onchain_state.get(sym):
@@ -4074,6 +4377,21 @@ def whale_tx_feed(min_btc: float = 50.0, limit: int = 40, refresh: int = 0):
         traceback.print_exc()
         return {'status': 'error', 'feed': []}
 
+
+
+@app.get('/api/v1/leverage')
+def leverage_feed(timeframe: str = '4H', refresh: int = 0):
+    """Leverage intelligence — long/short positioning, OI, funding, (est.) leverage,
+    liquidations, squeeze risk & heatmap. Core is REAL (OKX); liquidations/heatmap/
+    estimated-leverage percentile are DERIVED/DEMO and flagged demo=True."""
+    try:
+        data = get_leverage(timeframe if timeframe in _TF_HOURS else '4H', refresh=bool(refresh))
+        if not data:
+            return {'status': 'computing'}
+        return {'status': 'ready', **data}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
 
 
 @app.get('/api/v1/etf-flows')

@@ -136,7 +136,21 @@ backend:
         -working: "NA"
         -agent: "main"
         -comment: "NEW. /compare/coins lists supported coins (BTC/ETH/SOL). /compare/coin?symbol=X runs the same quant pipeline (fetch ccxt daily -> build_features -> compute_quant_analysis) and returns {status:'ready', cached, data:{symbol,name,price,day_change_pct,quant_score,quant_label,regime,forecast_24h,forecast_7d,bullish,risk,support,resistance,spark[60],as_of}}. Cached per symbol per UTC day in compare_coins collection. First call ~6s (computes), 2nd call cached=true fast. Test all 3 symbols return ready with numeric price/quant_score and 60-point spark. Test refresh=1 recomputes (cached=false). Test unsupported symbol (e.g. DOGE) returns status 'error' reason 'unsupported_symbol' (NOT 500)."
-  - task: "Whale Intelligence Phase 1 — ETF Flows (GET /api/v1/etf-flows + institutional panel ETF line REAL)"
+  - task: "Leverage screen backend (GET /api/v1/leverage?timeframe=1H|4H|1D|7D)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW Leverage engine. GET /api/v1/leverage?timeframe=4H (also 1H,1D,7D; default 4H) returns status='ready' + full analysis object. CORE METRICS ARE REAL (OKX public API): price (via ticker/CoinGecko), open_interest (value_usd, change_tf_pct, state Rising/Falling/Stable, series[{t,oi,price}]), funding (rate, direction, trend, bias, exchanges[OKX real], series), positioning (long_pct/short_pct from OKX long-short account ratio, account_ratio, account_ratio_prev, ratio_change_tf, trend, series). DERIVED-FROM-REAL: summary{pressure LOW..EXTREME, pressure_score, bias Long/Short Dominant/Balanced, squeeze Long/Short Squeeze Risk/Neutral, interpretation}, squeeze{long_risk 0-100, long_label, short_risk, short_label, explains}, albert_call{impact_label, impact_points -15..15, explanation}, bitmark{observations[5], assessment_title, assessment_text}. FLAGGED DEMO (demo=true, no free feed): estimated_leverage{ratio,percentile,status,series}, liquidations{long/short_1h/4h/24h, net_pressure}, heatmap{price, zones[{price,side,intensity,distance_pct}]}, positioning.position_ratio. Also 'sources' list + 'disclaimer'. Cached 5min in leverage_engine collection per timeframe. Test: all 4 timeframes return status='ready' (no 500s); open_interest.series non-empty; positioning long_pct+short_pct≈100; funding.rate numeric; squeeze risks 0-100; summary.pressure in [LOW,MODERATE,ELEVATED,HIGH,EXTREME]; albert_call.impact_points integer; liquidations/heatmap/estimated_leverage carry demo=true. refresh=1 works."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Leverage engine validation via external URL (https://quant-features.preview.emergentagent.com/api). All 6 tests passed (6/6): ALL 4 TIMEFRAMES (1H, 4H, 1D, 7D) + REFRESH + DASHBOARD REGRESSION. TIMEFRAME 1H: status='ready' ✅, timeframe='1H' (echoes request) ✅, price=$64,787.1 (numeric) ✅, open_interest: value_usd=$2.01B (numeric) ✅, change_tf_pct=-0.3% (numeric) ✅, state='Stable' (in [Rising,Falling,Stable]) ✅, series: 60 items with t and oi ✅, funding: rate=0.00089% (numeric) ✅, direction='Positive' (in [Positive,Negative,Flat]) ✅, bias='Neutral' (in [Long Bias,Neutral,Short Bias]) ✅, exchanges contains OKX ✅, series: 60 items ✅, positioning: long_pct=55.0%, short_pct=45.0%, sum=100.0% (≈100 within 1) ✅, account_ratio=1.22 (numeric) ✅, account_ratio_prev=1.2 (numeric) ✅, ratio_change_tf=0.02 (numeric) ✅, trend='Little changed' (string) ✅, series: 60 items ✅, summary: pressure='LOW' (in [LOW,MODERATE,ELEVATED,HIGH,EXTREME]) ✅, pressure_score=21 (0-100) ✅, bias='Long Dominant' (in [Long Dominant,Short Dominant,Balanced]) ✅, squeeze='Long Squeeze Risk' (in [Long Squeeze Risk,Short Squeeze Risk,Neutral]) ✅, interpretation: 261 chars (non-empty) ✅, squeeze: long_risk=28, short_risk=12 (ints 0-100) ✅, long_label='Low', short_label='Low' (in [Low,Moderate,Elevated,High]) ✅, long_explain and short_explain present ✅, estimated_leverage: demo=True (DERIVED/DEMO as expected) ✅, ratio=0.199, percentile=39, status='Normal', series: 24 items ✅, liquidations: demo=True (DERIVED/DEMO as expected) ✅, long_1h=279,567, short_1h=227,079, long_4h=1,118,268, short_4h=908,314, long_24h=6,709,608, short_24h=5,449,885 (all numeric) ✅, net_pressure='Moderate Long Liquidations' (string) ✅, heatmap: demo=True (DERIVED/DEMO as expected) ✅, zones: 8 items with price, side (in [long,short]), intensity, distance_pct ✅, albert_call: impact_points=-3 (int in [-15,15]) ✅, impact_label='Bearish Pressure' (string) ✅, explanation: 170 chars ✅, bitmark: observations: 5 non-empty strings ✅, assessment_title='Elevated Long-Side Risk', assessment_text: 360 chars ✅, sources: 2 items (non-empty list) ✅, disclaimer: 291 chars (present) ✅. TIMEFRAME 4H: status='ready' ✅, timeframe='4H' ✅, price=$64,787.0 ✅, all validations passed (same structure as 1H) ✅, positioning: long_pct=55.0%, short_pct=45.0%, trend='More long-heavy' ✅, summary: pressure='LOW', pressure_score=22 ✅. TIMEFRAME 1D: status='ready' ✅, timeframe='1D' ✅, price=$64,787.1 ✅, all validations passed ✅, open_interest: change_tf_pct=-1.0% ✅, positioning: trend='More long-heavy' ✅. TIMEFRAME 7D: status='ready' ✅, timeframe='7D' ✅, price=$64,787.1 ✅, all validations passed ✅, open_interest: change_tf_pct=+3.2%, state='Rising' ✅, positioning: long_pct=53.7%, short_pct=46.3%, trend='More short-heavy' ✅, summary: pressure='MODERATE', pressure_score=27, bias='Balanced' ✅. REFRESH TEST: GET /api/v1/leverage?timeframe=4H&refresh=1 returns status='ready' (no 500 error) ✅. REGRESSION TEST: GET /api/v1/dashboard returns status='ready' (no breaking changes) ✅. All validations passed. Data is REAL (OKX public API for core metrics: price, open_interest, funding, positioning). DERIVED/DEMO metrics correctly flagged with demo=true (estimated_leverage, liquidations, heatmap, positioning.position_ratio). No HTTP 500 errors. Feature is fully functional and production-ready."
+
     implemented: true
     working: true
     file: "backend/server.py"
@@ -608,7 +622,8 @@ frontend:
 
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "Leverage screen backend (GET /api/v1/leverage?timeframe=1H|4H|1D|7D)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -616,8 +631,27 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      NEW TEST FOCUS — Whale Intelligence follow-ups (4 enhancements). All REAL data. Test via
-      external base URL + /api prefix.
+      NEW TEST FOCUS — Leverage engine: GET /api/v1/leverage?timeframe={1H|4H|1D|7D} (default 4H).
+      Test via external base URL + /api prefix. Core metrics are REAL (OKX public API); liquidations,
+      liquidation heatmap, estimated-leverage percentile and position_ratio are DERIVED/DEMO and flagged
+      demo=true. For EACH timeframe (1H, 4H, 1D, 7D):
+        * status=='ready' (NO 500s); timeframe echoes requested value.
+        * price numeric; open_interest.value_usd numeric, change_tf_pct numeric, state in [Rising,Falling,Stable],
+          series non-empty ({t,oi,price?}).
+        * funding.rate numeric, direction in [Positive,Negative,Flat], bias in [Long Bias,Neutral,Short Bias],
+          exchanges non-empty (OKX), series non-empty.
+        * positioning.long_pct+short_pct≈100, account_ratio numeric, ratio_change_tf numeric, trend string, series non-empty.
+        * summary.pressure in [LOW,MODERATE,ELEVATED,HIGH,EXTREME], pressure_score 0-100, bias in
+          [Long Dominant,Short Dominant,Balanced], squeeze in [Long Squeeze Risk,Short Squeeze Risk,Neutral], interpretation non-empty.
+        * squeeze.long_risk & short_risk 0-100 ints with labels in [Low,Moderate,Elevated,High].
+        * estimated_leverage.demo==true, liquidations.demo==true, heatmap.demo==true; liquidations has long/short for
+          1h/4h/24h (numeric) + net_pressure; heatmap.zones non-empty ({price,side in [long,short],intensity,distance_pct}).
+        * albert_call.impact_points int in [-15,15] with impact_label; bitmark.observations ~5 strings + assessment_title
+          + assessment_text; sources list + disclaimer present. refresh=1 works.
+      Do NOT test WebSockets.
+
+    -agent: "main_prev"
+    -message: |
       1) ETF FULL HISTORY: GET /api/v1/etf-flows -> status='ready', source mentions 'tftc',
          history_days ~660, span_from ~ '2024-01-11', cumulative non-empty (<=180 pts, {date,cum}),
          cum_total large positive (~50000+ $M), net_1d/7d/30d numeric, leaderboard non-empty
@@ -2148,3 +2182,55 @@ agent_communication:
       - Albert text length: 759 chars (non-empty ✅)
       
       NO CRITICAL ISSUES FOUND. All 4 enhancements are production-ready. Feature is fully functional with REAL data.
+
+
+    -agent: "testing"
+    -message: |
+      ✅ LEVERAGE ENGINE BACKEND TEST COMPLETE - ALL TESTS PASSED (6/6)
+      
+      Tested NEW endpoint: GET /api/v1/leverage?timeframe={1H|4H|1D|7D} via external URL (https://quant-features.preview.emergentagent.com/api).
+      
+      ALL 4 TIMEFRAMES TESTED (1H, 4H, 1D, 7D):
+      ✅ All return status='ready' (NO 500 errors)
+      ✅ Response 'timeframe' echoes requested value
+      ✅ price is numeric ($64,787)
+      ✅ open_interest: value_usd numeric ($2.01B), change_tf_pct numeric (-0.3% to +3.2%), state in [Rising,Falling,Stable], series non-empty (60 items with t and oi)
+      ✅ funding: rate numeric (0.00089%), direction in [Positive,Negative,Flat], bias in [Long Bias,Neutral,Short Bias], exchanges contains OKX, series non-empty (60 items)
+      ✅ positioning: long_pct + short_pct ≈ 100 (within 1), account_ratio/account_ratio_prev/ratio_change_tf numeric, trend string, series non-empty (60 items)
+      ✅ summary: pressure in [LOW,MODERATE,ELEVATED,HIGH,EXTREME], pressure_score 0-100, bias in [Long Dominant,Short Dominant,Balanced], squeeze in [Long Squeeze Risk,Short Squeeze Risk,Neutral], interpretation non-empty
+      ✅ squeeze: long_risk/short_risk ints 0-100, long_label/short_label in [Low,Moderate,Elevated,High], long_explain/short_explain non-empty
+      ✅ estimated_leverage.demo == true (ratio, percentile, status, series present) - DERIVED/DEMO as expected
+      ✅ liquidations.demo == true (long_1h/short_1h/long_4h/short_4h/long_24h/short_24h numeric, net_pressure string) - DERIVED/DEMO as expected
+      ✅ heatmap.demo == true (zones non-empty with price, side in [long,short], intensity, distance_pct) - DERIVED/DEMO as expected
+      ✅ albert_call: impact_points int in [-15,15], impact_label present, explanation non-empty
+      ✅ bitmark: observations list of 5 non-empty strings, assessment_title and assessment_text present
+      ✅ sources non-empty list (2 items), disclaimer present
+      
+      REFRESH TEST:
+      ✅ GET /api/v1/leverage?timeframe=4H&refresh=1 returns status='ready' (no 500 error)
+      
+      REGRESSION TEST:
+      ✅ GET /api/v1/dashboard returns status='ready' (no breaking changes)
+      
+      EXACT OBSERVED VALUES PER TIMEFRAME:
+      - 1H: price=$64,787.1, OI change=-0.3%, long_pct=55.0%, short_pct=45.0%, pressure='LOW' (score=21), bias='Long Dominant', squeeze='Long Squeeze Risk'
+      - 4H: price=$64,787.0, OI change=0.0%, long_pct=55.0%, short_pct=45.0%, pressure='LOW' (score=22), bias='Long Dominant', squeeze='Long Squeeze Risk'
+      - 1D: price=$64,787.1, OI change=-1.0%, long_pct=55.0%, short_pct=45.0%, pressure='LOW' (score=21), bias='Long Dominant', squeeze='Long Squeeze Risk'
+      - 7D: price=$64,787.1, OI change=+3.2%, long_pct=53.7%, short_pct=46.3%, pressure='MODERATE' (score=27), bias='Balanced', squeeze='Long Squeeze Risk'
+      
+      DATA SOURCES CONFIRMED:
+      - Core metrics (price, open_interest, funding, positioning): OKX public API - REAL
+      - Derived/demo metrics (estimated_leverage, liquidations, heatmap, positioning.position_ratio): Flagged demo=true - DERIVED/DEMO (no free feed)
+      
+      KEY OBSERVATIONS:
+      - All endpoints return REAL data for core metrics (OKX public API)
+      - All DERIVED/DEMO metrics correctly flagged with demo=true
+      - All timeframes return consistent structure
+      - All enum fields validated (state, direction, bias, pressure, squeeze, side)
+      - All numeric fields validated (price, rates, percentages, scores)
+      - All list fields non-empty (series, zones, observations, sources)
+      - refresh=1 parameter works correctly
+      - No HTTP 500 errors at any point
+      - Dashboard regression passed (no breaking changes)
+      
+      NO CRITICAL ISSUES FOUND. Feature is fully functional and production-ready. Core metrics are REAL (OKX public API); liquidations, liquidation heatmap, estimated-leverage percentile and positioning.position_ratio are DERIVED/DEMO and correctly flagged demo=true (this is expected and correct — the user approved mock for these).
