@@ -1944,9 +1944,9 @@ def build_derivatives_engine(symbol='BTC'):
                 sig7 = 'Bullish' if n7 > 50 else 'Bearish' if n7 < -50 else 'Neutral'
                 add(f'Spot ETF net flow (7d)', f'${n7:+,.0f}M', sig7)
         else:
-            add('Spot ETF net flow (1d)', 'Inactive — paid feed required', 'Neutral', inactive=True)
+            add('Spot ETF net flow', 'No ETF data available', 'Neutral', inactive=True)
     elif sym == 'ETH':
-        add('Spot ETF net flow (1d)', 'Inactive — paid feed required', 'Neutral', inactive=True)
+        add('Spot ETF net flow', 'No ETF data available', 'Neutral', inactive=True)
 
     if not [m for m in metrics if not m.get('inactive')]:
         return None
@@ -1956,9 +1956,9 @@ def build_derivatives_engine(symbol='BTC'):
                 else 'Derivatives mixed / neutral')
     src = f'OKX ({sym} derivatives)'
     if sym == 'BTC':
-        src += ' · ETF flows (Farside/bitbo)' if etf_active else ' · ETF flow inactive'
+        src += ' · ETF flows (Farside/bitbo)' if etf_active else ' · no ETF data'
     elif sym == 'ETH':
-        src += ' · ETF flow inactive'
+        src += ' · no ETF data'
     return {'demo': False, 'source': src, 'headline': headline, 'metrics': metrics,
             'as_of': datetime.datetime.utcnow().isoformat()}
 
@@ -2194,14 +2194,13 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
                     'avg_recent': round(fr_avg, 5), 'bias': funding_bias, 'exchanges': funding_exchanges,
                     'series': funding_series, 'interpretation': funding_interp,
                     'exchanges_note': 'Only OKX is a live free feed; multi-exchange funding needs a paid aggregator.'},
-        'estimated_leverage': {'active': False, 'status': 'Inactive',
-                               'reason': 'Requires a paid derivatives-data feed (e.g. CoinGlass / CryptoQuant).',
-                               'interpretation': ('Estimated leverage ratio is inactive — it needs a live '
-                                                  'exchange-reserve/leverage feed we do not fabricate.')},
-        'liquidations': {'active': False, 'status': 'Inactive',
-                         'reason': 'Real-time liquidation totals require a paid feed (e.g. CoinGlass).'},
-        'heatmap': {'active': False, 'status': 'Inactive', 'price': price,
-                    'reason': 'Liquidation-level heatmap data requires a paid feed (e.g. CoinGlass).'},
+        'estimated_leverage': {'active': False, 'status': 'No data available',
+                               'reason': 'No estimated-leverage data available (needs a live leverage/exchange-reserve feed such as CoinGlass or CryptoQuant).',
+                               'interpretation': 'No estimated-leverage data available.'},
+        'liquidations': {'active': False, 'status': 'No data available',
+                         'reason': 'No liquidation data available (needs a live liquidations feed such as CoinGlass).'},
+        'heatmap': {'active': False, 'status': 'No data available', 'price': price,
+                    'reason': 'No liquidation-heatmap data available (needs a live liquidation-level feed such as CoinGlass).'},
         'squeeze': {'long_risk': long_sq, 'long_label': long_sq_lbl, 'short_risk': short_sq,
                     'short_label': short_sq_lbl,
                     'long_explain': (f"Long positioning is {long_pct:.0f}% with {funding:+.4f}% funding and {oi_state.lower()} OI; "
@@ -2211,7 +2210,7 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
         'bitmark': {'observations': obs, 'assessment_title': assess_title, 'assessment_text': assess_text},
         'albert_call': {'impact_label': impact_label, 'impact_points': impact_points, 'explanation': impact_expl},
         'sources': ['OKX public API (open interest, funding, long/short account ratio, taker) — REAL',
-                    'Liquidations, liquidation heatmap, estimated-leverage & size-weighted position ratio — INACTIVE (no free feed; connect a paid provider such as CoinGlass to activate)'],
+                    'Liquidations, liquidation heatmap, estimated-leverage & size-weighted position ratio — NO DATA AVAILABLE (no free feed; connect a paid provider such as CoinGlass to activate)'],
         'disclaimer': ('Market data and BitMarkAI analysis are provided for informational purposes only and should not be '
                        'considered financial advice. Derivatives and leveraged trading involve substantial risk. Liquidation '
                        'levels and squeeze-risk indicators are estimates and may not reflect actual market outcomes.')}
@@ -2857,9 +2856,10 @@ CHAT_SYSTEM = (
     "(powered by BitCentAI, a Bitcoin-Centred Intelligence Engine). You have a warm, witty, "
     "professor-like personality — think a sharp, approachable Einstein of Bitcoin markets — but you "
     "stay rigorous and never over-promise. If someone asks who you are, say you are Albert, the BTCIQ "
-    "HuCentAI Quant. Answer the user's question using ONLY the LIVE DASHBOARD DATA provided below. If the "
-    "data does not contain the answer, say you don't have that data rather than guessing — never invent "
-    "numbers, prices or events. Speak in clear, plain English and be concise (usually under 130 words). "
+    "HuCentAI Quant. Answer the user's question using ONLY the LIVE DASHBOARD DATA provided below. If any "
+    "data source is unavailable or marked 'no data'/'inactive', explicitly say 'no [X] data available' "
+    "(e.g. 'no ETF data available', 'no liquidation data available') rather than guessing — never invent, "
+    "infer or estimate numbers, prices or events for anything shown as unavailable. Speak in clear, plain English and be concise (usually under 130 words). "
     "Always frame predictions as probabilities/odds, not certainties, and never give definitive buy/sell "
     "financial advice. You may explain what the numbers mean and why the engine leans a certain way.\n\n"
     "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
@@ -4537,7 +4537,9 @@ ALBERT_INSIGHT_SYSTEM = (
     "3) Give ONE or TWO concrete 'if this happens, then this is the likely outcome' scenarios using the real "
     "price levels, invalidation points and odds in the data (e.g. 'if BTC holds $X, the model's Y% up case "
     "strengthens; if it loses $X, expect ...').\n"
-    "Rules: use ONLY the live dashboard data below — never invent numbers, prices or events. Any term a "
+    "Rules: use ONLY the live dashboard data below — never invent numbers, prices or events. If any data "
+    "source is unavailable or marked 'no data'/'inactive', explicitly say 'no [X] data available' (e.g. 'no "
+    "ETF data available') and do NOT estimate or infer values for it. Any term a "
     "beginner might not know, explain in 3-4 words. Always frame the future as probabilities/odds, never "
     "certainties, and never give direct buy/sell financial advice. Warm, clear, professor-like. "
     "Do NOT open with a greeting or salutation (no 'Hello', 'Hi', 'Hey', 'Hello there', and do not address "
@@ -4569,7 +4571,8 @@ ALBERT_SECTION_SYSTEM = (
     "- Risk: explain the overall risk level, the biggest driver, and the expected move ranges.\n"
     "- Events: which upcoming events matter most, when, and how to think about the risk.\n"
     "Rules: use ONLY the data below — never invent numbers, prices or events; if the data says a metric is "
-    "inactive/placeholder, say so rather than interpreting it. Explain any jargon in 3-4 words. Frame things as "
+    "inactive/placeholder or unavailable, explicitly say 'no [X] data available' (e.g. 'no liquidation data "
+    "available') rather than interpreting or estimating it. Explain any jargon in 3-4 words. Frame things as "
     "probabilities, never certainties; no buy/sell advice. No greeting — start immediately with the substance. "
     "Write 80-130 words, at most two short paragraphs, no markdown headers or bullet symbols.\n\n"
     "THIS PANEL'S FOCUS: {focus}\n\n"
@@ -4586,7 +4589,9 @@ ALBERT_TECH_SYSTEM = (
     "invalidation points, regime/volatility read, and any relevant macro/liquidity or on-chain style signals.\n"
     "2) Explain the mechanism / what is driving the read, and how the signal groups reconcile (agreement vs conflict).\n"
     "3) State the actionable levels and the specific 'if BTC does X vs level Y, then Z' conditions the model watches.\n"
-    "Rules: use ONLY the live dashboard data below — never invent numbers, prices or events. You may use standard "
+    "Rules: use ONLY the live dashboard data below — never invent numbers, prices or events. If any data "
+    "source is unavailable or marked 'no data'/'inactive', explicitly say 'no [X] data available' and do NOT "
+    "estimate or infer values for it. You may use standard "
     "trading terms without dumbing them down, but stay rigorous. Always frame outcomes as probabilities, never "
     "certainties, and never give direct buy/sell financial advice. Do NOT open with a greeting or salutation "
     "(no 'Hello', 'Hi', 'Hey') — start immediately with the analysis. Write 90-150 words, tight and information-dense, "

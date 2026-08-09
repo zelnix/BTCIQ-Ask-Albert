@@ -605,7 +605,21 @@ metadata:
   run_ui: false
 
 frontend:
-  - task: "Whale Intelligence UI — ETF Flows card, Whale Impact card, Large-Tx feed, per-whale balance history chart"
+  - task: "Leverage screen UI (nav 'Leverage', timeframe + LONG/SHORT toggles, all cards, inactive 'No data available' states)"
+    implemented: true
+    working: true
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW Leverage screen (LeverageSection). Nav item 'Leverage' (BTC-only). Header: BTC price + 24h change + updated time; timeframe selector 1H/4H/1D/7D (default 4H, refetches); LONG|SHORT emphasis toggle (switches squeeze explanation). REAL cards: Leverage Market Summary (Pressure/Bias/Squeeze + interpretation), Long vs Short Positioning (split bar + account ratio; position ratio shows 'No data available'), Open Interest (value + change + state + price/OI chart), Funding Rates (rate/direction/bias + bar chart + OKX exchange chip), Squeeze Risk (two semicircle gauges), BitMarkAI Leverage Intelligence (observations + assessment), Impact on Albert's Call (impact_points), data sources + disclaimer. INACTIVE cards rendered as 'No data available' placeholders (Lock icon + reason), NOT fabricated numbers: Estimated Leverage, Liquidations, Liquidation Heatmap, and the L/S Position Ratio cell. Compiles clean. Test: nav to Leverage; verify all cards render; toggles work (timeframe refetch changes values; LONG/SHORT changes squeeze text); the 4 inactive items clearly say 'No data available' with NO numbers; no console errors."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Leverage screen UI test via external URL (https://quant-features.preview.emergentagent.com). All 12 sections validated + 2 interaction tests passed. RESULTS: (1) HEADER: BTC price=$64,867 with 24h % change ✅, 'Updated' time label ✅, timeframe selector with all 4 buttons (1H/4H/1D/7D) ✅, 4H selected by default ✅, LONG/SHORT toggle buttons ✅. (2) LEVERAGE MARKET SUMMARY: Three tiles (Leverage Pressure='LOW' score 13/100, Market Bias='Long Dominant', Squeeze Risk='Long Squeeze Risk') ✅, interpretation paragraph ✅. (3) LONG VS SHORT POSITIONING: Green/red split bar with Long 55% / Short 45% ✅, L/S Account Ratio=1.22 ✅, L/S Position Ratio shows 'No data available' ✅. (4) OPEN INTEREST: Dollar value=$2.01B ✅, % change=-0.7% ✅, state tag='Stable' ✅, price/OI chart ✅, interpretation text ✅. (5) FUNDING RATES: Rate=+0.00067% ✅, direction='Positive' ✅, bias='Neutral' ✅, bar chart ✅, OKX exchange chip ✅. (6) ESTIMATED LEVERAGE: 'No data available' placeholder with Lock icon ✅, NO fabricated numbers ✅. (7) LIQUIDATIONS: 'No data available' placeholder ✅, NO dollar values ✅. (8) LIQUIDATION HEATMAP: 'No data available' placeholder ✅, NO price zones ✅. (9) SQUEEZE RISK: Two gauges (Long Low 28, Short Low 12) ✅, explanation text ✅. (10) BITMARKAI LEVERAGE INTELLIGENCE: 5 observations ✅, 'Overall Leverage Assessment' title='Elevated Long-Side Risk' ✅. (11) IMPACT ON ALBERT'S CALL: Impact label='Bearish Pressure -3' ✅, explanation text ✅. (12) DATA SOURCES: Section found ✅. INTERACTIONS: Timeframe selector 7D→1H works correctly (pressure score changed from 13/100 to 11/100) ✅, LONG/SHORT toggle switches Squeeze Risk explanation text correctly ✅. CONSOLE: Only 1 non-critical error (WebSocket HMR 502, expected in production) ✅. NO red error screens ✅. Screenshots captured: leverage_screen_initial.png, leverage_summary_positioning.png, leverage_oi_funding.png, leverage_inactive_cards.png, leverage_squeeze_bitmark_albert.png. All 4 'No data available' items confirmed (Estimated Leverage, Liquidations, Liquidation Heatmap, L/S Position Ratio) with NO fabricated numbers. Data is REAL (OKX public API). Feature is fully functional and production-ready."
+
     implemented: true
     working: true
     file: "app/page.js"
@@ -622,13 +636,53 @@ frontend:
 
 
 test_plan:
-  current_focus:
-    - "Leverage screen backend (GET /api/v1/leverage?timeframe=1H|4H|1D|7D)"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
+    -agent: "testing"
+    -message: |
+      ✅ LEVERAGE SCREEN UI TEST COMPLETE - ALL VALIDATIONS PASSED
+      
+      Tested the NEW Leverage screen UI via external URL (https://quant-features.preview.emergentagent.com).
+      Comprehensive validation of all 12 sections + 2 interaction tests.
+      
+      SUMMARY OF VALIDATIONS:
+      ✅ (1) HEADER: BTC price, 24h change, Updated time, timeframe selector (1H/4H/1D/7D, 4H default), LONG/SHORT toggle
+      ✅ (2) LEVERAGE MARKET SUMMARY: Pressure (LOW, score 13/100), Bias (Long Dominant), Squeeze (Long Squeeze Risk), interpretation
+      ✅ (3) LONG VS SHORT POSITIONING: Split bar (55% Long / 45% Short), L/S Account Ratio (1.22), L/S Position Ratio ('No data available')
+      ✅ (4) OPEN INTEREST: $2.01B, -0.7% change, 'Stable' tag, price/OI chart, interpretation
+      ✅ (5) FUNDING RATES: +0.00067%, Positive direction, Neutral bias, bar chart, OKX exchange chip
+      ✅ (6) ESTIMATED LEVERAGE: 'No data available' placeholder with Lock icon, NO fabricated numbers
+      ✅ (7) LIQUIDATIONS: 'No data available' placeholder, NO dollar values
+      ✅ (8) LIQUIDATION HEATMAP: 'No data available' placeholder, NO price zones
+      ✅ (9) SQUEEZE RISK: Two gauges (Long Low 28, Short Low 12), explanation text
+      ✅ (10) BITMARKAI LEVERAGE INTELLIGENCE: 5 observations, 'Overall Leverage Assessment' (Elevated Long-Side Risk)
+      ✅ (11) IMPACT ON ALBERT'S CALL: 'Bearish Pressure -3', explanation text
+      ✅ (12) DATA SOURCES: Section found at bottom
+      
+      INTERACTION TESTS:
+      ✅ Timeframe selector: Clicked 7D then 1H - values changed correctly (pressure score 13→11)
+      ✅ LONG/SHORT toggle: Squeeze Risk explanation text switched correctly between long-side and short-side
+      
+      CRITICAL VALIDATIONS:
+      ✅ All 4 'No data available' items confirmed with NO fabricated numbers:
+         - Estimated Leverage ✅
+         - Liquidations ✅
+         - Liquidation Heatmap ✅
+         - L/S Position Ratio ✅
+      
+      CONSOLE & ERRORS:
+      ✅ Only 1 non-critical console error (WebSocket HMR 502, expected in production)
+      ✅ NO red error screens
+      ✅ NO HTTP 500 errors
+      
+      Screenshots captured: leverage_screen_initial.png, leverage_summary_positioning.png, leverage_oi_funding.png, 
+      leverage_inactive_cards.png, leverage_squeeze_bitmark_albert.png
+      
+      Data is REAL (OKX public API for core metrics). Feature is fully functional and production-ready.
     -agent: "main"
     -message: |
       NEW TEST FOCUS — Leverage engine: GET /api/v1/leverage?timeframe={1H|4H|1D|7D} (default 4H).

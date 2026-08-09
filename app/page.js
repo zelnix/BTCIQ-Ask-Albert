@@ -2890,7 +2890,7 @@ function LeverageSection() {
           <div className="flex h-6 overflow-hidden rounded-lg"><div className="bg-emerald-500/70" style={{ width: `${p.long_pct}%` }} /><div className="bg-red-500/70" style={{ width: `${p.short_pct}%` }} /></div>
           <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
             <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="text-[11px] text-slate-500">L/S Account Ratio</div><div className="font-mono text-slate-100">{p.account_ratio} <span className="text-[11px] text-slate-500">(prev {p.account_ratio_prev})</span></div></div>
-            <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="flex items-center gap-1 text-[11px] text-slate-500">L/S Position Ratio<DemoBadge label="Inactive" /></div><div className="font-mono text-slate-500">Inactive</div></div>
+            <div className="rounded border border-slate-800 bg-slate-950/40 p-2.5"><div className="flex items-center gap-1 text-[11px] text-slate-500">L/S Position Ratio<DemoBadge label="No data" /></div><div className="font-mono text-slate-500">No data available</div></div>
           </div>
           <p className="mt-3 text-xs text-slate-400">Change over {d.timeframe}: <span className={`font-semibold ${(p.ratio_change_tf || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{(p.ratio_change_tf >= 0 ? '+' : '')}{p.ratio_change_tf}</span> · {p.trend}</p>
         </Card>
@@ -2934,30 +2934,30 @@ function LeverageSection() {
         </Card>
 
         <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-          <h3 className="mb-3 flex items-center gap-1 font-semibold text-white">Estimated Leverage<DemoBadge label="Inactive" /><InfoTip below text="An estimate of how much leverage is in the system relative to recent conditions. Higher leverage tends to amplify volatility. Requires a live leverage/exchange-reserve feed." /></h3>
+          <h3 className="mb-3 flex items-center gap-1 font-semibold text-white">Estimated Leverage<DemoBadge label="No data" /><InfoTip below text="An estimate of how much leverage is in the system relative to recent conditions. Higher leverage tends to amplify volatility. Requires a live leverage/exchange-reserve feed." /></h3>
           <div className="flex h-28 flex-col items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-950/30 p-4 text-center">
             <Lock className="mb-2 h-5 w-5 text-slate-600" />
-            <div className="text-sm font-semibold text-slate-400">Inactive</div>
+            <div className="text-sm font-semibold text-slate-400">No data available</div>
             <p className="mt-1 text-[11px] text-slate-500">{el.reason || 'Requires a paid derivatives-data feed to activate.'}</p>
           </div>
         </Card>
       </div>
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <h3 className="mb-3 flex items-center gap-1 font-semibold text-white">Liquidations<DemoBadge label="Inactive" /><InfoTip below text="Dollar value of leveraged positions force-closed as price moved against them. Long liquidations spike when price drops; short liquidations spike when price rises. Requires a live liquidations feed." /></h3>
+        <h3 className="mb-3 flex items-center gap-1 font-semibold text-white">Liquidations<DemoBadge label="No data" /><InfoTip below text="Dollar value of leveraged positions force-closed as price moved against them. Long liquidations spike when price drops; short liquidations spike when price rises. Requires a live liquidations feed." /></h3>
         <div className="flex h-28 flex-col items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-950/30 p-4 text-center">
           <Lock className="mb-2 h-5 w-5 text-slate-600" />
-          <div className="text-sm font-semibold text-slate-400">Inactive</div>
+          <div className="text-sm font-semibold text-slate-400">No data available</div>
           <p className="mt-1 text-[11px] text-slate-500">{lq.reason || 'Real-time long/short liquidation totals require a paid feed (e.g. CoinGlass).'}</p>
         </div>
       </Card>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-          <div className="mb-3 flex flex-wrap items-center gap-2"><h3 className="flex items-center gap-1 font-semibold text-white">Liquidation Heatmap<DemoBadge label="Inactive" /><InfoTip below text="Estimated price zones where clusters of leveraged positions could be liquidated. Requires a live liquidation-level feed (e.g. CoinGlass)." /></h3></div>
+          <div className="mb-3 flex flex-wrap items-center gap-2"><h3 className="flex items-center gap-1 font-semibold text-white">Liquidation Heatmap<DemoBadge label="No data" /><InfoTip below text="Estimated price zones where clusters of leveraged positions could be liquidated. Requires a live liquidation-level feed (e.g. CoinGlass)." /></h3></div>
           <div className="flex h-40 flex-col items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-950/30 p-4 text-center">
             <Lock className="mb-2 h-6 w-6 text-slate-600" />
-            <div className="text-sm font-semibold text-slate-400">Inactive</div>
+            <div className="text-sm font-semibold text-slate-400">No data available</div>
             <p className="mt-1 max-w-xs text-[11px] text-slate-500">{(d.heatmap && d.heatmap.reason) || 'Liquidation-level heatmap data requires a paid feed. Current BTC price:'} {d.price ? <span className="font-mono text-sky-300">${Number(d.price).toLocaleString()}</span> : null}</p>
           </div>
         </Card>
