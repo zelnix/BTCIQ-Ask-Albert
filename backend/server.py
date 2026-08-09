@@ -5204,7 +5204,7 @@ def _section_live_context(section, symbol='BTC'):
 
 @app.post('/api/v1/chat')
 def chat_endpoint(request: Request, payload: dict = Body(...)):
-    limited = _too_many(request, 'chat', per_min=15, per_day=300)
+    limited = _too_many(request, 'chat', per_min=10, per_day=200)
     if limited is not None:
         return limited
     session_id = (str(payload.get('session_id') or uuid.uuid4()))[:80]

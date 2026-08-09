@@ -5941,6 +5941,7 @@ export default function DashboardPage() {
   const [passPrompt, setPassPrompt] = useState(false);
   const [passInput, setPassInput] = useState('');
   const [passError, setPassError] = useState('');
+  const [passRemember, setPassRemember] = useState(true);
   const [ticker, setTicker] = useState(__tickerCache);
   const [active, setActive] = useState('overview');
   const [showReport, setShowReport] = useState(false);
@@ -6067,7 +6068,7 @@ export default function DashboardPage() {
     return () => { alive = false; clearInterval(t); clearInterval(dref); };
   }, [load, symbol]);
 
-  const doRefresh = async (passcode) => {
+  const doRefresh = async (passcode, remember = true) => {
     setRefreshing(true);
     setPassError('');
     try {
@@ -6088,8 +6089,11 @@ export default function DashboardPage() {
         if (typeof window !== 'undefined') window.alert('Too many refreshes — please wait a moment and try again.');
         return;
       }
-      // Accepted — remember the passcode and start polling for the fresh run.
-      if (typeof window !== 'undefined' && passcode) window.localStorage.setItem('btciq_admin_passcode', passcode);
+      // Accepted — persist the passcode only if the admin opted to remember it on this device.
+      if (typeof window !== 'undefined') {
+        if (remember && passcode) window.localStorage.setItem('btciq_admin_passcode', passcode);
+        else window.localStorage.removeItem('btciq_admin_passcode');
+      }
       setPassPrompt(false);
       setPassInput('');
       const id = setInterval(load, 4000);
@@ -6102,14 +6106,14 @@ export default function DashboardPage() {
 
   const handleRefresh = () => {
     const stored = (typeof window !== 'undefined' && window.localStorage.getItem('btciq_admin_passcode')) || '';
-    if (!stored) { setPassError(''); setPassInput(''); setPassPrompt(true); return; }
-    doRefresh(stored);
+    if (!stored) { setPassError(''); setPassInput(''); setPassRemember(true); setPassPrompt(true); return; }
+    doRefresh(stored, true);
   };
 
   const submitPasscode = () => {
     const p = (passInput || '').trim();
     if (!p) { setPassError('Enter the admin passcode.'); return; }
-    doRefresh(p);
+    doRefresh(p, passRemember);
   };
 
   if (!data && (status === 'loading' || status === 'computing')) {
@@ -6246,6 +6250,16 @@ export default function DashboardPage() {
                       className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500"
                     />
                     {passError && <p className="mt-1.5 text-[11px] font-medium text-red-400">{passError}</p>}
+                    <label className="mt-2.5 flex cursor-pointer items-center gap-2 text-[11px] text-slate-400 select-none">
+                      <input
+                        type="checkbox"
+                        checked={passRemember}
+                        onChange={(e) => setPassRemember(e.target.checked)}
+                        className="h-3.5 w-3.5 cursor-pointer rounded border-slate-600 bg-slate-950 accent-sky-500"
+                      />
+                      Remember on this device
+                    </label>
+                    {!passRemember && <p className="mt-1 text-[10px] leading-snug text-amber-400/80">Recommended on shared or public devices — the passcode won't be saved.</p>}
                     <div className="mt-2.5 flex items-center justify-end gap-2">
                       <button onClick={() => setPassPrompt(false)} className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-slate-200">Cancel</button>
                       <button onClick={submitPasscode} disabled={refreshing} className="rounded-lg bg-gradient-to-r from-sky-500 to-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:from-sky-400 hover:to-violet-500 disabled:opacity-60">
