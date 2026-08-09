@@ -114,7 +114,7 @@ const sec = (id) => SECTIONS.find(s => s.id === id)
   || { id, label: id, icon: Info, blurb: '' };
 
 // Sections that are Bitcoin-specific and hidden from the nav when an altcoin is selected.
-const BTC_ONLY_SECTIONS = ['smartmoney', 'institutional', 'macro', 'events', 'timemachine', 'analogs'];
+const BTC_ONLY_SECTIONS = ['smartmoney', 'institutional', 'macro', 'events', 'timemachine'];
 // Sections removed from the app entirely (superseded by the global coin picker).
 const REMOVED_SECTIONS = ['compare'];
 // The currently-selected coin flows through this context so deep components
@@ -3343,6 +3343,7 @@ function scoreAnalog(ep, current, norm, weights) {
 }
 
 function AnalogsSection() {
+  const symbol = React.useContext(SymbolContext);
   const [data, setData] = React.useState(null);
   const [status, setStatus] = React.useState('loading');
   const [weights, setWeights] = React.useState({});
@@ -3358,11 +3359,13 @@ function AnalogsSection() {
   // overlaid against the historical median path.
   React.useEffect(() => {
     let alive = true;
-    fetch('/api/v1/dashboard', { cache: 'no-store' }).then((r) => r.json()).then((j) => {
+    setFcPath(null);
+    const url = symbol === 'BTC' ? '/api/v1/dashboard' : `/api/v1/dashboard?symbol=${encodeURIComponent(symbol)}`;
+    fetch(url, { cache: 'no-store' }).then((r) => r.json()).then((j) => {
       if (!alive || j.status !== 'ready') return;
       const bm = j.bitmark || {};
       const cp = bm.current_price || j.last_close;
-      if (!cp) return;
+      if (!cp || !bm.horizons) return;
       const map = { '1W': 7, '1M': 30, '3M': 90, '6M': 180 };
       const anchors = [{ off: 0, v: 100 }];
       (bm.horizons || []).forEach((h) => {
@@ -3375,7 +3378,7 @@ function AnalogsSection() {
       if (anchors.length > 1) setFcPath(anchors);
     }).catch(() => { /* noop */ });
     return () => { alive = false; };
-  }, []);
+  }, [symbol]);
 
   React.useEffect(() => {
     try { const t = parseInt(localStorage.getItem('analog_threshold'), 10); if (t) setThreshold(t); } catch (e) { /* noop */ }
@@ -3386,7 +3389,8 @@ function AnalogsSection() {
 
   React.useEffect(() => {
     let alive = true;
-    const load = () => fetch('/api/v1/analogs', { cache: 'no-store' }).then((r) => r.json()).then((j) => {
+    setStatus('loading'); setData(null); setWeights({});
+    const load = () => fetch(`/api/v1/analogs?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' }).then((r) => r.json()).then((j) => {
       if (!alive) return;
       if (j.status === 'ready') {
         setData(j);
@@ -3397,7 +3401,7 @@ function AnalogsSection() {
     load();
     const id = setInterval(() => setStatus((s) => { if (s !== 'ready') load(); return s; }), 5000);
     return () => { alive = false; clearInterval(id); };
-  }, []);
+  }, [symbol]);
 
   const ranked = React.useMemo(() => {
     if (!data) return [];
@@ -3567,8 +3571,8 @@ function AnalogsSection() {
 
   return (
     <div className="space-y-6">
-      <SectionHead icon={History} title="Happening Again" blurb={sec('analogs').blurb} />
-      <AiReview text={data ? `Today's Bitcoin setup most resembles ${(ranked[0] || {}).label || 'a past episode'} (${(ranked[0] || {}).match || '—'}% match).` : 'Scanning history for the closest analog…'} voice section="analogs" />
+      <SectionHead icon={History} title="Happening Again" blurb={sec('analogs').blurb} coin={symbol} />
+      <AiReview text={data ? `Today's ${symbol} setup most resembles ${(ranked[0] || {}).label || 'a past episode'} (${(ranked[0] || {}).match || '—'}% match).` : 'Scanning history for the closest analog…'} voice section="analogs" />
 
       {status === 'ready' && topEp && topEp.match >= threshold && (
         <Card className="border-0 bg-gradient-to-r from-amber-500/15 to-sky-500/10 p-4 ring-1 ring-amber-500/40 animate-in fade-in-0 slide-in-from-top-1 duration-300">
@@ -3579,7 +3583,7 @@ function AnalogsSection() {
             </span>
             <div className="text-sm">
               <p className="font-bold text-white">Strong setup forming — {topEp.match}% match to {topEp.label}</p>
-              <p className="text-slate-300">Back then, Bitcoin went on to move <b className={topEp.fwd_90 >= 0 ? 'text-emerald-400' : 'text-red-400'}>{topEp.fwd_90 == null ? '—' : `${topEp.fwd_90 > 0 ? '+' : ''}${topEp.fwd_90}%`}</b> over the next 90 days. Educational pattern-match, not a prediction. <span className="text-slate-500">(A daily bell alert fires automatically at ≥70%.)</span></p>
+              <p className="text-slate-300">Back then, {symbol} went on to move <b className={topEp.fwd_90 >= 0 ? 'text-emerald-400' : 'text-red-400'}>{topEp.fwd_90 == null ? '—' : `${topEp.fwd_90 > 0 ? '+' : ''}${topEp.fwd_90}%`}</b> over the next 90 days. Educational pattern-match, not a prediction. <span className="text-slate-500">(A daily bell alert fires automatically at ≥70%.)</span></p>
             </div>
           </div>
         </Card>
@@ -3587,13 +3591,13 @@ function AnalogsSection() {
 
       {status !== 'ready' || !data ? (
         <Card className="border-0 bg-slate-900/60 p-10 text-center ring-1 ring-slate-800">
-          <p className="text-sm text-slate-400">{status === 'error' ? 'Could not load the analog engine. Retrying…' : 'Scanning 10 years of Bitcoin history and building fingerprints…'}</p>
+          <p className="text-sm text-slate-400">{status === 'error' ? 'Could not load the analog engine. Retrying…' : `Scanning ${symbol} history and building fingerprints…`}</p>
         </Card>
       ) : (
         <>
           <div className="grid gap-6 lg:grid-cols-2">
             <Card className="border-0 bg-slate-900/60 p-5 ring-1 ring-slate-800">
-              <h3 className="mb-3 text-sm font-bold text-white">Today&apos;s Bitcoin setup <span className="text-[11px] font-normal text-slate-500">(as of {data.as_of})</span></h3>
+              <h3 className="mb-3 text-sm font-bold text-white">Today&apos;s {symbol} setup <span className="text-[11px] font-normal text-slate-500">(as of {data.as_of})</span></h3>
               <div className="space-y-2">
                 {data.signals.map((s) => (
                   <div key={s.key} className="flex items-center justify-between gap-2 text-sm">
@@ -3678,7 +3682,7 @@ function AnalogsSection() {
                     <Line key={ep.id} type="monotone" dataKey={`A${idx}`} stroke={ANALOG_OVERLAY_COLORS[idx % ANALOG_OVERLAY_COLORS.length]} strokeWidth={2} dot={false} connectNulls name={`${ep.label} (${ep.match}%)`} />
                   ))}
                   {modelActive && <Line type="monotone" dataKey="modelFc" stroke="#f8fafc" strokeWidth={2} strokeDasharray="2 3" dot={false} connectNulls name="Today’s model (base)" />}
-                  <Line type="monotone" dataKey="Today" stroke="#38bdf8" strokeWidth={2.6} dot={false} connectNulls name="Bitcoin now" />
+                  <Line type="monotone" dataKey="Today" stroke="#38bdf8" strokeWidth={2.6} dot={false} connectNulls name={`${symbol} now`} />
                 </ComposedChart>
               </ResponsiveContainer>
             </div>

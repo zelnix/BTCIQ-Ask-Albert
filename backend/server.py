@@ -3058,11 +3058,11 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
                 ctx = ctx + "\n\n" + "\n".join(lines)
         if section == 'analogs':
             today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
-            adoc = analogs_col.find_one({'_id': today}, {'_id': 0})
+            adoc = analogs_col.find_one({'_id': f'{today}_{symbol}'}, {'_id': 0})
             data = (adoc or {}).get('data')
             if data:
                 cur = data.get('current', {})
-                lines = [f"HISTORICAL-ANALOG DATA (as of {data.get('as_of')}). Today's Bitcoin condition fingerprint:"]
+                lines = [f"HISTORICAL-ANALOG DATA (as of {data.get('as_of')}). Today's {symbol} condition fingerprint:"]
                 sigmap = {s['key']: s['label'] for s in data.get('signals', [])}
                 for k, v in cur.items():
                     lines.append(f"- {sigmap.get(k, k)}: {v}")
@@ -3867,7 +3867,30 @@ ANALOG_SIGNALS = [
     {'key': 'cycle', 'label': 'Months since halving', 'cat': 'On-chain', 'unit': 'mo', 'good_high': None},
 ]
 ANALOG_KEYS = [s['key'] for s in ANALOG_SIGNALS]
-_analogs_state = {'status': 'idle'}
+ANALOG_COINS = {  # symbol -> Yahoo ticker for the Happening Again engine
+    'BTC': 'BTC-USD', 'ETH': 'ETH-USD', 'SOL': 'SOL-USD', 'XRP': 'XRP-USD',
+    'ADA': 'ADA-USD', 'DOGE': 'DOGE-USD', 'AVAX': 'AVAX-USD', 'LINK': 'LINK-USD',
+    'DOT': 'DOT-USD', 'LTC': 'LTC-USD', 'ATOM': 'ATOM-USD', 'MATIC': 'MATIC-USD',
+}
+
+
+def analog_signals(sym):
+    """Signal definitions for a given coin. Cycle (months since halving) is BTC-only."""
+    s = [
+        {'key': 'rates_dir', 'label': 'Rates trend (10Y, 90d chg)', 'cat': 'Macro', 'unit': 'pts', 'good_high': False},
+        {'key': 'dxy_dir', 'label': 'US Dollar trend (90d %)', 'cat': 'Macro', 'unit': '%', 'good_high': False},
+        {'key': 'nasdaq_corr', 'label': f'{sym}–Nasdaq correlation (30d)', 'cat': 'Market structure', 'unit': '', 'good_high': None},
+        {'key': 'gold_corr', 'label': f'{sym}–Gold correlation (30d)', 'cat': 'Market structure', 'unit': '', 'good_high': None},
+        {'key': 'vol_regime', 'label': 'Volatility (30d annualized)', 'cat': 'Market structure', 'unit': '%', 'good_high': None},
+        {'key': 'drawdown', 'label': 'Drawdown from ATH', 'cat': 'Market structure', 'unit': '%', 'good_high': None},
+        {'key': 'momentum', 'label': 'Momentum (90d return)', 'cat': 'Market structure', 'unit': '%', 'good_high': True},
+    ]
+    if sym == 'BTC':
+        s.append({'key': 'cycle', 'label': 'Months since halving', 'cat': 'On-chain', 'unit': 'mo', 'good_high': None})
+    return s
+
+
+_analogs_state = {}  # per-symbol status
 _analogs_lock = threading.Lock()
 
 
@@ -3899,14 +3922,26 @@ def _zigzag(dates, v, pct=0.3):
     return piv
 
 
-def compute_analogs():
-    btc = fetch_yahoo_series('BTC-USD', '10y')
+def compute_analogs(symbol='BTC'):
+    symbol = (symbol or 'BTC').upper()
+    signals = analog_signals(symbol)
+    keys = [s['key'] for s in signals]
+    ticker = ANALOG_COINS.get(symbol, f'{symbol}-USD')
+    btc = fetch_yahoo_series(ticker, '10y')
     ndx = fetch_yahoo_series('%5ENDX', '10y')
     gold = fetch_yahoo_series('GC=F', '10y')
     dxy = fetch_yahoo_series('DX-Y.NYB', '10y')
     tnx = fetch_yahoo_series('%5ETNX', '10y')
     df = pd.DataFrame({'btc': btc}).sort_index()
     df = df[df['btc'] > 0]
+    if len(df) < 250:
+        return {
+            'id': str(uuid.uuid4()), 'created_at': datetime.datetime.utcnow().isoformat(),
+            'symbol': symbol, 'as_of': (list(df.index)[-1] if len(df) else None),
+            'history_from': (list(df.index)[0] if len(df) else None),
+            'signals': signals, 'norm': {}, 'current': {}, 'episodes': [], 'episode_count': 0,
+            'current_path': [], 'day_fingerprints': [], 'insufficient_history': True,
+        }
     ret = np.log(df['btc'] / df['btc'].shift(1))
 
     def align(s):
@@ -3922,11 +3957,12 @@ def compute_analogs():
     df['vol_regime'] = (ret.rolling(30).std() * (365 ** 0.5) * 100).round(1)
     df['drawdown'] = ((df['btc'] / df['btc'].cummax() - 1) * 100).round(1)
     df['momentum'] = ((df['btc'] / df['btc'].shift(90) - 1) * 100).round(1)
-    df['cycle'] = [(_months_since_halving(d) or 0) for d in df.index]
+    if symbol == 'BTC':
+        df['cycle'] = [(_months_since_halving(d) or 0) for d in df.index]
 
     # normalization stats across history
     norm = {}
-    for k in ANALOG_KEYS:
+    for k in keys:
         col = df[k].dropna()
         norm[k] = {'mean': round(float(col.mean()), 3), 'std': round(float(col.std()) or 1.0, 3)}
 
@@ -3938,7 +3974,7 @@ def compute_analogs():
             if len(sub) == 0:
                 return None
             row = sub.iloc[-1]
-        return {k: (None if pd.isna(row[k]) else round(float(row[k]), 2)) for k in ANALOG_KEYS}
+        return {k: (None if pd.isna(row[k]) else round(float(row[k]), 2)) for k in keys}
 
     def fwd_ret(start, days):
         target = (pd.to_datetime(start) + pd.Timedelta(days=days)).strftime('%Y-%m-%d')
@@ -3998,12 +4034,12 @@ def compute_analogs():
             continue
         current_path.append({'off': off, 'v': round(float(sub['btc'].iloc[-1]) / today_price * 100, 1)})
 
-    current = {k: (None if pd.isna(df[k].iloc[-1]) else round(float(df[k].iloc[-1]), 2)) for k in ANALOG_KEYS}
+    current = {k: (None if pd.isna(df[k].iloc[-1]) else round(float(df[k].iloc[-1]), 2)) for k in keys}
 
     def match_score(fp, weights=None):
         tot = 0.0
         wsum = 0.0
-        for s in ANALOG_SIGNALS:
+        for s in signals:
             k = s['key']
             w = (weights or {}).get(k, 1.0)
             a = fp.get(k)
@@ -4060,8 +4096,8 @@ def compute_analogs():
         d = dates[i]
         if (last_dt - pd.to_datetime(d)).days < 95:
             continue
-        fp = {k: (None if pd.isna(df[k].iloc[i]) else round(float(df[k].iloc[i]), 2)) for k in ANALOG_KEYS}
-        if sum(1 for k in ANALOG_KEYS if fp[k] is not None) < 5:
+        fp = {k: (None if pd.isna(df[k].iloc[i]) else round(float(df[k].iloc[i]), 2)) for k in keys}
+        if sum(1 for k in keys if fp[k] is not None) < 5:
             continue
         day_fingerprints.append({
             'date': d, 'fp': fp,
@@ -4071,22 +4107,24 @@ def compute_analogs():
 
     return {
         'id': str(uuid.uuid4()), 'created_at': datetime.datetime.utcnow().isoformat(),
-        'as_of': dates[-1], 'history_from': dates[0],
-        'signals': ANALOG_SIGNALS, 'norm': norm,
+        'symbol': symbol, 'as_of': dates[-1], 'history_from': dates[0],
+        'signals': signals, 'norm': norm,
         'current': current, 'episodes': ranked, 'episode_count': len(ranked),
         'current_path': current_path, 'day_fingerprints': day_fingerprints,
     }
 
 
-def run_analogs_bg():
+def run_analogs_bg(symbol='BTC'):
+    symbol = (symbol or 'BTC').upper()
     with _analogs_lock:
-        if _analogs_state['status'] == 'running':
+        if _analogs_state.get(symbol) == 'running':
             return
-        _analogs_state['status'] = 'running'
+        _analogs_state[symbol] = 'running'
     try:
-        data = compute_analogs()
+        data = compute_analogs(symbol)
         today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
-        analogs_col.update_one({'_id': today}, {'$set': {'_id': today, 'day': today, 'data': data,
+        key = f'{today}_{symbol}'
+        analogs_col.update_one({'_id': key}, {'$set': {'_id': key, 'day': today, 'symbol': symbol, 'data': data,
                                'created_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
         # Auto-alert: ping the bell once/day when the strongest analog crosses a high threshold.
         try:
@@ -4094,32 +4132,34 @@ def run_analogs_bg():
             if top and top.get('match', 0) >= 70:
                 now_iso = datetime.datetime.utcnow().isoformat()
                 sev = 'high' if top['match'] >= 80 else 'warning'
+                aid = f"analog_{today}_{symbol}_{top['id']}"
                 smart_alerts_col.update_one(
-                    {'_id': f"analog_{today}_{top['id']}"},
+                    {'_id': aid},
                     {'$setOnInsert': {
-                        '_id': f"analog_{today}_{top['id']}", 'id': f"analog_{today}_{top['id']}",
+                        '_id': aid, 'id': aid,
                         'ts': now_iso, 'as_of': data.get('as_of'), 'category': 'Setup', 'severity': sev,
-                        'title': f"Strong historical setup forming ({top['match']}% match)",
-                        'message': f"Today's Bitcoin conditions closely resemble {top['label']} ({top['start']}→{top['end']}), which then moved {top.get('fwd_90')}% over 90 days. Educational pattern-match, not a prediction.",
+                        'title': f"Strong {symbol} setup forming ({top['match']}% match)",
+                        'message': f"Today's {symbol} conditions closely resemble {top['label']} ({top['start']}→{top['end']}), which then moved {top.get('fwd_90')}% over 90 days. Educational pattern-match, not a prediction.",
                         'seen': False, 'impact': int(top['match']),
                     }}, upsert=True)
         except Exception:  # noqa
             traceback.print_exc()
-        _analogs_state['status'] = 'done'
+        _analogs_state[symbol] = 'done'
     except Exception:  # noqa
-        _analogs_state['status'] = 'error'
+        _analogs_state[symbol] = 'error'
         traceback.print_exc()
 
 
 @app.get('/api/v1/analogs')
-def analogs():
+def analogs(symbol: str = 'BTC'):
+    symbol = (symbol or 'BTC').strip().upper()[:6]
     today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
-    cached = analogs_col.find_one({'_id': today}, {'_id': 0})
+    cached = analogs_col.find_one({'_id': f'{today}_{symbol}'}, {'_id': 0})
     if cached and cached.get('data'):
         return {'status': 'ready', **cached['data']}
-    if _analogs_state['status'] != 'running':
-        threading.Thread(target=run_analogs_bg, daemon=True).start()
-    if _analogs_state['status'] == 'error':
+    if _analogs_state.get(symbol) != 'running':
+        threading.Thread(target=run_analogs_bg, args=(symbol,), daemon=True).start()
+    if _analogs_state.get(symbol) == 'error':
         return {'status': 'error', 'error': 'compute_failed'}
     return {'status': 'computing'}
 

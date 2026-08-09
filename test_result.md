@@ -519,6 +519,10 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ RE-TEST PASSED - NEW fwd_path FIELD VALIDATED. Tested GET /api/v1/analogs via external URL. Endpoint returned status='ready' immediately (cached). ADDITIVE FIELD fwd_path FULLY VALIDATED: (1) ALL 1176 day_fingerprints have fwd_path field ✅ (2) Each fwd_path is a list of EXACTLY 16 objects {off, v} ✅ (3) Offsets are EXACTLY [0,12,24,36,48,60,72,84,96,108,120,132,144,156,168,180] (step 12) ✅ (4) The off=0 point has v=100 (rebased to 100 at day 0) ✅ (5) v is a number or null ✅ (6) Recent-dated items (April-May 2026) legitimately have v=null at far offsets (108-180 days) due to insufficient forward data - this is EXPECTED behavior ✅ REGRESSION TESTS PASSED: (7) day_fingerprints items still contain date (YYYY-MM-DD) ✅, fp (dict of 8 keys: rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum, cycle) ✅, fwd_30, fwd_90, fwd_180 ✅ (8) episodes non-empty (28 items), each with non-empty path (81 points) and match (0-100) ✅ (9) current (dict with 8 keys) ✅, norm (dict with 8 keys) ✅, signals (list of 8) ✅, current_path (21 points) ✅, episode_count (28) ✅ No HTTP 500 errors at any point ✅ Data is REAL (Yahoo Finance). All validations passed."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ MULTI-COIN CERTIFICATION PASSED. Tested GET /api/v1/analogs?symbol={BTC|ETH|SOL} via external URL. ALL THREE SYMBOLS TESTED AND VALIDATED (22/22 checks each + 5/5 cross-symbol checks). RESULTS: (1) BTC: status='ready' (cached, immediate), symbol='BTC' ✅, 8 signals INCLUDING 'cycle' ✅, 28 episodes (all with match 0-100 and non-empty path) ✅, 1176 day_fingerprints (each with date/fp/fwd_30/fwd_90/fwd_180/fwd_path) ✅, history_from='2016-08-09' (~2016 as expected) ✅. (2) ETH: status='ready' (cached, immediate), symbol='ETH' ✅, 7 signals WITHOUT 'cycle' ✅, 39 episodes ✅, 1004 day_fingerprints ✅, history_from='2017-11-09' (~2017 as expected) ✅. (3) SOL: status='ready' (cached, immediate), symbol='SOL' ✅, 7 signals WITHOUT 'cycle' ✅, 51 episodes ✅, 710 day_fingerprints ✅, history_from='2020-04-10' (~2020 as expected) ✅. CROSS-SYMBOL VALIDATION: All three symbols have DIFFERENT history_from dates ✅, DIFFERENT episode counts (BTC=28, ETH=39, SOL=51) proving each is computed from its own coin's price history ✅. DETAILED VALIDATIONS PER SYMBOL: signals array has correct keys (rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum + cycle for BTC only) ✅, episodes non-empty with match (0-100) and path (list of {off,v}) ✅, day_fingerprints non-empty with date (YYYY-MM-DD), fp (dict matching coin's signal keys), fwd_30/fwd_90/fwd_180, fwd_path (16 points, offsets 0..180 step 12, off=0 has v=100) ✅, current (dict), norm (dict), current_path (non-empty list), episode_count present ✅. No HTTP 500 errors at any point ✅. Data is REAL (Yahoo Finance: {symbol}-USD, ^NDX, GC=F, DX-Y.NYB, ^TNX over 10 years). WebSockets NOT tested (as instructed). Feature is production-ready for multi-coin support."
+
 
 metadata:
   created_by: "main_agent"
@@ -528,7 +532,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Happening Again — Setup History (day_fingerprints) + Multi-Analog Overlay paths (GET /api/v1/analogs)"
+    - "Happening Again multi-coin — GET /api/v1/analogs?symbol=BTC|ETH|SOL"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -536,16 +540,21 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      RE-TEST (additive field) — GET /api/v1/analogs. compute_analogs now attaches fwd_path to each
-      day_fingerprints item. POLL until {status:'ready'} (may briefly return 'computing').
-      Validate:
-        1) day_fingerprints non-empty (~1176). For each item, fwd_path is a list of 16 objects
-           {off, v} where off ∈ {0,12,24,...,180} (step 12) and v is a number or null. The off=0
-           point must have v == 100 (rebased). Some recent-dated items may have v=null at far offsets.
-        2) REGRESSION: day_fingerprints items still have date, fp (8 keys), fwd_30, fwd_90, fwd_180.
-           episodes still non-empty with non-empty path and match 0-100. current/norm/signals(8)/
-           current_path/episode_count still present. No 500s.
-      Data is REAL (Yahoo Finance). Do NOT test WebSockets.
+      NEW TEST FOCUS — GET /api/v1/analogs?symbol={BTC|ETH|SOL} (via external base URL + /api/v1/analogs?symbol=SOL etc.).
+      The Happening Again analog engine is now MULTI-COIN. Each symbol computes lazily & caches per
+      symbol/day; first hit may return {"status":"computing"} while it fetches ~10y Yahoo data for the
+      coin + macros (NDX/Gold/DXY/TNX). POLL each symbol until {"status":"ready"} (up to ~60s each).
+      Validate for EACH of BTC, ETH, SOL:
+        1) status eventually 'ready'; response has symbol == the requested symbol.
+        2) signals: for BTC = 8 signals INCLUDING key 'cycle'; for ETH & SOL = 7 signals and MUST NOT
+           include 'cycle' (halving is BTC-only). Keys otherwise: rates_dir, dxy_dir, nasdaq_corr,
+           gold_corr, vol_regime, drawdown, momentum.
+        3) episodes: non-empty list; each has match (0-100) and a non-empty path (list of {off,v}).
+        4) day_fingerprints: non-empty; each item has date, fp (dict of the coin's signal keys),
+           fwd_30/fwd_90/fwd_180, and fwd_path (list of 16 {off,v}, off 0..180 step 12, off=0 v==100).
+        5) current (dict), norm (dict), current_path (non-empty), episode_count present. No 500s.
+      Also confirm the three symbols return DIFFERENT as_of/history_from where expected (SOL history_from
+      ~2020, ETH ~2017, BTC ~2016) and different episode sets. Data is REAL (Yahoo). Do NOT test WebSockets.
 
 
       This endpoint computes lazily and may return {status:'computing'} on first hit while it fetches
@@ -1490,3 +1499,89 @@ agent_communication:
          - No breaking changes from new analogs code
       
       NO CRITICAL ISSUES FOUND. All backend functionality working as expected with real data (Yahoo Finance).
+    -agent: "main"
+    -message: |
+      NEW TEST FOCUS — GET /api/v1/analogs?symbol={BTC|ETH|SOL} (via external base URL + /api/v1/analogs?symbol=SOL etc.).
+      The Happening Again analog engine is now MULTI-COIN. Each symbol computes lazily & caches per
+      symbol/day; first hit may return {"status":"computing"} while it fetches ~10y Yahoo data for the
+      coin + macros (NDX/Gold/DXY/TNX). POLL each symbol until {"status":"ready"} (up to ~60s each).
+      Validate for EACH of BTC, ETH, SOL:
+        1) status eventually 'ready'; response has symbol == the requested symbol.
+        2) signals: for BTC = 8 signals INCLUDING key 'cycle'; for ETH & SOL = 7 signals and MUST NOT
+           include 'cycle' (halving is BTC-only). Keys otherwise: rates_dir, dxy_dir, nasdaq_corr,
+           gold_corr, vol_regime, drawdown, momentum.
+        3) episodes: non-empty list; each has match (0-100) and a non-empty path (list of {off,v}).
+        4) day_fingerprints: non-empty; each item has date, fp (dict of the coin's signal keys),
+           fwd_30/fwd_90/fwd_180, and fwd_path (list of 16 {off,v}, off 0..180 step 12, off=0 v==100).
+        5) current (dict), norm (dict), current_path (non-empty), episode_count present. No 500s.
+      Also confirm the three symbols return DIFFERENT as_of/history_from where expected (SOL history_from
+      ~2020, ETH ~2017, BTC ~2016) and different episode sets. Data is REAL (Yahoo). Do NOT test WebSockets.
+    -agent: "testing"
+    -message: |
+      ✅ MULTI-COIN ANALOG ENGINE CERTIFICATION COMPLETE - ALL TESTS PASSED
+      
+      Tested GET /api/v1/analogs?symbol={BTC|ETH|SOL} via external URL (https://quant-features.preview.emergentagent.com/api/v1/analogs?symbol=X).
+      
+      COMPREHENSIVE VALIDATION RESULTS:
+      
+      === BTC: ✅ PASSED (22/22 checks) ===
+      - Status: 'ready' (cached, returned immediately)
+      - Symbol field: 'BTC' ✅
+      - Signals: Exactly 8 signals INCLUDING 'cycle' key ✅
+      - Signal keys: rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum, cycle ✅
+      - Episodes: 28 episodes, all with match (0-100) and non-empty path (81 points) ✅
+      - Day fingerprints: 1176 items, each with date/fp/fwd_30/fwd_90/fwd_180/fwd_path ✅
+      - fwd_path: 16 points, offsets [0,12,24,...,180], off=0 has v=100 ✅
+      - history_from: '2016-08-09' (~2016 as expected) ✅
+      - All required fields present: current (8 keys), norm (8 keys), current_path (21 points), episode_count=28 ✅
+      
+      === ETH: ✅ PASSED (22/22 checks) ===
+      - Status: 'ready' (cached, returned immediately)
+      - Symbol field: 'ETH' ✅
+      - Signals: Exactly 7 signals WITHOUT 'cycle' key (correct for non-BTC) ✅
+      - Signal keys: rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum ✅
+      - Episodes: 39 episodes, all with match (0-100) and non-empty path (81 points) ✅
+      - Day fingerprints: 1004 items, each with date/fp/fwd_30/fwd_90/fwd_180/fwd_path ✅
+      - fwd_path: 16 points, offsets [0,12,24,...,180], off=0 has v=100 ✅
+      - history_from: '2017-11-09' (~2017 as expected) ✅
+      - All required fields present: current (7 keys), norm (7 keys), current_path (21 points), episode_count=39 ✅
+      
+      === SOL: ✅ PASSED (22/22 checks) ===
+      - Status: 'ready' (cached, returned immediately)
+      - Symbol field: 'SOL' ✅
+      - Signals: Exactly 7 signals WITHOUT 'cycle' key (correct for non-BTC) ✅
+      - Signal keys: rates_dir, dxy_dir, nasdaq_corr, gold_corr, vol_regime, drawdown, momentum ✅
+      - Episodes: 51 episodes, all with match (0-100) and non-empty path (81 points) ✅
+      - Day fingerprints: 710 items, each with date/fp/fwd_30/fwd_90/fwd_180/fwd_path ✅
+      - fwd_path: 16 points, offsets [0,12,24,...,180], off=0 has v=100 ✅
+      - history_from: '2020-04-10' (~2020 as expected) ✅
+      - All required fields present: current (7 keys), norm (7 keys), current_path (21 points), episode_count=51 ✅
+      
+      === CROSS-SYMBOL VALIDATION: ✅ PASSED (5/5 checks) ===
+      - All three symbols have DIFFERENT history_from dates ✅
+        * BTC: 2016-08-09 (~2016) ✅
+        * ETH: 2017-11-09 (~2017) ✅
+        * SOL: 2020-04-10 (~2020) ✅
+      - All three symbols have DIFFERENT episode counts (proving different price histories) ✅
+        * BTC: 28 episodes
+        * ETH: 39 episodes
+        * SOL: 51 episodes
+      
+      DETAILED STRUCTURE VALIDATIONS:
+      - episodes: Each has match (number 0-100) and path (list of {off, v} objects) ✅
+      - day_fingerprints: Each has date (YYYY-MM-DD), fp (dict with coin's signal keys), fwd_30/fwd_90/fwd_180 (numbers or null), fwd_path (list of 16 {off,v}) ✅
+      - fwd_path structure: Exactly 16 points with offsets [0,12,24,36,48,60,72,84,96,108,120,132,144,156,168,180] ✅
+      - fwd_path rebasing: off=0 always has v=100 (rebased to 100 at day 0) ✅
+      - current: Dict with coin's signal keys ✅
+      - norm: Dict with coin's signal keys, each with mean/std ✅
+      - current_path: Non-empty list of {off, v} objects ✅
+      - episode_count: Matches len(episodes) ✅
+      
+      NO HTTP 500 ERRORS at any point ✅
+      
+      Data is REAL (Yahoo Finance: {symbol}-USD, ^NDX, GC=F, DX-Y.NYB, ^TNX over 10 years).
+      
+      WebSockets NOT tested (as instructed).
+      
+      SUMMARY: Multi-coin analog engine is production-ready. Each coin correctly computes from its own price history with appropriate signal sets (BTC includes halving cycle, altcoins do not). All structural validations passed for all three symbols.
+
