@@ -2742,6 +2742,9 @@ function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
 function WhaleWatch() {
   const [data, setData] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
+  const [openAddr, setOpenAddr] = React.useState(null);
+  const [acts, setActs] = React.useState({});
+  const [actLoading, setActLoading] = React.useState(false);
   React.useEffect(() => {
     let alive = true;
     fetch('/api/v1/whales', { cache: 'no-store' })
@@ -2750,6 +2753,18 @@ function WhaleWatch() {
       .catch(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, []);
+  const toggle = (addr) => {
+    if (openAddr === addr) { setOpenAddr(null); return; }
+    setOpenAddr(addr);
+    if (!acts[addr]) {
+      setActLoading(true);
+      fetch(`/api/v1/whale-activity?address=${addr}&limit=10`, { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((j) => { setActs((p) => ({ ...p, [addr]: j })); setActLoading(false); })
+        .catch(() => setActLoading(false));
+    }
+  };
+  const actTime = (t) => t ? new Date(t * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Pending';
   const whales = (data && data.whales) || [];
   const catStyle = (c) => ({
     Exchange: 'text-sky-300 bg-sky-500/10 border-sky-500/25',
@@ -2783,28 +2798,62 @@ function WhaleWatch() {
               <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">BTC price</div><div className="text-lg font-semibold text-white">{data.price ? '$' + Number(data.price).toLocaleString() : '—'}</div></div>
             </div>
             <div className="space-y-2">
-              {whales.map((w, i) => (
-                <div key={i} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
-                  <CoinIcon symbol="BTC" size={20} />
-                  <div className="min-w-[150px] flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-slate-100">{w.name}</span>
-                      <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${catStyle(w.category)}`}>{w.category}</span>
+              {whales.map((w, i) => {
+                const isOpen = openAddr === w.address;
+                const act = acts[w.address];
+                return (
+                <div key={i} className={`rounded-lg border ${isOpen ? 'border-sky-500/40 bg-slate-950/60' : 'border-slate-800 bg-slate-950/40'}`}>
+                  <button onClick={() => toggle(w.address)} className="flex w-full flex-wrap items-center gap-3 p-3 text-left transition hover:bg-slate-900/60">
+                    <CoinIcon symbol="BTC" size={20} />
+                    <div className="min-w-[150px] flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-slate-100">{w.name}</span>
+                        <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${catStyle(w.category)}`}>{w.category}</span>
+                      </div>
+                      <a href={`https://mempool.space/address/${w.address}`} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="font-mono text-[11px] text-slate-500 hover:text-sky-400">{w.address.slice(0, 10)}…{w.address.slice(-6)}</a>
                     </div>
-                    <a href={`https://mempool.space/address/${w.address}`} target="_blank" rel="noreferrer" className="font-mono text-[11px] text-slate-500 hover:text-sky-400">{w.address.slice(0, 10)}…{w.address.slice(-6)}</a>
-                  </div>
-                  {w.spark && <Spark data={w.spark} color={sigHex(w.signal)} />}
-                  <div className="text-right">
-                    <div className="font-mono text-sm text-slate-100">{fBtc(w.balance)}</div>
-                    <div className="text-[11px] text-slate-500">{fUsd(w.balance_usd)}</div>
-                  </div>
-                  <div className="w-24 text-right">
-                    <div className="text-[10px] uppercase tracking-wide text-slate-600">7d change</div>
-                    <div className={`text-xs font-semibold ${w.change_7d == null ? 'text-slate-500' : w.change_7d >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fChg(w.change_7d)}</div>
-                  </div>
-                  <span className={`w-16 text-right text-xs font-semibold ${sigColor(w.signal)}`}>{w.signal}</span>
+                    {w.spark && <Spark data={w.spark} color={sigHex(w.signal)} />}
+                    <div className="text-right">
+                      <div className="font-mono text-sm text-slate-100">{fBtc(w.balance)}</div>
+                      <div className="text-[11px] text-slate-500">{fUsd(w.balance_usd)}</div>
+                    </div>
+                    <div className="w-24 text-right">
+                      <div className="text-[10px] uppercase tracking-wide text-slate-600">7d change</div>
+                      <div className={`text-xs font-semibold ${w.change_7d == null ? 'text-slate-500' : w.change_7d >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{fChg(w.change_7d)}</div>
+                    </div>
+                    <span className={`w-16 text-right text-xs font-semibold ${sigColor(w.signal)}`}>{w.signal}</span>
+                    <ChevronDown className={`h-4 w-4 text-slate-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                  </button>
+                  {isOpen && (
+                    <div className="border-t border-slate-800 p-3">
+                      <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                        <Activity className="h-3.5 w-3.5" /> Recent activity {act && act.notable_only && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9px] normal-case text-slate-400">notable moves ≥ 0.1 BTC</span>}
+                      </div>
+                      {actLoading && !act ? (
+                        <p className="text-xs text-slate-500">Loading on-chain activity…</p>
+                      ) : (act && act.activity && act.activity.length) ? (
+                        <div className="space-y-1">
+                          {act.activity.map((x, k) => (
+                            <a key={k} href={`https://mempool.space/tx/${x.txid}`} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded border border-slate-800/70 bg-slate-900/40 px-2.5 py-1.5 text-xs hover:border-slate-700">
+                              {x.direction === 'in'
+                                ? <ArrowDownRight className="h-3.5 w-3.5 text-emerald-400" />
+                                : <ArrowUpRight className="h-3.5 w-3.5 text-red-400" />}
+                              <span className={`font-semibold ${x.direction === 'in' ? 'text-emerald-400' : 'text-red-400'}`}>{x.direction === 'in' ? 'Received' : 'Sent'}</span>
+                              <span className="font-mono text-slate-200">{Number(x.amount).toLocaleString(undefined, { maximumFractionDigits: 4 })} BTC</span>
+                              <span className="ml-auto text-slate-500">{actTime(x.time)}</span>
+                              {!x.confirmed && <span className="rounded bg-amber-500/15 px-1 text-[9px] text-amber-300">pending</span>}
+                            </a>
+                          ))}
+                          <p className="pt-1 text-[10px] text-slate-600">Net effect on this wallet per transaction. Tap a row to open it in a block explorer.</p>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-500">No recent activity found for this wallet.</p>
+                      )}
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
             <p className="mt-4 rounded-lg border border-slate-500/20 bg-slate-500/[0.05] p-3 text-[11px] text-slate-400">
               Balances are fetched live from the Bitcoin blockchain (mempool.space / blockchain.com). Entity names are curated from public labels and may not cover every wallet an entity controls. Accumulation / distribution signals activate once a few days of history accrue. Exchange <span className="text-emerald-400">outflows</span> read bullish (coins leaving to storage); <span className="text-red-400">inflows</span> read bearish.

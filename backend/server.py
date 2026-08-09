@@ -1991,10 +1991,13 @@ _whale_state = {'running': False}
 WHALE_SEED = [
     {'address': '34xp4vRoCGJym3xR7yCVPFHoCNxv4Twseo', 'name': 'Binance', 'category': 'Exchange'},
     {'address': '3M219KR5vEneNb47ewrPfWyb5jQ2DjxRP6', 'name': 'Binance', 'category': 'Exchange'},
+    {'address': 'bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h', 'name': 'Binance (hot wallet)', 'category': 'Exchange'},
     {'address': 'bc1qgdjqv0av3q56jvd82tkdjpy7gdp9ut8tlqmgrpmv24sq90ecnvqqjwvw97', 'name': 'Bitfinex', 'category': 'Exchange'},
     {'address': 'bc1qjasf9z3h7w3jspkhtgatgpyvvzgpa2wwd2lr0eh5tx44reyn2k7sfc27a4', 'name': 'Robinhood', 'category': 'Exchange'},
     {'address': 'bc1qa5wkgaew2dkv56kfvj49j0av5nml45x9ek9hz6', 'name': 'U.S. Government (seized)', 'category': 'Government'},
     {'address': '1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF', 'name': 'Dormant mega-whale (since 2011)', 'category': 'Whale'},
+    {'address': '3LYJfcfHPXYJreMsASk2jkn69LWEYKzexb', 'name': 'Unknown mega-whale', 'category': 'Whale'},
+    {'address': '1LdRcdxfbSnmCYYNdeYpUnztiYzVfBEQeC', 'name': 'Unknown mega-whale', 'category': 'Whale'},
     {'address': '12ib7dApVFvg82TXKycWBNpN8kFyiAN1dr', 'name': 'Early whale', 'category': 'Whale'},
 ]
 
@@ -3489,6 +3492,38 @@ def whales_feed():
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error', 'whales': []}
+
+
+@app.get('/api/v1/whale-activity')
+def whale_activity(address: str, limit: int = 12):
+    """Recent NOTABLE on-chain activity for a whale address (net effect per tx), via mempool.space.
+    Filters out dust/spam sends to surface meaningful moves; falls back to raw recent if none."""
+    try:
+        txs = _engine_get(f'https://mempool.space/api/address/{address}/txs')
+        if not isinstance(txs, list):
+            return {'status': 'error', 'activity': []}
+        entries = []
+        for t in txs:
+            recv = sum(v.get('value', 0) for v in t.get('vout', [])
+                       if v.get('scriptpubkey_address') == address)
+            sent = sum((vi.get('prevout') or {}).get('value', 0) for vi in t.get('vin', [])
+                       if (vi.get('prevout') or {}).get('scriptpubkey_address') == address)
+            net = (recv - sent) / 1e8
+            st = t.get('status', {}) or {}
+            entries.append({
+                'txid': t.get('txid'),
+                'time': st.get('block_time'),
+                'confirmed': st.get('confirmed', False),
+                'direction': 'in' if net >= 0 else 'out',
+                'amount': round(abs(net), 4),
+            })
+        notable = [e for e in entries if e['amount'] >= 0.1]
+        activity = (notable if notable else entries)[:max(1, min(limit, 25))]
+        return {'status': 'ready', 'address': address, 'activity': activity,
+                'notable_only': bool(notable)}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error', 'activity': []}
 
 
 @app.get('/api/v1/alerts')
