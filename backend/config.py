@@ -4,12 +4,37 @@ Holds environment loading, the MongoDB connection, all collection handles, and t
 API keys / model names. Extracted from server.py as part of the Option A refactor
 (no behaviour changes — same env vars, same collection names, same defaults).
 """
+import logging
 import os
 
 from pymongo import MongoClient
 from dotenv import load_dotenv
 
 load_dotenv('/app/.env')
+
+logger = logging.getLogger("btciq.config")
+
+# --- environment sanity check -------------------------------------------------
+# MONGO_URL / DB_NAME are injected by the deployment platform from the app secrets.
+# Previously a missing injection silently fell back to mongodb://localhost:27017 and a
+# database literally named "your_database_name", so the service booted "healthy" while
+# talking to the wrong (or no) database. Now it is impossible to miss.
+REQUIRED_ENV = ('MONGO_URL', 'DB_NAME')
+_missing = [k for k in REQUIRED_ENV if not os.environ.get(k)]
+if _missing:
+    _msg = (
+        'Missing required environment variable(s): %s. These are normally injected by '
+        'the deployment platform from this app\'s secrets. Falling back to local '
+        'development defaults - data will NOT be where you expect. Set STRICT_ENV=1 to '
+        'refuse to start instead.' % ', '.join(_missing)
+    )
+    if os.environ.get('STRICT_ENV', '0').lower() in ('1', 'true', 'yes'):
+        raise RuntimeError(_msg)
+    logger.error('[config] %s', _msg)
+    print('[config] ERROR: ' + _msg, flush=True)
+else:
+    logger.info('[config] all required environment variables present')
+# ------------------------------------------------------------------------------
 
 MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 DB_NAME = os.environ.get('DB_NAME', 'your_database_name')
@@ -41,11 +66,21 @@ coin_dom_col = db['coin_dominance_hist']  # per-coin market-cap dominance histor
 markets_col = db['markets_cache']  # per-coin vs traditional-markets comparison, cached daily
 analogs_col = db['analogs_cache']  # historical-analog engine (Bitcoin), cached daily
 glassnode_col = db['glassnode_cache']  # cached Glassnode on-chain metrics (Smart Money panel)
+# Additional feature-engine / cache collections (consolidated here from server.py)
+onchain_col = db['onchain_engine']
+lev_col = db['leverage_engine']
+misc_col = db['misc_cache']
+usage_col = db['usage_stats']
+etf_col = db['etf_flows']
+whale_col = db['whale_wallets']
+whale_hist_col = db['whale_history']
+whale_tx_col = db['whale_tx_feed']
 
 # Glassnode on-chain data (Smart Money panel). Advanced Light tier: 14d daily history, low call budget.
 GLASSNODE_API_KEY = os.environ.get('GLASSNODE_API_KEY')
-# Admin passcode gate for manual forecast runs (Stage-1: passcode instead of full auth)
-ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', 'btciq-admin')
+# Admin passcode gate for manual forecast runs (Stage-1: passcode instead of full auth).
+# Default to empty so an unset env var DENIES access (fail-closed) rather than using a known default.
+ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', '')
 
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 GEMINI_MODEL = 'gemini-2.5-flash'

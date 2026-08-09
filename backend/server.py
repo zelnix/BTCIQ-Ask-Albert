@@ -21,7 +21,6 @@ import threading
 import datetime
 import traceback
 import urllib.request
-import hmac
 
 import requests
 
@@ -39,9 +38,7 @@ from sklearn.model_selection import TimeSeriesSplit
 from fastapi import FastAPI, Body, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pymongo import MongoClient
 from apscheduler.schedulers.background import BackgroundScheduler
-from dotenv import load_dotenv
 
 # --- Central configuration (env, Mongo connection, collections, API keys) ---
 # Extracted to config.py (Option A refactor) — imported here for use across the module.
@@ -49,6 +46,7 @@ from config import (
     db, runs_col, signals_col, dominance_col, news_col, chat_col, predictions_col,
     bitmark_col, smart_alerts_col, audit_col, insights_col, compare_col, coin_dash_col,
     coin_news_col, coin_dom_col, markets_col, analogs_col, glassnode_col,
+    onchain_col, lev_col, misc_col, usage_col, etf_col, whale_col, whale_hist_col, whale_tx_col,
     GLASSNODE_API_KEY, ADMIN_PASSCODE, EMERGENT_LLM_KEY, GEMINI_MODEL, CHAT_MODEL,
 )
 
@@ -133,6 +131,7 @@ app.add_middleware(
 from security import _client_key, _rate_limited, _passcode_ok, _retry_after_secs, _too_many
 
 _state = {'status': 'idle', 'error': None, 'started_at': None}
+_scheduler = None  # set in _startup(); read by the diagnostics endpoint
 _lock = threading.Lock()
 
 FEATURE_COLS = [
@@ -1669,7 +1668,7 @@ def get_smart_money_panel():
 # Cached in Mongo, background refresh ~2h. ETF net flow shown as Inactive
 # (no free, server-reachable feed).
 # =====================================================================
-onchain_col = db['onchain_engine']
+# onchain_col now imported from config
 ONCHAIN_TTL_SEC = 2 * 3600
 _onchain_state = {}
 
@@ -1962,7 +1961,7 @@ def build_derivatives_engine(symbol='BTC'):
 # from the real metrics and CLEARLY FLAGGED demo=True (structured so a
 # live provider — e.g. CoinGlass — can drop in later).
 # =====================================================================
-lev_col = db['leverage_engine']
+# lev_col now imported from config
 LEV_TTL_SEC = 5 * 60
 _lev_state = {}
 _TF_HOURS = {'1H': 1, '4H': 4, '1D': 24, '7D': 168}
@@ -2225,8 +2224,7 @@ def get_leverage(timeframe='4H', refresh=False):
 # =====================================================================
 # PHASE A: Fear & Greed / Network Health / Exchange Net-Flow (REAL, keyless)
 # =====================================================================
-misc_col = db['misc_cache']
-usage_col = db['usage_stats']
+# misc_col / usage_col now imported from config
 
 
 def _bump_usage(kind, n=1):
@@ -2411,7 +2409,7 @@ def get_onchain_panels(symbol='BTC'):
 # as a plain HTML table we can parse. Values are USD millions ($M).
 # Cached in Mongo, background refresh ~3h.
 # =====================================================================
-etf_col = db['etf_flows']
+# etf_col now imported from config
 ETF_TTL_SEC = 3 * 3600
 _etf_state = {'running': False}
 ETF_UA = {'User-Agent': ('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
@@ -2599,7 +2597,7 @@ def etf_summary():
 # Live balances via mempool.space (fallback blockchain.info), free/no key.
 # Tracks daily balance snapshots to derive accumulation/distribution + alerts.
 # =====================================================================
-whale_col = db['whale_wallets']
+# whale_col now imported from config
 WHALE_TTL_SEC = 45 * 60
 _whale_state = {'running': False}
 WHALE_SEED = [
@@ -2745,7 +2743,7 @@ def get_whales():
 # working backward from the current balance. No paid API, no mock data.
 # Cached in Mongo (whale_history) ~6h.
 # =====================================================================
-whale_hist_col = db['whale_history']
+# whale_hist_col now imported from config
 WHALE_HIST_TTL_SEC = 6 * 3600
 _whale_name_by_addr = {w['address']: w['name'] for w in WHALE_SEED}
 _whale_cat_by_addr = {w['address']: w['category'] for w in WHALE_SEED}
@@ -2871,7 +2869,7 @@ def compute_whale_impact():
 # known entity. REAL & keyless (mempool.space). Deep entity clustering of
 # UNKNOWN wallets still requires a paid provider and is intentionally NOT done.
 # =====================================================================
-whale_tx_col = db['whale_tx_feed']
+# whale_tx_col now imported from config
 WHALE_TX_TTL_SEC = 20 * 60
 _whale_tx_state = {'running': False}
 
@@ -4204,6 +4202,7 @@ def run_compute_bg():
 
 @app.on_event('startup')
 def _startup():
+    global _scheduler
     try:
         scheduler = BackgroundScheduler(timezone='UTC')
         scheduler.add_job(run_compute_bg, 'cron', hour=0, minute=5, id='daily_refresh')
@@ -4216,6 +4215,7 @@ def _startup():
         # Large-transaction feed: keep the labeled whale-tx feed fresh.
         scheduler.add_job(_refresh_whale_tx_bg, 'interval', minutes=30, id='whale_tx_refresh')
         scheduler.start()
+        _scheduler = scheduler
     except Exception:  # noqa
         traceback.print_exc()
     if runs_col.count_documents({}) == 0:
@@ -4675,7 +4675,7 @@ def admin_overview():
     # ---- scheduler jobs ----
     jobs = []
     try:
-        for j in scheduler.get_jobs():
+        for j in (_scheduler.get_jobs() if _scheduler else []):
             jobs.append({'id': j.id, 'next_run': (j.next_run_time.isoformat() if j.next_run_time else None)})
     except Exception:  # noqa
         pass
@@ -5593,6 +5593,7 @@ async def albert_brief(request: Request, refresh: int = 0):
         chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'brief-{uuid.uuid4().hex[:10]}',
                         system_message=ALBERT_BRIEF_SYSTEM.format(ctx=ctx))
                 .with_model('gemini', CHAT_MODEL).with_params(temperature=0.4, max_tokens=6000))
+        reply = await chat.send_message(UserMessage(text="Write today's market brief now."))
         text = (getattr(reply, 'text', None) or str(reply)).strip()
         _bump_usage('llm_brief')
         obs, take = [], ''
@@ -6351,7 +6352,7 @@ def markets(symbol: str = 'BTC', window: str = '1y'):
 # trend episodes, builds a condition "fingerprint" for each, and matches
 # today's conditions against them. Keyless (Yahoo Finance). Cached daily.
 # =====================================================================
-HALVINGS = ['2012-11-28', '2016-07-09', '2020-05-11', '2024-04-20']
+HALVING_DATES = ['2012-11-28', '2016-07-09', '2020-05-11', '2024-04-20']
 CURATED_EVENTS = [
     {'date': '2017-12-17', 'label': '2017 cycle top / futures launch', 'cat': 'Events'},
     {'date': '2020-03-12', 'label': 'COVID crash', 'cat': 'Events'},
@@ -6404,7 +6405,7 @@ _analogs_lock = threading.Lock()
 
 def _months_since_halving(d):
     dd = pd.to_datetime(d)
-    prev = [h for h in HALVINGS if pd.to_datetime(h) <= dd]
+    prev = [h for h in HALVING_DATES if pd.to_datetime(h) <= dd]
     if not prev:
         return None
     return round((dd - pd.to_datetime(prev[-1])).days / 30.44, 1)

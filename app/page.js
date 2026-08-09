@@ -19,6 +19,12 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 
+// Single source of truth for the API prefix used by every call in this file.
+// The deployed edge routes /api/* to a separate backend origin; if that prefix ever
+// has to move, change it here (or set NEXT_PUBLIC_API_BASE at build time) and all
+// call sites follow. A matching Next.js catch-all route must exist for the prefix.
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
+
 /* ------------------------------ helpers ------------------------------ */
 const fmtUsd = (v) =>
   new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v ?? 0);
@@ -363,7 +369,7 @@ function AiReview({ text, voice = true, section, footer }) {
   const load = React.useCallback((m, force) => {
     if (!section) return;
     setLoading(true);
-    fetch(`/api/v1/albert/insight?section=${encodeURIComponent(section)}&mode=${m}&symbol=${encodeURIComponent(symbol)}${force ? '&refresh=1' : ''}`)
+    fetch(`${API_BASE}/v1/albert/insight?section=${encodeURIComponent(section)}&mode=${m}&symbol=${encodeURIComponent(symbol)}${force ? '&refresh=1' : ''}`)
       .then((r) => r.json())
       .then((j) => { if (j && j.status === 'ready' && j.text) { setCache((c) => ({ ...c, [m]: j.text })); setGenAt((g) => ({ ...g, [m]: j.generated_at || new Date().toISOString() })); } })
       .catch(() => { /* keep fallback */ })
@@ -1003,7 +1009,7 @@ function OverviewChart({ d }) {
 
 // ---- Overview "News map": 90d price line with the top news stories as markers ----
 function OverviewNewsMap({ ohlc }) {
-  const [news] = useFetch('/api/v1/news');
+  const [news] = useFetch(`${API_BASE}/v1/news`);
   const [selected, setSelected] = React.useState(0);
   const data = React.useMemo(() => {
     const arr = ohlc || [];
@@ -1143,7 +1149,7 @@ function ThreeSecondHero({ d, onInspect }) {
 }
 
 function InspectSignalDrawer({ d, onClose }) {
-  const [news] = useFetch('/api/v1/news');
+  const [news] = useFetch(`${API_BASE}/v1/news`);
   const dec = d.decision || {};
   const nfl = d.news_forecast_link || {};
   const score = dec.overall_score != null ? dec.overall_score : d.quant_score;
@@ -1918,7 +1924,7 @@ function ScenariosPanel() {
   const [selB, setSelB] = React.useState(1);
   const [compare, setCompare] = React.useState(false);
   React.useEffect(() => {
-    fetch('/api/v1/scenarios', { cache: 'no-store' })
+    fetch(`${API_BASE}/v1/scenarios`, { cache: 'no-store' })
       .then((r) => r.json()).then((j) => { if (j.status === 'ready') setScn(j.scenarios.filter((s) => s.status === 'ready')); })
       .catch(() => {});
   }, []);
@@ -2069,7 +2075,7 @@ function TimeMachineSection() {
   const fetchReplay = React.useCallback(async (dt) => {
     setLoading(true);
     try {
-      const url = dt ? `/api/v1/replay?date=${dt}&window=30` : '/api/v1/replay?window=30';
+      const url = dt ? `${API_BASE}/v1/replay?date=${dt}&window=30` : `${API_BASE}/v1/replay?window=30`;
       const r = await fetch(url, { cache: 'no-store' });
       const j = await r.json();
       if (j.status === 'ready') {
@@ -2531,7 +2537,7 @@ function BitMarkSection({ d }) {
     setRunning(true); setRunMsg(null);
     const passcode = (typeof window !== 'undefined' && window.localStorage.getItem('btciq_admin_passcode')) || '';
     try {
-      const r = await fetch('/api/v1/bitmark/run', {
+      const r = await fetch(`${API_BASE}/v1/bitmark/run`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ passcode }),
       });
@@ -2703,7 +2709,7 @@ function ScorecardSection({ d }) {
   const [modal, setModal] = React.useState(null);
   React.useEffect(() => {
     let on = true;
-    fetch('/api/v1/scorecard', { cache: 'no-store' })
+    fetch(`${API_BASE}/v1/scorecard`, { cache: 'no-store' })
       .then((r) => r.json()).then((j) => { if (on && j.status === 'ready') setSc(j); })
       .catch(() => {});
     return () => { on = false; };
@@ -3060,7 +3066,7 @@ function AskQuantSection({ d }) {
     setMessages((m) => [...m, { role: 'user', text: msg }]);
     setLoading(true);
     try {
-      const r = await fetch('/api/v1/chat', {
+      const r = await fetch(`${API_BASE}/v1/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, message: msg, symbol }),
       });
@@ -3215,7 +3221,7 @@ function FloatingAlbert({ active, symbol, onExpand }) {
     setMessages((m) => [...m, { role: 'user', text: msg }]);
     setLoading(true);
     try {
-      const r = await fetch('/api/v1/chat', {
+      const r = await fetch(`${API_BASE}/v1/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, message: msg, symbol, section: active }),
       });
@@ -3323,10 +3329,10 @@ function FloatingAlbert({ active, symbol, onExpand }) {
 function DailyReportModal({ d, onClose }) {
   const cardRef = React.useRef(null);
   const [exporting, setExporting] = React.useState(false);
-  const [cp] = useFetch('/api/v1/composite-price');
-  const [fred] = useFetch('/api/v1/macro-fred');
-  const [xa] = useFetch('/api/v1/cross-asset');
-  const [ns] = useFetch('/api/v1/news-signals');
+  const [cp] = useFetch(`${API_BASE}/v1/composite-price`);
+  const [fred] = useFetch(`${API_BASE}/v1/macro-fred`);
+  const [xa] = useFetch(`${API_BASE}/v1/cross-asset`);
+  const [ns] = useFetch(`${API_BASE}/v1/news-signals`);
 
   const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
   const dec = (d && d.decision) || {};
@@ -3597,7 +3603,7 @@ function useFetch(url, deps = []) {
 }
 
 function MorningBriefCard() {
-  const [d, loading] = useFetch('/api/v1/albert/brief');
+  const [d, loading] = useFetch(`${API_BASE}/v1/albert/brief`);
   const obs = (d && d.observations) || [];
   return (
     <Card className="border-0 bg-gradient-to-br from-sky-950/40 to-slate-900 p-6 ring-1 ring-sky-900/50">
@@ -3617,8 +3623,8 @@ function MorningBriefCard() {
 }
 
 function NetworkSentimentSection() {
-  const [fg, fgLoad] = useFetch('/api/v1/fear-greed');
-  const [nh, nhLoad] = useFetch('/api/v1/network-health');
+  const [fg, fgLoad] = useFetch(`${API_BASE}/v1/fear-greed`);
+  const [nh, nhLoad] = useFetch(`${API_BASE}/v1/network-health`);
   const fgColor = (v) => v == null ? '#94a3b8' : v <= 25 ? '#f87171' : v <= 45 ? '#fb923c' : v <= 55 ? '#94a3b8' : v <= 75 ? '#a3e635' : '#34d399';
   const fgHist = (fg && fg.history || []).map((h) => ({ ts: h.ts, v: h.value }));
   const hseries = (nh && nh.hashrate_series || []);
@@ -3679,7 +3685,7 @@ function NetworkSentimentSection() {
 }
 
 function ExchangeNetFlowCard() {
-  const [d, loading] = useFetch('/api/v1/exchange-flows');
+  const [d, loading] = useFetch(`${API_BASE}/v1/exchange-flows`);
   const series = (d && d.series || []).map((x) => ({ date: x.date, bal: x.balance }));
   const fChg = (v) => v == null ? '—' : (v >= 0 ? '+' : '') + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' BTC';
   const trendColor = (t) => (t || '').startsWith('Outflow') ? 'text-emerald-400' : (t || '').startsWith('Inflow') ? 'text-red-400' : 'text-slate-300';
@@ -3724,7 +3730,7 @@ function ConfTag({ level }) {
 }
 
 function CompositePriceCard() {
-  const [d, loading] = useFetch('/api/v1/composite-price');
+  const [d, loading] = useFetch(`${API_BASE}/v1/composite-price`);
   const venues = (d && d.venues) || [];
   return (
     <Card className="border-0 bg-gradient-to-br from-slate-900 to-slate-950 p-6 ring-1 ring-slate-800">
@@ -3765,7 +3771,7 @@ function CompositePriceCard() {
 }
 
 function CrossAssetCard() {
-  const [d, loading] = useFetch('/api/v1/cross-asset');
+  const [d, loading] = useFetch(`${API_BASE}/v1/cross-asset`);
   const regimeColor = (r) => (r || '').startsWith('Risk-on') ? 'text-emerald-400' : (r || '').startsWith('Risk-off') ? 'text-amber-400' : 'text-slate-300';
   const b = (v, s) => (v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }) + (s || ''));
   return (
@@ -3796,7 +3802,7 @@ function CrossAssetCard() {
 }
 
 function NewsToneCard() {
-  const [d, loading] = useFetch('/api/v1/news-signals');
+  const [d, loading] = useFetch(`${API_BASE}/v1/news-signals`);
   const series = (d && d.series || []).map((p) => ({ date: p.date, tone: p.tone }));
   const moodColor = (m) => m === 'Positive' ? '#34d399' : m === 'Negative' ? '#f87171' : '#94a3b8';
   return (
@@ -3834,7 +3840,7 @@ function NewsToneCard() {
 }
 
 function MacroFredCard() {
-  const [d, loading] = useFetch('/api/v1/macro-fred');
+  const [d, loading] = useFetch(`${API_BASE}/v1/macro-fred`);
   const rows = (d && d.series) || [];
   return (
     <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
@@ -3878,7 +3884,7 @@ function DataAuditSection() {
 
 
 function AdminSection() {
-  const [d, loading] = useFetch('/api/v1/admin/overview');
+  const [d, loading] = useFetch(`${API_BASE}/v1/admin/overview`);
   const stColor = (s) => s === 'Active' ? 'text-emerald-400' : 'text-slate-500';
   const ageColor = (m) => m == null ? 'text-slate-600' : m < 60 ? 'text-emerald-400' : m < 360 ? 'text-amber-400' : 'text-red-400';
   const em = (d && d.costs && d.costs.emergent) || {};
@@ -3981,7 +3987,7 @@ function LeverageSection() {
   const [loading, setLoading] = React.useState(true);
   React.useEffect(() => {
     let alive = true; setLoading(true);
-    fetch(`/api/v1/leverage?timeframe=${tf}`, { cache: 'no-store' })
+    fetch(`${API_BASE}/v1/leverage?timeframe=${tf}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => { if (alive) { setD(j); setLoading(false); } })
       .catch(() => { if (alive) setLoading(false); });
@@ -4152,7 +4158,7 @@ function EtfFlowsCard() {
   const [loading, setLoading] = React.useState(true);
   React.useEffect(() => {
     let alive = true;
-    fetch('/api/v1/etf-flows', { cache: 'no-store' })
+    fetch(`${API_BASE}/v1/etf-flows`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => { if (alive) { setD(j); setLoading(false); } })
       .catch(() => { if (alive) setLoading(false); });
@@ -4257,7 +4263,7 @@ function WhaleImpactCard() {
   const [loading, setLoading] = React.useState(true);
   React.useEffect(() => {
     let alive = true;
-    fetch('/api/v1/whales/impact', { cache: 'no-store' })
+    fetch(`${API_BASE}/v1/whales/impact`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => { if (alive) { setD(j); setLoading(false); } })
       .catch(() => { if (alive) setLoading(false); });
@@ -4313,7 +4319,7 @@ function WhaleTxFeed() {
   const [minBtc, setMinBtc] = React.useState(50);
   React.useEffect(() => {
     let alive = true; setLoading(true);
-    fetch(`/api/v1/whales/transactions?min_btc=${minBtc}&limit=40`, { cache: 'no-store' })
+    fetch(`${API_BASE}/v1/whales/transactions?min_btc=${minBtc}&limit=40`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => { if (alive) { setD(j); setLoading(false); } })
       .catch(() => { if (alive) setLoading(false); });
@@ -4364,7 +4370,7 @@ function WhaleHistoryChart({ address }) {
   const [loading, setLoading] = React.useState(true);
   React.useEffect(() => {
     let alive = true; setLoading(true);
-    fetch(`/api/v1/whales/history?address=${address}`, { cache: 'no-store' })
+    fetch(`${API_BASE}/v1/whales/history?address=${address}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => { if (alive) { setD(j); setLoading(false); } })
       .catch(() => { if (alive) setLoading(false); });
@@ -4408,7 +4414,7 @@ function WhaleWatch() {
   const [actLoading, setActLoading] = React.useState(false);
   React.useEffect(() => {
     let alive = true;
-    fetch('/api/v1/whales', { cache: 'no-store' })
+    fetch(`${API_BASE}/v1/whales`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => { if (alive) { setData(j); setLoading(false); } })
       .catch(() => { if (alive) setLoading(false); });
@@ -4419,7 +4425,7 @@ function WhaleWatch() {
     setOpenAddr(addr);
     if (!acts[addr]) {
       setActLoading(true);
-      fetch(`/api/v1/whale-activity?address=${addr}&limit=10`, { cache: 'no-store' })
+      fetch(`${API_BASE}/v1/whale-activity?address=${addr}&limit=10`, { cache: 'no-store' })
         .then((r) => r.json())
         .then((j) => { setActs((p) => ({ ...p, [addr]: j })); setActLoading(false); })
         .catch(() => setActLoading(false));
@@ -4610,7 +4616,7 @@ function DrawableChart({ ohlc }) {
   React.useEffect(() => {
     let on = true;
     const fetchP = async () => {
-      try { const r = await fetch('/api/v1/ticker'); const j = await r.json(); if (on && j && typeof j.price === 'number') setLivePrice(j.price); } catch (e) { /* noop */ }
+      try { const r = await fetch(`${API_BASE}/v1/ticker`); const j = await r.json(); if (on && j && typeof j.price === 'number') setLivePrice(j.price); } catch (e) { /* noop */ }
     };
     fetchP();
     const id = setInterval(fetchP, 20000);
@@ -4987,13 +4993,13 @@ function CompareSection() {
   const [err, setErr] = React.useState({});
 
   React.useEffect(() => {
-    fetch('/api/v1/compare/coins').then((r) => r.json()).then((j) => { if (j.coins) setAllCoins(j.coins); }).catch(() => {});
+    fetch(`${API_BASE}/v1/compare/coins`).then((r) => r.json()).then((j) => { if (j.coins) setAllCoins(j.coins); }).catch(() => {});
   }, []);
 
   const loadCoin = React.useCallback((s, force) => {
     setLoading((l) => ({ ...l, [s]: true }));
     setErr((e) => ({ ...e, [s]: null }));
-    fetch(`/api/v1/compare/coin?symbol=${s}${force ? '&refresh=1' : ''}`)
+    fetch(`${API_BASE}/v1/compare/coin?symbol=${s}${force ? '&refresh=1' : ''}`)
       .then((r) => r.json())
       .then((j) => { if (j.status === 'ready') setData((d) => ({ ...d, [s]: j.data })); else setErr((e) => ({ ...e, [s]: j.reason || 'error' })); })
       .catch(() => setErr((e) => ({ ...e, [s]: 'network' })))
@@ -5182,7 +5188,7 @@ function AnalogsSection() {
   React.useEffect(() => {
     let alive = true;
     setFcPath(null);
-    const url = symbol === 'BTC' ? '/api/v1/dashboard' : `/api/v1/dashboard?symbol=${encodeURIComponent(symbol)}`;
+    const url = symbol === 'BTC' ? `${API_BASE}/v1/dashboard` : `${API_BASE}/v1/dashboard?symbol=${encodeURIComponent(symbol)}`;
     fetch(url, { cache: 'no-store' }).then((r) => r.json()).then((j) => {
       if (!alive || j.status !== 'ready') return;
       const bm = j.bitmark || {};
@@ -5212,7 +5218,7 @@ function AnalogsSection() {
   React.useEffect(() => {
     let alive = true;
     setStatus('loading'); setData(null); setWeights({});
-    const load = () => fetch(`/api/v1/analogs?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' }).then((r) => r.json()).then((j) => {
+    const load = () => fetch(`${API_BASE}/v1/analogs?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' }).then((r) => r.json()).then((j) => {
       if (!alive) return;
       if (j.status === 'ready') {
         setData(j);
@@ -5703,7 +5709,7 @@ function CrossMarketSection() {
   React.useEffect(() => {
     let alive = true;
     setStatus('loading'); setData(null);
-    const load = () => fetch(`/api/v1/markets?symbol=${encodeURIComponent(symbol)}&window=${window}`, { cache: 'no-store' })
+    const load = () => fetch(`${API_BASE}/v1/markets?symbol=${encodeURIComponent(symbol)}&window=${window}`, { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => { if (!alive) return; if (j.status === 'ready') { setData(j); setStatus('ready'); } else if (j.status === 'error') { setStatus('error'); } else { setStatus('computing'); } })
       .catch(() => { if (alive) setStatus('error'); });
@@ -5898,7 +5904,7 @@ function CompareOverlay({ coinData, coinSymbol, coinName, onClose }) {
   const [loading, setLoading] = React.useState(true);
   React.useEffect(() => {
     let alive = true;
-    fetch('/api/v1/dashboard', { cache: 'no-store' }).then((r) => r.json())
+    fetch(`${API_BASE}/v1/dashboard`, { cache: 'no-store' }).then((r) => r.json())
       .then((j) => { if (alive && j.status === 'ready') setBtc(j); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
@@ -6027,7 +6033,7 @@ export default function DashboardPage() {
   // Restore last-picked coin + load the supported coin list.
   useEffect(() => {
     try { const s = (localStorage.getItem('btciq_symbol') || '').toUpperCase(); if (s) setSymbol(s); } catch (e) { /* noop */ }
-    fetch('/api/v1/compare/coins').then((r) => r.json()).then((j) => { if (j.coins) setCoins([{ symbol: 'BTC', name: 'Bitcoin' }, ...j.coins.filter((c) => c.symbol !== 'BTC')]); }).catch(() => {});
+    fetch(`${API_BASE}/v1/compare/coins`).then((r) => r.json()).then((j) => { if (j.coins) setCoins([{ symbol: 'BTC', name: 'Bitcoin' }, ...j.coins.filter((c) => c.symbol !== 'BTC')]); }).catch(() => {});
   }, []);
 
   // Persist choice + reset the view whenever the coin changes so we never show a stale asset.
@@ -6069,7 +6075,7 @@ export default function DashboardPage() {
   const loadAlerts = useCallback(async () => {
     try {
       const q = alertFilter && alertFilter !== 'ALL' ? `?symbol=${encodeURIComponent(alertFilter)}` : '';
-      const r = await fetch(`/api/v1/alerts${q}`, { cache: 'no-store' });
+      const r = await fetch(`${API_BASE}/v1/alerts${q}`, { cache: 'no-store' });
       const j = await r.json();
       if (j.status === 'ready') { __alertsCache = j; setAlertsData(j); }
     } catch (e) { /* noop */ }
@@ -6078,7 +6084,7 @@ export default function DashboardPage() {
   const ackAlerts = useCallback(async (ids) => {
     try {
       const body = ids ? { ids } : (alertFilter && alertFilter !== 'ALL' ? { symbol: alertFilter } : {});
-      await fetch('/api/v1/alerts/ack', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      await fetch(`${API_BASE}/v1/alerts/ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       loadAlerts();
     } catch (e) { /* noop */ }
   }, [loadAlerts, alertFilter]);
@@ -6091,7 +6097,7 @@ export default function DashboardPage() {
 
   const loadNews = useCallback(async () => {
     try {
-      const r = await fetch(symbol === 'BTC' ? '/api/v1/news' : `/api/v1/news?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
+      const r = await fetch(symbol === 'BTC' ? `${API_BASE}/v1/news` : `${API_BASE}/v1/news?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
       const j = await r.json();
       if (j.status === 'ready') { if (symbol === 'BTC') __newsCache = j; setNews(j); setNewsStatus('ready'); setNewsRefreshing(false); }
       else setNewsStatus(j.status || 'computing');
@@ -6107,14 +6113,14 @@ export default function DashboardPage() {
   const handleNewsRefresh = async () => {
     if (symbol !== 'BTC') { loadNews(); return; }
     setNewsRefreshing(true);
-    await fetch('/api/v1/news/refresh', { method: 'POST' });
+    await fetch(`${API_BASE}/v1/news/refresh`, { method: 'POST' });
     const id = setInterval(loadNews, 5000);
     setTimeout(() => clearInterval(id), 70000);
   };
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(symbol === 'BTC' ? '/api/v1/dashboard' : `/api/v1/dashboard?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
+      const res = await fetch(symbol === 'BTC' ? `${API_BASE}/v1/dashboard` : `${API_BASE}/v1/dashboard?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
       const json = await res.json();
       if (json.status === 'ready') { if (symbol === 'BTC') __dashCache = json; setData(json); setStatus('ready'); setRefreshing(false); }
       else if (json.status === 'error') { setError(json.error || 'Unknown error'); setStatus('error'); }
@@ -6131,7 +6137,7 @@ export default function DashboardPage() {
   useEffect(() => {
     let alive = true;
     const loadTicker = async () => {
-      try { const r = await fetch(symbol === 'BTC' ? '/api/v1/ticker' : `/api/v1/ticker?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' }); const j = await r.json(); if (alive && j && j.price) { if (symbol === 'BTC') __tickerCache = j; setTicker(j); } } catch (e) { /* noop */ }
+      try { const r = await fetch(symbol === 'BTC' ? `${API_BASE}/v1/ticker` : `${API_BASE}/v1/ticker?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' }); const j = await r.json(); if (alive && j && j.price) { if (symbol === 'BTC') __tickerCache = j; setTicker(j); } } catch (e) { /* noop */ }
     };
     loadTicker();
     const t = setInterval(loadTicker, 10000);
@@ -6143,7 +6149,7 @@ export default function DashboardPage() {
     setRefreshing(true);
     setPassError('');
     try {
-      const r = await fetch('/api/v1/refresh', {
+      const r = await fetch(`${API_BASE}/v1/refresh`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ passcode }),

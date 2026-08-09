@@ -79,8 +79,9 @@ def _retry_after_secs(request, bucket, per_min):
         n = len(docs)
         if n <= per_min:
             return 1
-        # After the oldest (n - per_min) hits age out, the count drops to per_min (allowed).
-        idx = n - per_min - 1
+        # After the oldest (n - per_min + 1) hits age out, only (per_min - 1) remain, so the
+        # client's retry (which inserts one more hit) lands at exactly per_min → allowed.
+        idx = n - per_min
         free_at = docs[idx]['ts'] + datetime.timedelta(seconds=60)
         secs = (free_at - now_dt).total_seconds()
         return max(1, min(60, int(secs) + 1))
