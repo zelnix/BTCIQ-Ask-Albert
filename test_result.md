@@ -579,7 +579,7 @@ metadata:
 frontend:
   - task: "Whale Intelligence UI — ETF Flows card, Whale Impact card, Large-Tx feed, per-whale balance history chart"
     implemented: true
-    working: "NA"
+    working: true
     file: "app/page.js"
     stuck_count: 0
     priority: "high"
@@ -588,6 +588,9 @@ frontend:
         -working: "NA"
         -agent: "main"
         -comment: "NEW Whale Intelligence frontend (Phases 1-3). (1) EtfFlowsCard rendered in the Institutional section (BTC only): net 1d/7d/window tiles, a daily net-flow bar chart (green/red by sign via Recharts), and a per-issuer window-total leaderboard. Institutional blurb + Settings data-source row updated from 'Inactive' to Live (Farside/bitbo). (2) WhaleImpactCard at top of Whale Watch: 30d net flow, trend (Accumulation/Distribution/Neutral), holder vs exchange balances, biggest-mover contributors (from /api/v1/whales/impact — first load can take 30-60s). (3) WhaleTxFeed at bottom of Whale Watch: labeled large-transaction feed with min-BTC toggle (50/100/500/1000), entity+category, amount, USD, impact tag, links to explorer (from /api/v1/whales/transactions). (4) WhaleHistoryChart inside each expanded whale row: real reconstructed balance-over-time step line + 30d/90d change (from /api/v1/whales/history). Compiles cleanly (1760 modules). Selector-verified in browser: Institutional nav + 'US Spot Bitcoin ETF Flows' card heading render. NOT yet run through frontend testing agent (awaiting user permission)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Whale Intelligence UI test via external URL (https://quant-features.preview.emergentagent.com). All NEW features validated: (1) INSTITUTIONAL & DERIVATIVES section: Metrics panel renders ✅, 'Spot ETF net flow (1d)' row is NOT marked 'Inactive' and shows '$+92M' value with sparkline ✅, 'Spot ETF net flow (7d)' row present ✅, 'US Spot Bitcoin ETF Flows' card renders with three net-flow tiles (1d/7d/window) ✅, 'Daily net flow ($M)' bar chart (green/red bars) ✅, 'By issuer (window total)' leaderboard with 8 tickers (e.g., IBIT, FBTC, GBTC) ✅. (2) WHALE WATCH section: 'Whale Impact (30-day)' card renders with four tiles (30d net flow=-40,956 BTC, Trend=Distribution, Held by holders=302,408 BTC, On exchanges=672,344 BTC) ✅, 'Biggest movers (30d)' list with contributors (Binance +40,269 BTC Bearish, Robinhood +747 BTC Bearish) ✅, Whale list shows 10 wallets ✅, Expandable whale rows work correctly: clicked first whale (Binance), 'Balance history' chart appears ABOVE 'Recent activity' list (correct order verified via bounding box coordinates) ✅, Balance history shows step-line chart with 30d/90d change stats ✅. (3) LARGE TRANSACTIONS feed: 'Large Transactions' card at bottom ✅, Min-BTC toggle buttons (50, 100, 500, 1000) all present and working ✅, Tested 100 BTC filter (10 entries) and 500 BTC filter (9 entries) - filter logic correct (higher threshold = fewer entries) ✅, Transaction entries have all required fields: entity name (e.g., Binance, Robinhood), BTC amount, USD value, impact tag (Bullish/Bearish exchange inflow/outflow) ✅. (4) NO CRITICAL ERRORS: No red error screens ✅, No crashes ✅, Minor console errors (WebSocket HMR 502, TradingView widget request failed) are not critical ✅. Screenshots captured: institutional_etf_flows.png, whale_impact_card.png, whale_expanded_with_history.png, large_transactions_feed.png. Data is REAL (bitbo.io/Farside ETF flows, mempool.space on-chain whale data). All validations passed. Feature is fully functional."
 
 
 test_plan:
@@ -600,6 +603,33 @@ test_plan:
   test_priority: "high_first"
 
 agent_communication:
+    -agent: "testing"
+    -message: |
+      ✅ WHALE INTELLIGENCE UI TESTING COMPLETE — All features working correctly.
+      
+      Tested the NEW Whale Intelligence UI features via external URL. All components render correctly with REAL data:
+      
+      1. INSTITUTIONAL & DERIVATIVES section:
+         - ✅ Metrics panel renders with live derivatives data
+         - ✅ "Spot ETF net flow (1d)" row is NOT marked "Inactive" (shows "$+92M" with sparkline)
+         - ✅ "Spot ETF net flow (7d)" row present
+         - ✅ "US Spot Bitcoin ETF Flows" card with tiles, bar chart, and leaderboard (8 tickers: IBIT, FBTC, GBTC, etc.)
+      
+      2. WHALE WATCH section:
+         - ✅ "Whale Impact (30-day)" card with 4 tiles and biggest movers list
+         - ✅ Whale list (10 wallets) renders correctly
+         - ✅ Expandable whale rows: "Balance history" chart appears ABOVE "Recent activity" (correct order)
+         - ✅ "Large Transactions" feed with working min-BTC toggle buttons (50/100/500/1000)
+         - ✅ Filter logic correct: higher threshold = fewer entries
+         - ✅ Transaction entries have all required fields (entity, BTC amount, USD value, impact tag)
+      
+      3. NO CRITICAL ERRORS:
+         - ✅ No crashes, red error screens, or console exceptions
+         - Minor console errors (WebSocket HMR, TradingView widget) are not critical
+      
+      Screenshots captured: institutional_etf_flows.png, whale_impact_card.png, whale_expanded_with_history.png, large_transactions_feed.png
+      
+      Data is REAL (bitbo.io/Farside ETF flows, mempool.space on-chain whale data). All validations passed.
     -agent: "main"
     -message: |
       NEW TEST FOCUS — Whale Intelligence backend (Phases 1-3). All REAL data, no mocks.
