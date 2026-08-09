@@ -994,11 +994,97 @@ function OverviewChart({ d }) {
       <div className="flex items-center gap-1 self-start rounded-lg border border-slate-800 bg-slate-900 p-0.5 text-xs">
         <button onClick={() => setMode('tv')} className={`rounded-md px-3 py-1 font-medium ${mode === 'tv' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200'}`}>TradingView</button>
         <button onClick={() => setMode('draw')} className={`rounded-md px-3 py-1 font-medium ${mode === 'draw' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200'}`}>Draw Board</button>
+        <button onClick={() => setMode('news')} className={`rounded-md px-3 py-1 font-medium ${mode === 'news' ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200'}`}>News map</button>
       </div>
-      {mode === 'tv' ? <TradingViewChart /> : <DrawableChart ohlc={d.chart?.ohlc} />}
+      {mode === 'tv' ? <TradingViewChart /> : mode === 'news' ? <OverviewNewsMap ohlc={d.chart?.ohlc} /> : <DrawableChart ohlc={d.chart?.ohlc} />}
     </div>
   );
 }
+
+// ---- Overview "News map": 90d price line with the top news stories as markers ----
+function OverviewNewsMap({ ohlc }) {
+  const [news] = useFetch('/api/v1/news');
+  const [selected, setSelected] = React.useState(0);
+  const data = React.useMemo(() => {
+    const arr = ohlc || [];
+    const n = arr.length;
+    const today = new Date();
+    return arr.map((o, i) => {
+      const dt = new Date(today.getTime() - (n - 1 - i) * 86400000);
+      return { t: o.t, c: o.c, key: dt.toISOString().slice(0, 10) };
+    });
+  }, [ohlc]);
+  const markers = React.useMemo(() => {
+    if (!news || news.status !== 'ready' || data.length === 0) return [];
+    const firstMs = new Date(data[0].key).getTime();
+    return (news.cards || [])
+      .slice()
+      .sort((a, b) => (b.impact || 0) - (a.impact || 0))
+      .slice(0, 6)
+      .map((c) => {
+        const nd = new Date(c.published);
+        if (isNaN(nd.getTime())) return null;
+        const ms = nd.getTime();
+        let idx = data.findIndex((p) => p.key === nd.toISOString().slice(0, 10));
+        let approx = false;
+        if (idx === -1) {
+          approx = true;
+          let best = 0, bestDiff = Infinity;
+          data.forEach((p, i) => { const diff = Math.abs(new Date(p.key).getTime() - ms); if (diff < bestDiff) { bestDiff = diff; best = i; } });
+          idx = best;
+        }
+        return { x: data[idx].t, y: data[idx].c, dir: (c.ai || {}).direction || 'neutral', impact: c.impact, title: c.title, link: c.link, date: data[idx].key, approx, old: ms < firstMs };
+      })
+      .filter(Boolean);
+  }, [news, data]);
+  const dotColor = (dir) => (dir === 'bullish' ? '#34d399' : dir === 'bearish' ? '#f87171' : '#94a3b8');
+  const sel = markers[selected];
+  if (!ohlc || ohlc.length === 0) return <div className="flex h-[300px] items-center justify-center rounded-lg bg-slate-950/40 text-sm text-slate-500">Price data loading…</div>;
+  return (
+    <div>
+      <div className="h-[340px] w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={data} margin={{ top: 12, right: 12, left: -8, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+            <XAxis dataKey="t" stroke="#64748b" fontSize={10} minTickGap={40} tickLine={false} />
+            <YAxis stroke="#64748b" fontSize={10} domain={['auto', 'auto']} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} width={44} tickLine={false} />
+            <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} formatter={(v) => [fmtUsd(v), 'Close']} />
+            <Line type="monotone" dataKey="c" stroke="#38bdf8" strokeWidth={1.6} dot={false} />
+            {sel && <ReferenceLine x={sel.x} stroke={dotColor(sel.dir)} strokeDasharray="4 3" />}
+            {markers.map((m, i) => (
+              <ReferenceDot key={i} x={m.x} y={m.y} r={i === selected ? 7 : 4.5} fill={dotColor(m.dir)} stroke="#0b1220" strokeWidth={2} isFront
+                onClick={() => setSelected(i)} style={{ cursor: 'pointer' }} />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      {markers.length === 0 ? (
+        <p className="mt-2 text-center text-xs text-slate-500">{news && news.status === 'ready' ? 'No datable stories to map.' : 'Loading news markers…'}</p>
+      ) : (
+        <>
+          {sel && (
+            <div className="mt-2 flex items-start gap-2 rounded-lg border p-2.5 text-xs" style={{ borderColor: dotColor(sel.dir) + '55', background: dotColor(sel.dir) + '11' }}>
+              <span className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase" style={{ color: dotColor(sel.dir), background: dotColor(sel.dir) + '22' }}>{sel.dir}</span>
+              <a href={sel.link} target="_blank" rel="noreferrer" className="flex-1 text-slate-200 hover:text-sky-300">{sel.title}</a>
+              <span className="shrink-0 text-[11px] text-slate-500">{sel.date}{sel.approx ? ' (nearest)' : ''}</span>
+              <span className="shrink-0 font-bold text-sky-400">Impact {sel.impact}</span>
+            </div>
+          )}
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {markers.map((m, i) => (
+              <button key={i} onClick={() => setSelected(i)}
+                className={`inline-flex max-w-[15rem] items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] ${i === selected ? 'border-sky-500/50 bg-sky-500/15 text-sky-200' : 'border-slate-700 bg-slate-800/50 text-slate-300 hover:border-sky-500/40'}`}>
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: dotColor(m.dir) }} />
+                <span className="truncate">{m.title}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 
 // ---- 3-Second Hero: Regime · Top driver · Backtested win-rate (+ Inspect Signal) ----
 function ThreeSecondHero({ d, onInspect }) {
