@@ -59,6 +59,13 @@ predictions_col = db['predictions']
 bitmark_col = db['bitmark_snapshots']
 smart_alerts_col = db['smart_alerts']
 audit_col = db['forecast_audit']
+rate_col = db['rate_limits']  # cluster-wide per-client rate limiter (shared across replicas)
+try:
+    # Auto-expire hits after 25h so the 24h daily window is always fully covered.
+    rate_col.create_index('ts', expireAfterSeconds=90000)
+    rate_col.create_index([('key', 1), ('ts', 1)])
+except Exception:  # noqa
+    pass
 insights_col = db['albert_insights']  # cache for AI-generated section insights
 compare_col = db['compare_coins']  # cache for per-coin comparison summaries
 coin_dash_col = db['coin_dashboards']  # cache for per-coin full dashboards (altcoins)
@@ -167,18 +174,34 @@ def _client_key(request):
 
 
 def _rate_limited(request, bucket, per_min=15, per_day=300):
-    """Return True if this client has exceeded the limit for `bucket`."""
+    """Return True if this client has exceeded the limit for `bucket`.
+
+    Backed by MongoDB so limits are EXACT across all deployment replicas (each
+    request inserts a timestamped hit; we then count hits in the 60s / 24h windows).
+    Falls back to a per-process in-memory window if the DB is briefly unavailable.
+    """
     now = time.time()
     key = f'{bucket}:{_client_key(request)}'
-    with _rl_lock:
-        hits = [t for t in _rl_hits.get(key, []) if now - t < 86400]
-        recent = sum(1 for t in hits if now - t < 60)
-        if recent >= per_min or len(hits) >= per_day:
-            _rl_hits[key] = hits
+    try:
+        now_dt = datetime.datetime.utcnow()
+        rate_col.insert_one({'_id': str(uuid.uuid4()), 'key': key, 'ts': now_dt})
+        minute_ago = now_dt - datetime.timedelta(seconds=60)
+        day_ago = now_dt - datetime.timedelta(seconds=86400)
+        recent = rate_col.count_documents({'key': key, 'ts': {'$gte': minute_ago}})
+        if recent > per_min:
             return True
-        hits.append(now)
-        _rl_hits[key] = hits
-        return False
+        daily = rate_col.count_documents({'key': key, 'ts': {'$gte': day_ago}})
+        return daily > per_day
+    except Exception:  # noqa — DB hiccup: degrade to in-memory limiter, never crash the request
+        with _rl_lock:
+            hits = [t for t in _rl_hits.get(key, []) if now - t < 86400]
+            recent = sum(1 for t in hits if now - t < 60)
+            if recent >= per_min or len(hits) >= per_day:
+                _rl_hits[key] = hits
+                return True
+            hits.append(now)
+            _rl_hits[key] = hits
+            return False
 
 
 def _passcode_ok(supplied):

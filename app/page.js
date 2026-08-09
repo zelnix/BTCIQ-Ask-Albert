@@ -3027,6 +3027,7 @@ function AskQuantSection({ d }) {
   const [messages, setMessages] = React.useState([]);
   const [input, setInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
+  const [rateNotice, setRateNotice] = React.useState('');
   const endRef = React.useRef(null);
 
   React.useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
@@ -3053,7 +3054,24 @@ function AskQuantSection({ d }) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, message: msg, symbol }),
       });
+      if (r.status === 429) {
+        setLoading(false);
+        setMessages((m) => m.slice(0, -1));
+        setInput(msg);
+        setRateNotice("You're chatting a little fast — Albert takes up to 10 messages a minute. Give it a few seconds, then try again.");
+        setTimeout(() => setRateNotice(''), 12000);
+        return;
+      }
       const j = await r.json();
+      if (j && j.status === 'rate_limited') {
+        setLoading(false);
+        setMessages((m) => m.slice(0, -1));
+        setInput(msg);
+        setRateNotice("You're chatting a little fast — please wait a few seconds and try again.");
+        setTimeout(() => setRateNotice(''), 12000);
+        return;
+      }
+      setRateNotice('');
       setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.' }]);
     } catch (e) {
       setMessages((m) => [...m, { role: 'assistant', text: 'Network error — please try again.' }]);
@@ -3116,6 +3134,12 @@ function AskQuantSection({ d }) {
           <div ref={endRef} />
         </div>
         <div className="border-t border-slate-800 p-3">
+          {rateNotice && (
+            <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] leading-snug text-amber-300">
+              <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{rateNotice}</span>
+            </div>
+          )}
           <div className="flex items-end gap-2">
             <textarea
               value={input}
@@ -3150,6 +3174,7 @@ function FloatingAlbert({ active, symbol, onExpand }) {
   const [messages, setMessages] = React.useState([]);
   const [input, setInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
+  const [rateNotice, setRateNotice] = React.useState('');
   const endRef = React.useRef(null);
   const isOverview = !active || active === 'overview';
   const scopeLabel = SECTION_LABELS[active] || 'all things BTCIQ';
@@ -3173,7 +3198,24 @@ function FloatingAlbert({ active, symbol, onExpand }) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, message: msg, symbol, section: active }),
       });
+      if (r.status === 429) {
+        setLoading(false);
+        setMessages((m) => m.slice(0, -1));
+        setInput(msg);
+        setRateNotice("You're chatting a little fast — Albert takes up to 10 messages a minute. Give it a few seconds, then try again.");
+        setTimeout(() => setRateNotice(''), 12000);
+        return;
+      }
       const j = await r.json();
+      if (j && j.status === 'rate_limited') {
+        setLoading(false);
+        setMessages((m) => m.slice(0, -1));
+        setInput(msg);
+        setRateNotice("You're chatting a little fast — please wait a few seconds and try again.");
+        setTimeout(() => setRateNotice(''), 12000);
+        return;
+      }
+      setRateNotice('');
       setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.' }]);
     } catch (e) {
       setMessages((m) => [...m, { role: 'assistant', text: 'Network error — please try again.' }]);
@@ -3234,6 +3276,12 @@ function FloatingAlbert({ active, symbol, onExpand }) {
             <div ref={endRef} />
           </div>
           <div className="border-t border-slate-800 p-2.5">
+            {rateNotice && (
+              <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-300">
+                <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>{rateNotice}</span>
+              </div>
+            )}
             <div className="flex items-end gap-2">
               <textarea value={input} onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
@@ -5942,6 +5990,7 @@ export default function DashboardPage() {
   const [passInput, setPassInput] = useState('');
   const [passError, setPassError] = useState('');
   const [passRemember, setPassRemember] = useState(true);
+  const [passAutoClear, setPassAutoClear] = useState(false);
   const [ticker, setTicker] = useState(__tickerCache);
   const [active, setActive] = useState('overview');
   const [showReport, setShowReport] = useState(false);
@@ -6068,7 +6117,7 @@ export default function DashboardPage() {
     return () => { alive = false; clearInterval(t); clearInterval(dref); };
   }, [load, symbol]);
 
-  const doRefresh = async (passcode, remember = true) => {
+  const doRefresh = async (passcode, remember = true, autoClear = false) => {
     setRefreshing(true);
     setPassError('');
     try {
@@ -6091,8 +6140,14 @@ export default function DashboardPage() {
       }
       // Accepted — persist the passcode only if the admin opted to remember it on this device.
       if (typeof window !== 'undefined') {
-        if (remember && passcode) window.localStorage.setItem('btciq_admin_passcode', passcode);
-        else window.localStorage.removeItem('btciq_admin_passcode');
+        if (remember && passcode) {
+          window.localStorage.setItem('btciq_admin_passcode', passcode);
+          if (autoClear) window.localStorage.setItem('btciq_admin_passcode_exp', String(Date.now() + 24 * 60 * 60 * 1000));
+          else window.localStorage.removeItem('btciq_admin_passcode_exp');
+        } else {
+          window.localStorage.removeItem('btciq_admin_passcode');
+          window.localStorage.removeItem('btciq_admin_passcode_exp');
+        }
       }
       setPassPrompt(false);
       setPassInput('');
@@ -6104,16 +6159,29 @@ export default function DashboardPage() {
     }
   };
 
+  // Read a saved passcode, honouring an optional 24h auto-clear expiry.
+  const readStoredPasscode = () => {
+    if (typeof window === 'undefined') return '';
+    const p = window.localStorage.getItem('btciq_admin_passcode') || '';
+    const exp = window.localStorage.getItem('btciq_admin_passcode_exp');
+    if (p && exp && Date.now() > Number(exp)) {
+      window.localStorage.removeItem('btciq_admin_passcode');
+      window.localStorage.removeItem('btciq_admin_passcode_exp');
+      return '';
+    }
+    return p;
+  };
+
   const handleRefresh = () => {
-    const stored = (typeof window !== 'undefined' && window.localStorage.getItem('btciq_admin_passcode')) || '';
-    if (!stored) { setPassError(''); setPassInput(''); setPassRemember(true); setPassPrompt(true); return; }
-    doRefresh(stored, true);
+    const stored = readStoredPasscode();
+    if (!stored) { setPassError(''); setPassInput(''); setPassRemember(true); setPassAutoClear(false); setPassPrompt(true); return; }
+    doRefresh(stored, true, false);
   };
 
   const submitPasscode = () => {
     const p = (passInput || '').trim();
     if (!p) { setPassError('Enter the admin passcode.'); return; }
-    doRefresh(p, passRemember);
+    doRefresh(p, passRemember, passAutoClear);
   };
 
   if (!data && (status === 'loading' || status === 'computing')) {
@@ -6260,6 +6328,17 @@ export default function DashboardPage() {
                       Remember on this device
                     </label>
                     {!passRemember && <p className="mt-1 text-[10px] leading-snug text-amber-400/80">Recommended on shared or public devices — the passcode won't be saved.</p>}
+                    {passRemember && (
+                      <label className="mt-1.5 flex cursor-pointer items-center gap-2 text-[11px] text-slate-400 select-none">
+                        <input
+                          type="checkbox"
+                          checked={passAutoClear}
+                          onChange={(e) => setPassAutoClear(e.target.checked)}
+                          className="h-3.5 w-3.5 cursor-pointer rounded border-slate-600 bg-slate-950 accent-sky-500"
+                        />
+                        Auto-clear after 24 hours
+                      </label>
+                    )}
                     <div className="mt-2.5 flex items-center justify-end gap-2">
                       <button onClick={() => setPassPrompt(false)} className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-slate-200">Cancel</button>
                       <button onClick={submitPasscode} disabled={refreshing} className="rounded-lg bg-gradient-to-r from-sky-500 to-violet-600 px-3 py-1.5 text-xs font-semibold text-white hover:from-sky-400 hover:to-violet-500 disabled:opacity-60">
