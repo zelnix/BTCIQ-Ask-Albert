@@ -2489,3 +2489,140 @@ agent_communication:
       
       NO CRITICAL ISSUES FOUND. All 4 Data Audit endpoints are production-ready. Feature is fully functional with REAL data.
 
+
+
+#====================================================================================================
+# FRONTEND — Data Audit screen, Floating Ask Albert, Shareable Daily Report + Phase A panels
+#====================================================================================================
+frontend:
+  - task: "Data Audit screen (Composite Price, Cross-Asset, News Tone, FRED macro with confidence tags)"
+    implemented: true
+    working: true
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW nav item 'Data Audit' (BTC-only). Renders CompositePriceCard (composite price + HIGH/MEDIUM/LOW confidence tag + per-venue breakdown w/ latency+dev% + outlier flag), CrossAssetCard (BTC/ETH dominance, ETH/BTC, total mcap, regime), NewsToneCard (GDELT tone gauge + sparkline; shows 'unavailable' reason gracefully if GDELT throttled), MacroFredCard (FRED series grid, HIGH confidence, live). Verified via screenshot rendering correctly. Test: click 'Data Audit' in sidebar -> all four cards render without JS errors, composite shows $ value + confidence badge, FRED shows >=4 rows, no crash if a card is 'computing'/'unavailable'."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com). All 4 cards render correctly with NO JS/console errors. CARD 1 - BTCIQ Composite Price: ✅ Card visible, composite price=$64,798 (numeric $ value present), confidence badge=HIGH (in [HIGH,MEDIUM,LOW]), all 4 venues found (Coinbase, Kraken, OKX, CoinGecko). CARD 2 - Cross-Asset Context: ✅ Card visible, BTC dominance=56.62% (NOT 0%, numeric value >0). CARD 3 - News Tone (GDELT): ✅ Card visible, shows numeric tone value=-1.296 (acceptable, NOT 'unavailable' message). CARD 4 - US Macro (FRED): ✅ Card visible, confidence badge=HIGH, 5 FRED rows found (>=4 required). Console errors: Only 1 WebSocket HMR error (dev-mode only, NOT a production bug). All validations passed. Feature is fully functional."
+  - task: "Floating screen-aware Ask Albert widget (all screens)"
+    implemented: true
+    working: true
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW FloatingAlbert component — a fixed bottom-right launcher present on every screen. Clicking opens a compact chat panel. Header shows 'Talking about all things BTCIQ' on Overview, else 'Focused on: <ScreenName>'. Posts to /api/v1/chat with the active section id so answers are screen-specific (backend adds a section-focus hint; overview stays general). Backend chat max_tokens raised to 6000 to fix gemini-3-flash thinking-token truncation (was 700 -> replies were cut to ~90 chars; now full multi-paragraph answers). Verified via screenshot: full grounded reply, respects no-mock ('no ETF or liquidation data available'). NOTE: the sidebar nav item AND the floating launcher both read 'Ask Albert' — the floating one is a FIXED button at bottom-right (last in DOM); expand icon opens the full Ask Albert section. Test: on Overview open floating widget -> header says 'all things BTCIQ', send a suggestion -> a non-empty assistant reply appears (allow up to ~20s). Navigate to Leverage -> reopen -> header says 'Focused on: Leverage' and thread resets."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. Floating Ask Albert is fully functional and screen-aware. OVERVIEW TEST: ✅ Found 3 'Ask Albert' buttons in DOM, clicked LAST one (floating launcher at bottom-right), header correctly shows 'Talking about all things BTCIQ', clicked first suggestion chip ('Give me the 10-second read on Bitcoin right now.'), assistant reply received with multi-sentence substantial content (NOT truncated to a few words), reply appears complete and grounded. LEVERAGE TEST: ✅ Navigated to Leverage screen, reopened floating launcher, header correctly shows 'Focused on: Leverage' (screen-aware functionality working). Thread resets between screens as expected. All validations passed. Feature is fully functional."
+  - task: "Shareable Daily Report modal (PNG export)"
+    implemented: true
+    working: true
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW DailyReportModal opened via the 'Report' button in the top header bar. Shows a clean BTCIQ snapshot card: date, composite price + confidence tag, quant score + market-state score, risk/BTC-dominance/news-tone, US macro (FRED) grid, regime line. 'Download PNG' button exports the card via html2canvas (dynamic import, client-only). Fixed a bug where BTC dominance showed 0% (cross-asset now falls back to the stored dominance snapshot when CoinGecko /global is 429-throttled). Verified via screenshot: modal renders with real values. Test: click 'Report' -> modal opens with composite price + score + FRED rows populated (dominance NOT 0%), 'Download PNG' click does not throw (a PNG download is triggered), 'Close' dismisses."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL. Shareable Daily Report modal is fully functional. MODAL CONTENT: ✅ Clicked 'Report' button in top header, modal opened successfully, composite price present in modal, Quant Score=57 present, Market State=52 present, BTC Dom=56.62% (NOT 0%, numeric value >0), US Macro (FRED) section found with 4 rows visible (Fed Funds Rate, 2Y Treasury, CPI, Unemployment). PNG EXPORT: ✅ Clicked 'Download PNG' button, NO console errors detected after clicking (download initiated successfully). CLOSE: ✅ Modal closed successfully by clicking outside. All validations passed. Feature is fully functional."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.4"
+  test_sequence: 5
+  run_ui: true
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      FRONTEND TEST FOCUS (user approved). Test these 3 NEW features + a light Phase A regression at
+      https://quant-features.preview.emergentagent.com . App shows a loading splash for a few seconds on first
+      load — wait for the sidebar/Overview to appear before interacting.
+      1) DATA AUDIT SCREEN: click 'Data Audit' in the left sidebar. Verify 4 cards render with NO JS/console
+         errors: 'BTCIQ Composite Price' (shows a $ value + a HIGH/MEDIUM/LOW confidence badge + a venue list),
+         'Cross-Asset Context' (BTC dominance % NOT 0), 'News Tone (GDELT)' (either a tone number OR a graceful
+         'unavailable' message — both OK), 'US Macro (FRED)' (>=4 rows like Fed Funds/10Y/CPI, HIGH confidence).
+      2) FLOATING ASK ALBERT: on Overview, click the FIXED bottom-right 'Ask Albert' launcher (it is the LAST
+         'Ask Albert' button in the DOM; the other one is the sidebar nav). Panel header must read 'Talking about
+         all things BTCIQ'. Click the first suggestion chip and wait up to ~20s — an assistant reply bubble must
+         appear (non-empty, multi-sentence, NOT truncated to a few words). Close it, navigate to 'Leverage',
+         reopen the floating launcher: header must now read 'Focused on: Leverage'.
+      3) SHAREABLE DAILY REPORT: click the 'Report' button in the top header bar. A modal opens with a snapshot
+         card: composite price ($ value), Quant Score number, Market State number, US Macro (FRED) rows, and
+         BTC Dom. must NOT be '0%'. Click 'Download PNG' — verify it does not throw a JS error (a download is
+         initiated). Click 'Close' to dismiss.
+      LIGHT REGRESSION: 'Network & Sentiment' screen still shows Fear & Greed + Network Health; Overview still
+      loads. Report console errors if any. Capture screenshots of each of the 3 features.
+    -agent: "testing"
+    -message: |
+      ✅ FRONTEND TEST COMPLETE - ALL 3 NEW FEATURES PASSED (3/3) + LIGHT REGRESSION PASSED
+      
+      Tested via external URL (https://quant-features.preview.emergentagent.com) using comprehensive Playwright test suite.
+      
+      TEST 1 — DATA AUDIT SCREEN: ✅ PASSED
+      - All 4 cards render correctly with NO JS/console errors
+      - BTCIQ Composite Price: $64,798 with HIGH confidence badge, all 4 venues (Coinbase, Kraken, OKX, CoinGecko) ✅
+      - Cross-Asset Context: BTC dominance 56.62% (NOT 0%) ✅
+      - News Tone (GDELT): Shows numeric tone value -1.296 (acceptable) ✅
+      - US Macro (FRED): HIGH confidence badge, 5 FRED rows (>=4 required) ✅
+      
+      TEST 2 — FLOATING ASK ALBERT (screen-aware): ✅ PASSED
+      - Found 3 'Ask Albert' buttons in DOM, clicked LAST one (floating launcher at bottom-right) ✅
+      - On Overview: Header shows "Talking about all things BTCIQ" ✅
+      - Clicked first suggestion chip, assistant reply received with multi-sentence substantial content (NOT truncated) ✅
+      - On Leverage: Header shows "Focused on: Leverage" (screen-aware functionality working) ✅
+      
+      TEST 3 — SHAREABLE DAILY REPORT (PNG export): ✅ PASSED
+      - Modal opened successfully with all required content ✅
+      - Composite price present ✅
+      - Quant Score: 57 ✅
+      - Market State: 52 ✅
+      - BTC Dom: 56.62% (NOT 0%) ✅
+      - US Macro (FRED): 4 rows visible ✅
+      - "Download PNG" clicked without JS errors (download initiated successfully) ✅
+      - Modal closed successfully ✅
+      
+      LIGHT REGRESSION: ✅ PASSED
+      - Network & Sentiment: Fear & Greed card found ✅
+      - Network Health card found ✅
+      - Overview loads without errors ✅
+      
+      CONSOLE ERRORS:
+      - Only 1 console error: WebSocket HMR connection failure (dev-mode only, NOT a production bug)
+      
+      EXACT OBSERVED VALUES (as requested):
+      - Composite price: $64,798
+      - Confidence: HIGH
+      - BTC dominance: 56.62%
+      - FRED row count: 5 (>=4 required)
+      - Albert header (Overview): "Talking about all things BTCIQ"
+      - Albert header (Leverage): "Focused on: Leverage"
+      - Albert reply: Multi-sentence, substantial content (not truncated)
+      
+      SCREENSHOTS CAPTURED:
+      1. 02_data_audit_screen.png - Data Audit screen with all 4 cards
+      2. 03_floating_albert_overview.png - Floating Albert on Overview with header
+      3. 04_floating_albert_reply.png - Albert's multi-sentence reply
+      4. 05_floating_albert_leverage.png - Floating Albert on Leverage (screen-aware)
+      5. 06_daily_report_modal.png - Daily Report modal with all content
+      6. 07_network_sentiment_regression.png - Network & Sentiment regression
+      
+      NO CRITICAL ISSUES FOUND. All 3 NEW features are fully functional and production-ready. The only console error is a WebSocket HMR error which is development-mode related and not a production bug.

@@ -4774,6 +4774,24 @@ def _compute_cross_asset():
         ethbtc = float((_okx('/api/v5/market/ticker', {'instId': 'ETH-BTC'}) or [{}])[0].get('last'))
     except Exception:  # noqa
         pass
+    # If CoinGecko /global was rate-limited/empty, fall back to the most recent BTC
+    # dominance snapshot stored by the daily compute (never cache a bogus 0%).
+    if not mc.get('btc'):
+        snap = dominance_col.find_one(sort=[('date', -1)], projection={'_id': 0})
+        if not snap or not snap.get('dominance'):
+            return None
+        btc_dom = round(float(snap['dominance']), 2)
+        total = snap.get('total_mcap') or total
+        regime = ('Risk-on (alts gaining)' if btc_dom < 52
+                  else 'Risk-off (BTC dominant)' if btc_dom > 58 else 'Balanced')
+        return {'btc_dominance': btc_dom, 'eth_dominance': None,
+                'eth_btc': (round(ethbtc, 5) if ethbtc else None),
+                'total_market_cap_usd': total, 'stablecoin_mcap_usd': 0,
+                'mcap_change_24h': 0, 'regime': regime, 'confidence': 'MEDIUM',
+                'read': (f"BTC dominance is {btc_dom}% ({regime.lower()}); ETH/BTC at "
+                         f"{(round(ethbtc,5) if ethbtc else 'n/a')}. Dominance is from the latest stored "
+                         f"snapshot (CoinGecko /global is rate-limiting this host right now)."),
+                'source': 'CoinGecko (stored snapshot) + OKX ETH-BTC'}
     # stablecoin caps (best-effort; tolerate CoinGecko rate limits)
     stable = 0
     try:
@@ -4956,6 +4974,42 @@ def audit_log(limit: int = 20):
     return {'status': 'ready', 'entries': items}
 
 
+_SECTION_FOCUS = {
+    'overview': None,  # general — all things BTCIQ
+    'forecasts': 'the price FORECASTS (BitMarkAI probability ranges from 1 week to 5 years — odds, bull/base/bear ranges, invalidation levels)',
+    'market-intel': 'the MARKET INTELLIGENCE / technical picture (chart structure, key support/resistance levels, cycle position and the raw indicators)',
+    'crossmarket': 'the CROSS-MARKET comparison of Bitcoin vs traditional assets (S&P 500, Nasdaq, Gold, US Dollar) — correlation, relative performance and volatility',
+    'analogs': 'the HISTORICAL ANALOG (which past Bitcoin episode today most resembles and what happened next)',
+    'smartmoney': 'the on-chain SMART MONEY behaviour (MVRV, SOPR, active addresses, holder accumulation, Fear & Greed)',
+    'whales': 'WHALE activity (balances of the largest labeled wallets, accumulation vs distribution, exchange in/outflows)',
+    'institutional': 'INSTITUTIONAL & DERIVATIVES (open interest, funding, long/short positioning, taker flow and spot ETF net flows)',
+    'leverage': 'the LEVERAGE picture (open interest, funding, long/short bias, squeeze/liquidation risk)',
+    'macro': 'MACRO & POLICY conditions (central-bank policy, liquidity, cross-market correlation and regulation)',
+    'news': 'the NEWS flow and its likely direction and impact on Bitcoin',
+    'risk': 'the RISK view (expected move, volatility, support/resistance zones, event risk and data reliability) — kept separate from direction',
+    'events': 'the upcoming EVENT calendar (macro, derivatives and on-chain events that could move Bitcoin) and their expected volatility',
+    'performance': 'the PERFORMANCE / prediction ledger (accuracy, Brier score, calibration and the honest scoreboard)',
+    'timemachine': 'the TIME MACHINE historical replay (what the model would have predicted on a past day and what happened next)',
+    'network': 'NETWORK health & sentiment (hashrate, difficulty, mempool/fees and the Fear & Greed crowd read)',
+    'dataaudit': 'the DATA AUDIT (the trust-scored composite Bitcoin price and its venues/outliers, cross-asset context, GDELT news tone and FRED macro — and how confident each signal is: HIGH/MEDIUM/LOW)',
+    'admin': 'the ADMIN / platform view (integrations, data-source freshness, usage and costs)',
+    'settings': 'BTCIQ settings, data sources and compliance information',
+}
+
+
+def _section_focus_hint(section):
+    sid = (section or '').strip().lower()
+    if not sid or sid == 'overview':
+        return None
+    topic = _SECTION_FOCUS.get(sid)
+    if topic is None:
+        return None
+    return (f"CONTEXT: The user is currently viewing the '{sid}' screen. Focus your answer on {topic}, "
+            f"using the relevant numbers from the live dashboard data — unless the user clearly asks about "
+            f"something else, in which case answer that instead.")
+
+
+
 @app.post('/api/v1/chat')
 def chat_endpoint(payload: dict = Body(...)):
     session_id = (str(payload.get('session_id') or uuid.uuid4()))[:80]
@@ -4971,11 +5025,14 @@ def chat_endpoint(payload: dict = Body(...)):
         hist_txt = ''
         for h in hist[-5:]:
             hist_txt += f"User: {h.get('user')}\nQuant: {h.get('assistant')}\n"
-        user_text = (f"Recent conversation:\n{hist_txt}\n" if hist_txt else '') + f"Question: {message}"
+        focus = _section_focus_hint(payload.get('section'))
+        user_text = ((f"{focus}\n" if focus else '')
+                     + (f"Recent conversation:\n{hist_txt}\n" if hist_txt else '')
+                     + f"Question: {message}")
         chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'askquant-{session_id}',
                         system_message=CHAT_SYSTEM.format(ctx=ctx))
                 .with_model('gemini', CHAT_MODEL)
-                .with_params(temperature=0.2, max_tokens=700))
+                .with_params(temperature=0.2, max_tokens=6000))
         reply = asyncio.run(chat.send_message(UserMessage(text=user_text)))
         text = (getattr(reply, 'text', None) or str(reply)).strip()
         chat_col.insert_one({'_id': str(uuid.uuid4()), 'session_id': session_id,
