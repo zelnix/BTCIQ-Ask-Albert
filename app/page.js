@@ -1000,10 +1000,150 @@ function OverviewChart({ d }) {
   );
 }
 
+// ---- 3-Second Hero: Regime · Top driver · Backtested win-rate (+ Inspect Signal) ----
+function ThreeSecondHero({ d, onInspect }) {
+  const dec = d.decision || {};
+  const sb = d.scoreboard || {};
+  const nfl = d.news_forecast_link || {};
+  const score = dec.overall_score != null ? dec.overall_score : d.quant_score;
+  const scColor = score >= 55 ? 'text-emerald-400' : score > 45 ? 'text-amber-400' : 'text-red-400';
+  const scRing = score >= 55 ? 'ring-emerald-500/30' : score > 45 ? 'ring-amber-500/30' : 'ring-red-500/30';
+  const regime = dec.regime || d.quant_label || '—';
+  const stateLabel = dec.label || d.quant_label || 'Neutral';
+  const driver = nfl.top_driver || (dec.news_bias ? `${dec.news_bias} news flow` : 'No standout driver');
+  const rawDir = String(nfl.top_driver_dir || dec.news_bias || 'neutral').toLowerCase();
+  const driverColor = rawDir.includes('bull') ? 'text-emerald-400' : rawDir.includes('bear') ? 'text-red-400' : 'text-slate-300';
+  const driverWord = rawDir.includes('bull') ? 'Bullish' : rawDir.includes('bear') ? 'Bearish' : 'Neutral';
+  const winRate = sb.winRate;
+  const total = sb.total;
+  return (
+    <Card className={`border-0 bg-gradient-to-br from-slate-900 to-slate-950 p-4 ring-1 ${scRing}`}>
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">At a glance</span>
+        <button onClick={onInspect} className="inline-flex min-h-[36px] items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-300 hover:bg-sky-500/20">
+          <FlaskConical className="h-3.5 w-3.5" />Inspect Signal
+        </button>
+      </div>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {/* Regime / Signal */}
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">Market Regime / Signal</div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className={`text-3xl font-black ${scColor}`}>{score != null ? score : '—'}</span>
+            <span className="text-xs text-slate-500">/100</span>
+          </div>
+          <div className={`text-sm font-semibold ${scColor}`}>{stateLabel}</div>
+          <div className="mt-0.5 truncate text-[11px] text-slate-400" title={regime}>{regime}</div>
+        </div>
+        {/* Top sentiment driver */}
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">Primary Sentiment Driver</div>
+          <div className={`mt-1 text-sm font-bold ${driverColor}`}>{driverWord}</div>
+          <div className="mt-0.5 line-clamp-2 text-[12px] text-slate-300" title={driver}>{driver}</div>
+          {(nfl.n_high_impact != null) && <div className="mt-1 text-[11px] text-slate-500">{nfl.n_high_impact} high-impact · {nfl.n_stories} stories</div>}
+        </div>
+        {/* Backtested win-rate */}
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">Backtested Accuracy</div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className="text-3xl font-black text-sky-400">{winRate != null ? `${winRate}%` : '—'}</span>
+          </div>
+          <div className="text-sm font-semibold text-slate-300">historic win rate</div>
+          <div className="mt-0.5 text-[11px] text-slate-400">across {total != null ? total.toLocaleString() : '—'} graded cycles</div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function InspectSignalDrawer({ d, onClose }) {
+  const [news] = useFetch('/api/v1/news');
+  const dec = d.decision || {};
+  const nfl = d.news_forecast_link || {};
+  const score = dec.overall_score != null ? dec.overall_score : d.quant_score;
+  const bullishLean = (score || 50) >= 50;
+  const leanWord = bullishLean ? 'Bullish lean' : 'Bearish lean';
+  const leanColor = bullishLean ? 'text-emerald-400' : 'text-red-400';
+  const cats = (d.quant_breakdown || []).filter((b) => b.active);
+  const cards = ((news && news.cards) || []).slice().sort((a, b) => (b.impact || 0) - (a.impact || 0)).slice(0, 5);
+  const rawBias = String(nfl.bias || dec.news_bias || 'neutral').toLowerCase();
+  const biasColor = rawBias.includes('bull') ? 'text-emerald-400' : rawBias.includes('bear') ? 'text-red-400' : 'text-slate-300';
+  return (
+    <div className="fixed inset-0 z-[60] flex justify-end bg-black/60" onClick={onClose}>
+      <div className="h-full w-full max-w-md overflow-y-auto border-l border-slate-800 bg-slate-900 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-slate-800 bg-slate-900/95 px-5 py-4 backdrop-blur">
+          <FlaskConical className="h-5 w-5 text-sky-400" />
+          <h3 className="font-semibold text-white">Why this signal?</h3>
+          <button onClick={onClose} className="ml-auto rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><X className="h-5 w-5" /></button>
+        </div>
+        <div className="space-y-5 p-5">
+          {/* Overall lean */}
+          <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-4">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">Overall engine read</div>
+            <div className="mt-1 flex items-center gap-2"><span className={`text-2xl font-black ${leanColor}`}>{score != null ? score : '—'}/100</span><span className={`text-sm font-semibold ${leanColor}`}>{dec.label || leanWord}</span></div>
+            {dec.alignment && <div className="mt-1 text-[12px] text-slate-400">Alignment: {dec.alignment}</div>}
+          </div>
+          {/* Sentiment impact */}
+          <div>
+            <div className="mb-2 flex items-center gap-2"><Newspaper className="h-4 w-4 text-violet-400" /><h4 className="text-sm font-semibold text-slate-200">News & sentiment impact</h4></div>
+            <div className="rounded-xl border border-violet-500/20 bg-violet-500/[0.06] p-3 text-sm text-slate-300">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span>Bias: <span className={`font-semibold ${biasColor}`}>{nfl.bias || dec.news_bias || 'Neutral'}</span></span>
+                {nfl.signal != null && <span className="text-slate-400">signal {nfl.signal}</span>}
+                {nfl.n_high_impact != null && <span className="text-slate-400">{nfl.n_high_impact} high-impact / {nfl.n_stories} stories</span>}
+              </div>
+              {nfl.top_driver && <div className="mt-1 text-[12px] text-slate-400">Top driver: <span className="text-slate-200">{nfl.top_driver}</span></div>}
+            </div>
+            {/* Weighed headlines */}
+            <div className="mt-2 space-y-1.5">
+              {(!news || news.status !== 'ready') ? <p className="text-[12px] text-slate-500">Loading weighed headlines…</p>
+                : cards.length === 0 ? <p className="text-[12px] text-slate-500">No headlines available right now.</p>
+                  : cards.map((c, i) => {
+                    const dir = (c.ai || {}).direction || 'neutral';
+                    return (
+                      <a key={i} href={c.link} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 hover:border-sky-500/40">
+                        <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase ${DIR_COLOR[dir]}`}>{dir}</span>
+                        <span className="flex-1 truncate text-[12px] text-slate-200">{c.title}</span>
+                        <span className="shrink-0 text-[11px] font-bold text-sky-400">{c.impact}</span>
+                      </a>
+                    );
+                  })}
+            </div>
+          </div>
+          {/* Technicals confirm / diverge */}
+          <div>
+            <div className="mb-2 flex items-center gap-2"><BarChart3 className="h-4 w-4 text-sky-400" /><h4 className="text-sm font-semibold text-slate-200">Technical indicators</h4><span className="text-[11px] text-slate-500">vs {bullishLean ? 'bullish' : 'bearish'} lean</span></div>
+            <div className="space-y-1.5">
+              {cats.length === 0 ? <p className="text-[12px] text-slate-500">No active indicator categories.</p>
+                : cats.map((b) => {
+                  const catBull = (b.score || 50) >= 50;
+                  const confirms = catBull === bullishLean;
+                  return (
+                    <div key={b.name} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5">
+                      <span className="w-24 shrink-0 truncate text-[12px] text-slate-200">{b.name}</span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
+                        <div className="h-full rounded-full" style={{ width: `${b.score}%`, backgroundColor: scoreColor(b.score) }} />
+                      </div>
+                      <span className="w-10 shrink-0 text-right text-[11px] font-mono text-slate-400">{b.score}</span>
+                      <span className={`w-16 shrink-0 text-right text-[10px] font-bold uppercase ${confirms ? 'text-emerald-400' : 'text-amber-400'}`}>{confirms ? 'Confirms' : 'Diverges'}</span>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+          <p className="border-t border-slate-800 pt-3 text-[10px] text-slate-600">Educational transparency into the decision engine — probabilities, not certainties. Not financial advice.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OverviewSection({ d, ticker }) {
+  const [inspect, setInspect] = React.useState(false);
   return (
     <div className="space-y-5">
       <SectionHead icon={LayoutDashboard} title="Overview" blurb={SECTIONS[0].blurb} />
+      <ThreeSecondHero d={d} onInspect={() => setInspect(true)} />
       <AiReview text={reviewOverview(d)} voice section="overview" footer={<TechnicalBreakdownLink d={d} dec={d.decision || {}} />} />
       {(d.symbol || 'BTC') === 'BTC' && <MorningBriefCard />}
       <MarketStateHero d={d} ticker={ticker} />
@@ -1028,6 +1168,7 @@ function OverviewSection({ d, ticker }) {
           </ul>
         </Card>
       </div>
+      {inspect && <InspectSignalDrawer d={d} onClose={() => setInspect(false)} />}
     </div>
   );
 }
@@ -1948,7 +2089,7 @@ const DIR_COLOR = {
   neutral: 'text-slate-400 border-slate-700 bg-slate-800/40',
 };
 
-function NewsCard({ c }) {
+function NewsCard({ c, compact }) {
   const ai = c.ai || {};
   const dir = ai.direction || 'neutral';
   const th = ai.time_horizons || {};
@@ -1957,6 +2098,17 @@ function NewsCard({ c }) {
     : c.verification === 'Unconfirmed' ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
     : 'border-slate-700 bg-slate-800/60 text-slate-300';
   const sources = c.sources && c.sources.length ? c.sources : [{ source: c.source, link: c.link, credibility: c.credibility }];
+  if (compact) {
+    return (
+      <Card className="border-0 bg-slate-900 p-3.5 ring-1 ring-slate-800">
+        <div className="flex items-center gap-2">
+          <span className={`rounded border px-2 py-1 text-[11px] font-semibold uppercase ${DIR_COLOR[dir]}`}>{dir}</span>
+          <a href={c.link} target="_blank" rel="noreferrer" className="flex-1 truncate text-sm font-semibold text-slate-100 hover:text-sky-300">{c.title}</a>
+          <span className="shrink-0 rounded-full bg-sky-500/10 px-2 py-1 text-[11px] font-bold text-sky-400">Impact {c.impact}</span>
+        </div>
+      </Card>
+    );
+  }
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
       <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -2005,6 +2157,7 @@ function NewsCard({ c }) {
 
 function NewsSection({ news, status, onRefresh, refreshing }) {
   const [filter, setFilter] = React.useState('all');
+  const [density, setDensity] = React.useState('expanded');
   const symbol = React.useContext(SymbolContext);
   if (status !== 'ready' || !news) {
     return (
@@ -2039,12 +2192,18 @@ function NewsSection({ news, status, onRefresh, refreshing }) {
       </Card>
       <div className="flex flex-wrap items-center gap-2">
         {['all', 'bullish', 'bearish', 'mixed', 'neutral'].map((f) => (
-          <button key={f} onClick={() => setFilter(f)} className={`rounded-lg px-3 py-1.5 text-xs font-medium capitalize ${filter === f ? 'bg-sky-500/15 text-sky-300' : 'bg-slate-800/60 text-slate-400 hover:text-slate-200'}`}>{f}</button>
+          <button key={f} onClick={() => setFilter(f)} className={`min-h-[40px] rounded-lg px-3 py-1.5 text-xs font-medium capitalize ${filter === f ? 'bg-sky-500/15 text-sky-300' : 'bg-slate-800/60 text-slate-400 hover:text-slate-200'}`}>{f}</button>
         ))}
-        <Button onClick={onRefresh} disabled={refreshing} size="sm" className="ml-auto gap-2 bg-slate-800 text-slate-100 hover:bg-slate-700"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh</Button>
+        <div className="ml-auto flex items-center gap-2">
+          <div className="flex items-center rounded-lg border border-slate-800 bg-slate-900 p-0.5" role="group" aria-label="Feed density">
+            <button onClick={() => setDensity('compact')} className={`min-h-[36px] rounded-md px-3 py-1 text-xs font-semibold ${density === 'compact' ? 'bg-sky-500/15 text-sky-300' : 'text-slate-400 hover:text-slate-200'}`}>Compact</button>
+            <button onClick={() => setDensity('expanded')} className={`min-h-[36px] rounded-md px-3 py-1 text-xs font-semibold ${density === 'expanded' ? 'bg-sky-500/15 text-sky-300' : 'text-slate-400 hover:text-slate-200'}`}>Expanded</button>
+          </div>
+          <Button onClick={onRefresh} disabled={refreshing} size="sm" className="min-h-[40px] gap-2 bg-slate-800 text-slate-100 hover:bg-slate-700"><RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />Refresh</Button>
+        </div>
       </div>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {cards.map((c, i) => <NewsCard key={i} c={c} />)}
+      <div className={density === 'compact' ? 'space-y-2' : 'grid grid-cols-1 gap-4 lg:grid-cols-2'}>
+        {cards.map((c, i) => <NewsCard key={i} c={c} compact={density === 'compact'} />)}
       </div>
       {cards.length === 0 && <p className="text-sm text-slate-500">No stories match this filter.</p>}
     </div>
