@@ -1462,7 +1462,7 @@ function AlertsSection({ d, alertsData, onAck }) {
   const fmtTs = (iso) => { try { return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); } catch { return iso; } };
   return (
     <div className="space-y-5">
-      <SectionHead icon={Bell} title="Smart Alerts" blurb={sec('alerts').blurb} />
+      <SectionHead icon={Bell} title="Smart Alerts" blurb={sec('alerts').blurb} coin={d.symbol || 'BTC'} />
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-4 flex items-center gap-2">
@@ -2691,6 +2691,7 @@ function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
 }
 
 function SettingsSection({ onManualRun }) {
+  const symbol = React.useContext(SymbolContext);
   const [pass, setPass] = React.useState('');
   const [saved, setSaved] = React.useState(false);
   React.useEffect(() => {
@@ -2709,7 +2710,7 @@ function SettingsSection({ onManualRun }) {
   ];
   return (
     <div className="space-y-5">
-      <SectionHead icon={Cpu} title="Settings" blurb={sec('settings').blurb} />
+      <SectionHead icon={Cpu} title="Settings" blurb={sec('settings').blurb} coin={symbol} />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-1 flex items-center gap-2 font-semibold text-white"><Lock className="h-4 w-4 text-amber-400" />Admin passcode</h3>
         <p className="mb-3 text-xs text-slate-500">Required to trigger a manual BitMarkAI forecast run. Stored only in this browser. Manual runs are rate-limited and audit-logged.</p>
