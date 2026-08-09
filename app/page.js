@@ -96,7 +96,7 @@ const SECTIONS = [
   { id: 'dataaudit', label: 'Data Audit', icon: Database,
     blurb: 'Where every number comes from and how much to trust it. A trust-scored composite Bitcoin price (median of Coinbase, Kraken, OKX, CoinGecko with outlier detection), broader cross-asset context, global news tone (GDELT) and US macro (FRED) — each tagged HIGH / MEDIUM / LOW confidence. No fabricated data.' },
   { id: 'settings', label: 'Settings', icon: Cpu,
-    blurb: 'Admin passcode for manual forecast runs, the list of data sources and their status, and BTCIQ’s about & compliance information.' },
+    blurb: 'Admin passcode for manual forecast runs, plus BTCIQ’s about & compliance information. (Live data-source status now lives in the Admin screen.)' },
   { id: 'admin', label: 'Admin', icon: ShieldCheck,
     blurb: 'Integrations, data-source freshness, usage, costs and system health for the BTCIQ platform.' },
 ];
@@ -1505,8 +1505,8 @@ function MarketIntelCard({ d }) {
         ))}
       </div>
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="text-[11px] font-semibold uppercase text-emerald-400">Primary Tailwind</p><p className="mt-1 text-sm text-slate-300">{mi.top_positive}</p></div>
-        <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><p className="text-[11px] font-semibold uppercase text-red-400">Primary Risk</p><p className="mt-1 text-sm text-slate-300">{mi.top_risk}</p></div>
+        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><div className="mb-1 flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-emerald-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] font-semibold uppercase text-emerald-400">Albert&apos;s Primary Tailwind</p></div><p className="mt-1 text-sm text-slate-300">{mi.top_positive}</p></div>
+        <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><div className="mb-1 flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-red-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] font-semibold uppercase text-red-400">Albert&apos;s Primary Risk</p></div><p className="mt-1 text-sm text-slate-300">{mi.top_risk}</p></div>
       </div>
     </Card>
   );
@@ -1726,8 +1726,8 @@ function PolicySection({ d }) {
           ))}
         </div>
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><p className="text-[11px] font-semibold uppercase text-emerald-400">Primary Tailwind</p><p className="mt-1 text-sm text-slate-300">{p.tailwind}</p></div>
-          <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><p className="text-[11px] font-semibold uppercase text-red-400">Primary Risk</p><p className="mt-1 text-sm text-slate-300">{p.risk}</p></div>
+          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><div className="mb-1 flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-emerald-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] font-semibold uppercase text-emerald-400">Albert&apos;s Primary Tailwind</p></div><p className="mt-1 text-sm text-slate-300">{p.tailwind}</p></div>
+          <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><div className="mb-1 flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-red-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] font-semibold uppercase text-red-400">Albert&apos;s Primary Risk</p></div><p className="mt-1 text-sm text-slate-300">{p.risk}</p></div>
         </div>
         <p className="mt-3 text-sm text-slate-400"><span className="font-semibold text-slate-200">Interpretation:</span> {p.interpretation}</p>
       </Card>
@@ -1806,7 +1806,7 @@ function AlertsSection({ d, alertsData, onAck, filter = 'BTC', onFilter, coins =
       </Card>
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <div className="mb-3 flex items-center gap-2"><Radio className="h-5 w-5 text-slate-400" /><h3 className="font-semibold text-slate-100">Current Market Read</h3><span className="text-sm text-slate-500">{live.length} active</span></div>
+        <div className="mb-3 flex items-center gap-2"><img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-slate-600" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><Radio className="h-5 w-5 text-slate-400" /><h3 className="font-semibold text-slate-100">Albert&apos;s Current Market Read</h3><span className="text-sm text-slate-500">{live.length} active</span></div>
         <div className="space-y-2">
           {live.map((a, i) => (
             <div key={i} className={`flex items-start gap-3 rounded-lg border p-3 ${styleFor(a.level)}`}>
@@ -2059,7 +2059,7 @@ function TimeMachineSection() {
               <p className="mt-2 text-xs text-slate-500">{fmtUsd(rep.close)} → {fmtUsd(rep.next_close)} next day</p>
             </Card>
             <Card className={`border-0 p-5 ring-1 ${correct ? 'bg-emerald-500/5 ring-emerald-500/25' : 'bg-red-500/5 ring-red-500/25'}`}>
-              <p className="text-[11px] uppercase tracking-wider text-slate-400">Verdict</p>
+              <div className="flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className={`h-6 w-6 rounded-full object-cover ring-1 ${correct ? 'ring-emerald-500/40' : 'ring-red-500/40'}`} onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] uppercase tracking-wider text-slate-400">Albert&apos;s Call</p></div>
               <div className="mt-2 flex items-center gap-2">
                 {correct ? <Check className="h-7 w-7 text-emerald-400" /> : <X className="h-7 w-7 text-red-400" />}
                 <span className={`text-3xl font-black ${correct ? 'text-emerald-400' : 'text-red-400'}`}>{correct ? 'Correct' : 'Missed'}</span>
@@ -4305,19 +4305,6 @@ function SettingsSection({ onManualRun }) {
     if (typeof window !== 'undefined') setPass(window.localStorage.getItem('btciq_admin_passcode') || '');
   }, []);
   const save = () => { if (typeof window !== 'undefined') { window.localStorage.setItem('btciq_admin_passcode', pass); setSaved(true); setTimeout(() => setSaved(false), 2000); } };
-  const sources = [
-    ['Market data (BTC OHLCV, live price)', 'ccxt · Kraken/Coinbase', 'Live'],
-    ['Dominance / market cap', 'CoinGecko', 'Live'],
-    ['Cross-market (equities, DXY, gold)', 'Yahoo Finance / Stooq', 'Live'],
-    ['News', 'RSS (CoinDesk, Cointelegraph, Fed…)', 'Live'],
-    ['On-chain / Smart Money', 'BGeometrics · blockchain.com · Glassnode', 'Live'],
-    ['Whale wallets (balances)', 'mempool.space · blockchain.com', 'Live'],
-    ['Derivatives (OI, funding, long/short)', 'OKX', 'Live'],
-    ['Sentiment (Fear & Greed)', 'alternative.me', 'Live'],
-    ['ETF flows (US spot BTC)', 'Farside · bitbo mirror', 'Live'],
-    ['Order-book / IV / liquidations', 'Deribit / CoinGlass', 'Inactive — paid feed'],
-    ['Social sentiment', 'LunarCrush', 'Inactive — paid feed'],
-  ];
   return (
     <div className="space-y-5">
       <SectionHead icon={Cpu} title="Settings" blurb={sec('settings').blurb} coin={symbol} />
@@ -4329,18 +4316,6 @@ function SettingsSection({ onManualRun }) {
             className="w-64 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-sky-500/50 focus:outline-none" />
           <Button onClick={save} className="bg-sky-500 hover:bg-sky-400">Save</Button>
           {saved && <span className="text-xs font-semibold text-emerald-400">Saved ✓</span>}
-        </div>
-      </Card>
-      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <h3 className="mb-3 font-semibold text-white">Data sources</h3>
-        <div className="space-y-1.5">
-          {sources.map(([name, prov, status], i) => (
-            <div key={i} className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5 text-sm">
-              <span className="flex-1 text-slate-300">{name}</span>
-              <span className="text-[11px] text-slate-500">{prov}</span>
-              <span className={`w-32 text-right text-xs font-semibold ${status === 'Live' ? 'text-emerald-400' : 'text-amber-300'}`}>{status}</span>
-            </div>
-          ))}
         </div>
       </Card>
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
