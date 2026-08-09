@@ -1143,9 +1143,9 @@ function OverviewSection({ d, ticker }) {
   return (
     <div className="space-y-5">
       <SectionHead icon={LayoutDashboard} title="Overview" blurb={SECTIONS[0].blurb} />
+      {(d.symbol || 'BTC') === 'BTC' && <MorningBriefCard />}
       <ThreeSecondHero d={d} onInspect={() => setInspect(true)} />
       <AiReview text={reviewOverview(d)} voice section="overview" footer={<TechnicalBreakdownLink d={d} dec={d.decision || {}} />} />
-      {(d.symbol || 'BTC') === 'BTC' && <MorningBriefCard />}
       <MarketStateHero d={d} ticker={ticker} />
       <OverviewChart d={d} />
       <DecisionEngineCard d={d} />
