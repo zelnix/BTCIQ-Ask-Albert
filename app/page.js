@@ -1152,7 +1152,7 @@ function OverviewSection({ d, ticker }) {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <div className="mb-3 flex items-center gap-2"><TrendingUp className="h-5 w-5 text-emerald-400" /><h3 className="font-semibold text-slate-100">Top Bullish Factors</h3></div>
+          <div className="mb-3 flex items-center gap-2"><img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-emerald-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><TrendingUp className="h-5 w-5 text-emerald-400" /><h3 className="font-semibold text-slate-100">Albert's Top Bullish Factors</h3></div>
           <ul className="space-y-2">
             {d.factors.bullish.map((t, i) => (
               <li key={i} className="flex gap-2 text-sm text-slate-300"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />{t}</li>
@@ -1160,7 +1160,7 @@ function OverviewSection({ d, ticker }) {
           </ul>
         </Card>
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <div className="mb-3 flex items-center gap-2"><TrendingDown className="h-5 w-5 text-red-400" /><h3 className="font-semibold text-slate-100">Top Risk Factors</h3></div>
+          <div className="mb-3 flex items-center gap-2"><img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-red-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><TrendingDown className="h-5 w-5 text-red-400" /><h3 className="font-semibold text-slate-100">Albert's Top Risk Factors</h3></div>
           <ul className="space-y-2">
             {d.factors.risk.map((t, i) => (
               <li key={i} className="flex gap-2 text-sm text-slate-300"><X className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />{t}</li>
@@ -1358,6 +1358,23 @@ function AnalysisSection({ d }) {
             <span className="ml-auto text-2xl font-bold text-white">{d.confidence}%</span>
           </div>
           <p className="mt-2 text-xs text-slate-500">P(Up) {d.prob_up}% · P(Down) {d.prob_down}% · predicts {d.predict_for_date}</p>
+          <div className="mt-3 flex items-start gap-2.5 rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+            <img src="/albert.png" alt="Albert" className={`h-8 w-8 shrink-0 rounded-full object-cover ring-2 ${isUp ? 'ring-emerald-500/40' : 'ring-red-500/40'}`} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-wider text-sky-400">Albert&apos;s Call</p>
+              <p className="mt-0.5 text-xs leading-relaxed text-slate-300">
+                {(() => {
+                  const conf = d.confidence || 0;
+                  const strength = conf >= 65 ? 'a firm' : conf >= 55 ? 'a moderate' : 'only a slight';
+                  const dirWord = isUp ? 'higher' : 'lower';
+                  const caveat = conf < 55
+                    ? "This is close to a coin-flip, so I'd keep conviction low."
+                    : 'Treat it as odds, not a certainty.';
+                  return `I'm leaning ${dirWord} for ${d.predict_for_date} with ${strength} ${conf}% read (P↑ ${d.prob_up}% / P↓ ${d.prob_down}%). ${caveat}`;
+                })()}
+              </p>
+            </div>
+          </div>
         </Card>
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800 lg:col-span-2">
           <div className="mb-3 flex items-center gap-2"><Waves className="h-5 w-5 text-slate-400" /><h3 className="font-semibold text-slate-100">TimeSeriesSplit Cross-Validation</h3><span className="text-xs text-slate-500">(no future leakage)</span></div>
