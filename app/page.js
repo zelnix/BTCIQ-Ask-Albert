@@ -6065,8 +6065,25 @@ export default function DashboardPage() {
   }, [load, symbol]);
 
   const handleRefresh = async () => {
+    const passcode = (typeof window !== 'undefined' && window.localStorage.getItem('btciq_admin_passcode')) || '';
     setRefreshing(true);
-    await fetch('/api/v1/refresh', { method: 'POST' });
+    try {
+      const r = await fetch('/api/v1/refresh', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ passcode }),
+      });
+      if (r.status === 401) {
+        setRefreshing(false);
+        if (typeof window !== 'undefined') window.alert('Admin passcode required — set it in Settings to run a full recompute.');
+        return;
+      }
+      if (r.status === 429) {
+        setRefreshing(false);
+        if (typeof window !== 'undefined') window.alert('Too many refreshes — please wait a moment and try again.');
+        return;
+      }
+    } catch (e) { /* noop */ }
     const id = setInterval(load, 4000);
     setTimeout(() => clearInterval(id), 90000);
   };

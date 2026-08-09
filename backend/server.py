@@ -21,6 +21,7 @@ import threading
 import datetime
 import traceback
 import urllib.request
+import hmac
 
 import requests
 
@@ -35,7 +36,8 @@ except Exception:  # noqa
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -134,12 +136,69 @@ def compute_live_record():
     }
 
 app = FastAPI(title='BTC Predictive AI Engine')
+# CORS: the browser talks to the backend only through the same-origin Next.js /api proxy,
+# so lock direct cross-origin access to known origins (env-overridable) instead of '*'.
+_cors_env = os.environ.get('CORS_ORIGINS', '')
+_cors_origins = [o.strip() for o in _cors_env.split(',') if o.strip()]
+if not _cors_origins:
+    _base = os.environ.get('NEXT_PUBLIC_BASE_URL', '').strip().rstrip('/')
+    _cors_origins = [o for o in [_base, 'http://localhost:3000', 'http://localhost:8001'] if o]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=['*'],
-    allow_methods=['*'],
+    allow_origins=_cors_origins or ['http://localhost:3000'],
+    allow_methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allow_headers=['*'],
 )
+
+
+# ---- Lightweight in-memory per-client rate limiter (cost/DoS guard) ----
+_rl_lock = threading.Lock()
+_rl_hits = {}  # key -> [timestamps]
+
+
+def _client_key(request):
+    try:
+        xff = request.headers.get('x-forwarded-for') or request.headers.get('x-real-ip')
+        if xff:
+            return xff.split(',')[0].strip()
+        return request.client.host if request.client else 'unknown'
+    except Exception:  # noqa
+        return 'unknown'
+
+
+def _rate_limited(request, bucket, per_min=15, per_day=300):
+    """Return True if this client has exceeded the limit for `bucket`."""
+    now = time.time()
+    key = f'{bucket}:{_client_key(request)}'
+    with _rl_lock:
+        hits = [t for t in _rl_hits.get(key, []) if now - t < 86400]
+        recent = sum(1 for t in hits if now - t < 60)
+        if recent >= per_min or len(hits) >= per_day:
+            _rl_hits[key] = hits
+            return True
+        hits.append(now)
+        _rl_hits[key] = hits
+        return False
+
+
+def _passcode_ok(supplied):
+    """Constant-time admin passcode check. Denies if no passcode is configured."""
+    expected = ADMIN_PASSCODE or ''
+    supplied = supplied or ''
+    if not expected:
+        return False
+    return hmac.compare_digest(str(supplied), str(expected))
+
+
+def _too_many(request, bucket, per_min=15, per_day=300):
+    """Return a JSONResponse(429) if rate-limited, else None."""
+    if _rate_limited(request, bucket, per_min=per_min, per_day=per_day):
+        return JSONResponse(
+            status_code=429,
+            content={'status': 'rate_limited',
+                     'error': 'Too many requests — please slow down and try again shortly.'},
+        )
+    return None
 
 _state = {'status': 'idle', 'error': None, 'started_at': None}
 _lock = threading.Lock()
@@ -4331,7 +4390,17 @@ def dashboard(symbol: str = 'BTC'):
 
 
 @app.post('/api/v1/refresh')
-def refresh():
+def refresh(request: Request, payload: dict = Body(default={})):
+    # Expensive full recompute — gate behind admin passcode + per-client rate limit.
+    limited = _too_many(request, 'refresh', per_min=3, per_day=50)
+    if limited is not None:
+        return limited
+    if not _passcode_ok((payload or {}).get('passcode', '')):
+        audit_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
+                              'action': 'refresh', 'result': 'denied', 'reason': 'bad_passcode'})
+        return JSONResponse(status_code=401, content={
+            'status': 'unauthorized',
+            'message': 'A valid admin passcode is required to trigger a full recompute. Enter it in Settings.'})
     threading.Thread(target=run_compute_bg, daemon=True).start()
     return {'status': 'started'}
 
@@ -4362,7 +4431,10 @@ def news(symbol: str = 'BTC'):
 
 
 @app.post('/api/v1/news/refresh')
-def news_refresh():
+def news_refresh(request: Request):
+    limited = _too_many(request, 'news_refresh', per_min=3, per_day=60)
+    if limited is not None:
+        return limited
     threading.Thread(target=run_news_bg, daemon=True).start()
     return {'status': 'started'}
 
@@ -4945,7 +5017,7 @@ def scenarios():
 def bitmark_run(payload: dict = Body(default={})):
     import time
     passcode = (payload or {}).get('passcode', '')
-    if passcode != ADMIN_PASSCODE:
+    if not _passcode_ok(passcode):
         audit_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
                               'action': 'manual_forecast_run', 'result': 'denied', 'reason': 'bad_passcode'})
         return {'status': 'unauthorized',
@@ -5131,7 +5203,10 @@ def _section_live_context(section, symbol='BTC'):
 
 
 @app.post('/api/v1/chat')
-def chat_endpoint(payload: dict = Body(...)):
+def chat_endpoint(request: Request, payload: dict = Body(...)):
+    limited = _too_many(request, 'chat', per_min=15, per_day=300)
+    if limited is not None:
+        return limited
     session_id = (str(payload.get('session_id') or uuid.uuid4()))[:80]
     message = (payload.get('message') or '').strip()[:2000]
     if not message:
@@ -5279,7 +5354,7 @@ def _latest_run_version():
 
 
 @app.get('/api/v1/albert/insight')
-async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh: int = 0, symbol: str = 'BTC'):
+async def albert_insight(request: Request, section: str = 'overview', mode: str = 'plain', refresh: int = 0, symbol: str = 'BTC'):
     section = (section or 'overview').strip().lower()[:40]
     mode = 'technical' if str(mode).lower().startswith('tech') else 'plain'
     symbol = (symbol or 'BTC').strip().upper()[:6]
@@ -5298,6 +5373,9 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
             return {'status': 'ready', 'section': section, 'mode': mode, 'text': cached['text'], 'model': cached.get('model'), 'generated_at': cached.get('created_at'), 'cached': True}
     if not (EMERGENT_LLM_KEY and _HAS_LLM):
         return {'status': 'fallback', 'reason': 'llm_unconfigured'}
+    # About to call the LLM (cache miss / refresh) — guard against cost abuse.
+    if _rate_limited(request, 'albert_insight', per_min=20, per_day=400):
+        return {'status': 'fallback', 'reason': 'rate_limited'}
     try:
         ctx = build_chat_context(symbol)
         focus = SECTION_FOCUS.get(section, "Explain what this section means for the asset's price and outlook in plain English.")
@@ -5563,7 +5641,7 @@ def _brief_context():
 
 
 @app.get('/api/v1/albert/brief')
-async def albert_brief(refresh: int = 0):
+async def albert_brief(request: Request, refresh: int = 0):
     """Albert's Morning Brief — one auto-generated daily summary of the whole market state."""
     today = datetime.date.today().isoformat()
     cache_id = f'brief:{today}'
@@ -5571,6 +5649,8 @@ async def albert_brief(refresh: int = 0):
         c = insights_col.find_one({'_id': cache_id}, {'_id': 0})
         if c and c.get('text'):
             return {'status': 'ready', 'cached': True, **c}
+    if _rate_limited(request, 'albert_brief', per_min=10, per_day=200):
+        return {'status': 'computing', 'reason': 'rate_limited'}
     try:
         ctx, as_of = _brief_context()
         if not ctx.strip():

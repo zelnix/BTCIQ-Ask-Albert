@@ -1,296 +1,381 @@
 #!/usr/bin/env python3
 """
-Backend test for Ask Albert per-screen data grounding (POST /api/v1/chat with section).
-Tests 5 cases: leverage, whales, dataaudit, overview, empty message.
+Security Hardening Backend Test Suite
+Tests admin passcode gates, rate limiting, and HMAC checks on the BitMarkAI FastAPI backend.
 """
-
 import requests
 import time
-import json
+import sys
 
+# External URL with /api prefix (Next.js proxy forwards to FastAPI :8001)
 BASE_URL = "https://quant-features.preview.emergentagent.com/api/v1"
-TIMEOUT = 90  # LLM calls can take time
+ADMIN_PASSCODE = "btciq-admin"
 
-def test_chat_grounding():
-    """Test Ask Albert per-screen live data grounding."""
-    
-    print("=" * 80)
-    print("TESTING: Ask Albert per-screen data grounding (POST /api/v1/chat)")
-    print("=" * 80)
-    
-    test_cases = [
-        {
-            "name": "LEVERAGE SECTION",
-            "session_id": "t1",
-            "message": "What is the exact open interest, funding rate and squeeze risk right now?",
-            "section": "leverage",
-            "expected_keywords": ["open interest", "funding", "squeeze"],
-            "anti_mock_keywords": ["no liquidation", "no heatmap", "not available", "unavailable"],
-            "description": "Should mention OI/funding/squeeze numbers AND state NO liquidation/heatmap data"
-        },
-        {
-            "name": "WHALES SECTION",
-            "session_id": "t2",
-            "message": "Are whales accumulating or distributing? Give exact BTC flow numbers.",
-            "section": "whales",
-            "expected_keywords": ["btc", "flow", "binance", "coinbase", "etf"],
-            "anti_mock_keywords": [],
-            "description": "Should mention net BTC flow and named entities (e.g., Binance) and/or ETF flows"
-        },
-        {
-            "name": "DATA AUDIT SECTION",
-            "session_id": "t3",
-            "message": "What is the composite price, how confident are we, and what is the macro backdrop?",
-            "section": "dataaudit",
-            "expected_keywords": ["composite", "price", "confidence", "high", "medium", "low", "fed", "treasury", "macro"],
-            "anti_mock_keywords": [],
-            "description": "Should mention composite price + HIGH/MEDIUM/LOW confidence + FRED macro (Fed Funds/10Y)"
-        },
-        {
-            "name": "OVERVIEW SECTION",
-            "session_id": "t4",
-            "message": "Give me the 10-second read on Bitcoin right now.",
-            "section": "overview",
-            "expected_keywords": [],
-            "anti_mock_keywords": [],
-            "description": "Non-empty general answer"
-        },
-        {
-            "name": "EMPTY MESSAGE",
-            "session_id": "t5",
-            "message": "",
-            "section": "overview",
-            "expected_keywords": ["empty", "question"],
-            "anti_mock_keywords": [],
-            "description": "Should return friendly error (no 500)"
-        }
-    ]
-    
-    results = []
-    
-    for i, test in enumerate(test_cases, 1):
-        print(f"\n{'=' * 80}")
-        print(f"TEST {i}/{len(test_cases)}: {test['name']}")
-        print(f"{'=' * 80}")
-        print(f"Description: {test['description']}")
-        print(f"Session ID: {test['session_id']}")
-        print(f"Section: {test['section']}")
-        print(f"Message: {test['message'][:80]}{'...' if len(test['message']) > 80 else ''}")
-        
-        try:
-            # Make request
-            url = f"{BASE_URL}/chat"
-            payload = {
-                "session_id": test['session_id'],
-                "message": test['message'],
-                "section": test['section']
-            }
-            
-            print(f"\nSending POST {url}")
-            print(f"Payload: {json.dumps(payload, indent=2)}")
-            
-            start_time = time.time()
-            response = requests.post(url, json=payload, timeout=TIMEOUT)
-            elapsed = time.time() - start_time
-            
-            print(f"Response time: {elapsed:.2f}s")
-            print(f"HTTP Status: {response.status_code}")
-            
-            # Check HTTP 200
-            if response.status_code != 200:
-                print(f"❌ FAILED: Expected HTTP 200, got {response.status_code}")
-                print(f"Response: {response.text[:500]}")
-                results.append({
-                    "test": test['name'],
-                    "passed": False,
-                    "reason": f"HTTP {response.status_code}"
-                })
-                continue
-            
-            data = response.json()
-            print(f"Response keys: {list(data.keys())}")
-            
-            # Check for error field (empty message case)
-            if test['name'] == "EMPTY MESSAGE":
-                if 'error' in data and data['error'] == 'empty message':
-                    print(f"✅ PASSED: Empty message handled gracefully")
-                    print(f"Error message: {data.get('text', '')}")
-                    results.append({
-                        "test": test['name'],
-                        "passed": True,
-                        "text_length": len(data.get('text', '')),
-                        "text_preview": data.get('text', '')[:200]
-                    })
-                    continue
-                else:
-                    print(f"❌ FAILED: Expected 'error' field with 'empty message'")
-                    print(f"Response: {json.dumps(data, indent=2)[:500]}")
-                    results.append({
-                        "test": test['name'],
-                        "passed": False,
-                        "reason": "Missing error field for empty message"
-                    })
-                    continue
-            
-            # Check required fields
-            if 'text' not in data:
-                print(f"❌ FAILED: Missing 'text' field")
-                print(f"Response: {json.dumps(data, indent=2)[:500]}")
-                results.append({
-                    "test": test['name'],
-                    "passed": False,
-                    "reason": "Missing 'text' field"
-                })
-                continue
-            
-            if 'model' not in data:
-                print(f"❌ FAILED: Missing 'model' field")
-                results.append({
-                    "test": test['name'],
-                    "passed": False,
-                    "reason": "Missing 'model' field"
-                })
-                continue
-            
-            text = data['text']
-            model = data['model']
-            text_length = len(text)
-            
-            print(f"\nModel: {model}")
-            print(f"Text length: {text_length} chars")
-            print(f"Text preview (first 200 chars): {text[:200]}")
-            print(f"Text preview (last 100 chars): ...{text[-100:]}")
-            
-            # Check text length (>200 chars, NOT truncated to a few words)
-            if text_length < 200:
-                print(f"❌ FAILED: Text too short ({text_length} chars < 200 chars)")
-                print(f"Full text: {text}")
-                results.append({
-                    "test": test['name'],
-                    "passed": False,
-                    "reason": f"Text too short ({text_length} chars)",
-                    "text_length": text_length,
-                    "text_preview": text[:200]
-                })
-                continue
-            
-            # Check for expected keywords (if any)
-            text_lower = text.lower()
-            found_keywords = []
-            missing_keywords = []
-            
-            if test['expected_keywords']:
-                for keyword in test['expected_keywords']:
-                    if keyword.lower() in text_lower:
-                        found_keywords.append(keyword)
-                    else:
-                        missing_keywords.append(keyword)
-                
-                print(f"\nKeyword check:")
-                print(f"  Expected keywords: {test['expected_keywords']}")
-                print(f"  Found: {found_keywords}")
-                if missing_keywords:
-                    print(f"  Missing: {missing_keywords}")
-            
-            # Check for anti-mock keywords (leverage case)
-            anti_mock_found = []
-            if test['anti_mock_keywords']:
-                for keyword in test['anti_mock_keywords']:
-                    if keyword.lower() in text_lower:
-                        anti_mock_found.append(keyword)
-                
-                print(f"\nAnti-mock check (should mention NO liquidation/heatmap data):")
-                print(f"  Anti-mock keywords: {test['anti_mock_keywords']}")
-                print(f"  Found: {anti_mock_found}")
-                
-                if not anti_mock_found:
-                    print(f"⚠️  WARNING: Expected anti-mock statement (NO liquidation/heatmap data) not found")
-            
-            # Determine pass/fail
-            passed = True
-            reason = "All checks passed"
-            
-            # For leverage, we need at least one anti-mock keyword
-            if test['name'] == "LEVERAGE SECTION" and not anti_mock_found:
-                passed = False
-                reason = "Missing anti-mock statement (NO liquidation/heatmap data)"
-            
-            # For whales, we need at least one expected keyword
-            if test['name'] == "WHALES SECTION" and not found_keywords:
-                passed = False
-                reason = "Missing expected keywords (BTC flow, entity names, ETF)"
-            
-            # For dataaudit, we need at least 2 expected keywords
-            if test['name'] == "DATA AUDIT SECTION" and len(found_keywords) < 2:
-                passed = False
-                reason = f"Missing expected keywords (found {len(found_keywords)}/3+)"
-            
-            if passed:
-                print(f"\n✅ PASSED: {test['name']}")
-            else:
-                print(f"\n❌ FAILED: {test['name']} - {reason}")
-            
-            results.append({
-                "test": test['name'],
-                "passed": passed,
-                "reason": reason,
-                "text_length": text_length,
-                "text_preview": text[:200],
-                "found_keywords": found_keywords,
-                "anti_mock_found": anti_mock_found,
-                "model": model,
-                "elapsed": elapsed
-            })
-            
-        except requests.exceptions.Timeout:
-            print(f"❌ FAILED: Request timeout (>{TIMEOUT}s)")
-            results.append({
-                "test": test['name'],
-                "passed": False,
-                "reason": f"Timeout (>{TIMEOUT}s)"
-            })
-        except Exception as e:
-            print(f"❌ FAILED: Exception: {e}")
-            import traceback
-            traceback.print_exc()
-            results.append({
-                "test": test['name'],
-                "passed": False,
-                "reason": f"Exception: {e}"
-            })
-    
-    # Summary
-    print("\n" + "=" * 80)
-    print("SUMMARY")
-    print("=" * 80)
-    
-    passed_count = sum(1 for r in results if r['passed'])
-    total_count = len(results)
-    
-    for result in results:
-        status = "✅ PASSED" if result['passed'] else "❌ FAILED"
-        print(f"{status}: {result['test']}")
-        if not result['passed']:
-            print(f"  Reason: {result['reason']}")
-        else:
-            if 'text_length' in result:
-                print(f"  Text length: {result['text_length']} chars")
-            if 'text_preview' in result:
-                print(f"  Preview: {result['text_preview'][:100]}...")
-            if 'found_keywords' in result and result['found_keywords']:
-                print(f"  Found keywords: {result['found_keywords']}")
-            if 'anti_mock_found' in result and result['anti_mock_found']:
-                print(f"  Anti-mock found: {result['anti_mock_found']}")
-    
-    print(f"\nTotal: {passed_count}/{total_count} tests passed")
-    
-    if passed_count == total_count:
-        print("\n🎉 ALL TESTS PASSED!")
-        return True
+# Test results tracking
+tests_passed = 0
+tests_failed = 0
+test_results = []
+
+def log_test(test_name, passed, details=""):
+    global tests_passed, tests_failed
+    if passed:
+        tests_passed += 1
+        status = "✅ PASSED"
     else:
-        print(f"\n⚠️  {total_count - passed_count} test(s) failed")
+        tests_failed += 1
+        status = "❌ FAILED"
+    
+    result = f"{status}: {test_name}"
+    if details:
+        result += f" - {details}"
+    print(result)
+    test_results.append({"test": test_name, "passed": passed, "details": details})
+
+def test_refresh_no_body():
+    """Test POST /api/v1/refresh with no body -> HTTP 401 {status:'unauthorized'}"""
+    print("\n=== TEST 1: POST /api/v1/refresh (no body) ===")
+    try:
+        response = requests.post(f"{BASE_URL}/refresh", json={}, timeout=30)
+        status_code = response.status_code
+        data = response.json()
+        
+        passed = (status_code == 401 and data.get('status') == 'unauthorized')
+        log_test("POST /api/v1/refresh (no body)", passed, 
+                f"HTTP {status_code}, status='{data.get('status')}'")
+        return passed
+    except Exception as e:
+        log_test("POST /api/v1/refresh (no body)", False, f"Exception: {e}")
         return False
 
+def test_refresh_wrong_passcode():
+    """Test POST /api/v1/refresh with wrong passcode -> HTTP 401 {status:'unauthorized'}"""
+    print("\n=== TEST 2: POST /api/v1/refresh (wrong passcode) ===")
+    try:
+        response = requests.post(f"{BASE_URL}/refresh", json={"passcode": "wrong"}, timeout=30)
+        status_code = response.status_code
+        data = response.json()
+        
+        passed = (status_code == 401 and data.get('status') == 'unauthorized')
+        log_test("POST /api/v1/refresh (wrong passcode)", passed,
+                f"HTTP {status_code}, status='{data.get('status')}'")
+        return passed
+    except Exception as e:
+        log_test("POST /api/v1/refresh (wrong passcode)", False, f"Exception: {e}")
+        return False
+
+def test_refresh_correct_passcode():
+    """Test POST /api/v1/refresh with correct passcode -> HTTP 200 {status:'started'}"""
+    print("\n=== TEST 3: POST /api/v1/refresh (correct passcode) ===")
+    try:
+        response = requests.post(f"{BASE_URL}/refresh", json={"passcode": ADMIN_PASSCODE}, timeout=30)
+        status_code = response.status_code
+        data = response.json()
+        
+        passed = (status_code == 200 and data.get('status') == 'started')
+        log_test("POST /api/v1/refresh (correct passcode)", passed,
+                f"HTTP {status_code}, status='{data.get('status')}'")
+        return passed
+    except Exception as e:
+        log_test("POST /api/v1/refresh (correct passcode)", False, f"Exception: {e}")
+        return False
+
+def test_refresh_rate_limit():
+    """Test POST /api/v1/refresh rate limit (>3 valid requests within ~60s -> HTTP 429)"""
+    print("\n=== TEST 4: POST /api/v1/refresh (rate limit >3/min) ===")
+    print("Sending 4 valid requests with correct passcode...")
+    
+    try:
+        # Send 4 requests (3 should succeed, 4th should be rate-limited)
+        responses = []
+        for i in range(4):
+            response = requests.post(f"{BASE_URL}/refresh", json={"passcode": ADMIN_PASSCODE}, timeout=30)
+            responses.append({
+                "attempt": i + 1,
+                "status_code": response.status_code,
+                "data": response.json()
+            })
+            print(f"  Attempt {i+1}: HTTP {response.status_code}, status='{response.json().get('status')}'")
+            time.sleep(0.5)  # Small delay between requests
+        
+        # Check that at least one request returned HTTP 429 with status='rate_limited'
+        rate_limited = any(r['status_code'] == 429 and r['data'].get('status') == 'rate_limited' 
+                          for r in responses)
+        
+        passed = rate_limited
+        log_test("POST /api/v1/refresh (rate limit)", passed,
+                f"Rate limit triggered: {rate_limited}")
+        return passed
+    except Exception as e:
+        log_test("POST /api/v1/refresh (rate limit)", False, f"Exception: {e}")
+        return False
+
+def test_chat_basic():
+    """Test POST /api/v1/chat basic functionality -> HTTP 200 with non-empty text"""
+    print("\n=== TEST 5: POST /api/v1/chat (basic) ===")
+    try:
+        response = requests.post(f"{BASE_URL}/chat", 
+                                json={"session_id": "sectest", "message": "hi"}, 
+                                timeout=90)
+        status_code = response.status_code
+        data = response.json()
+        
+        text = data.get('text', '')
+        passed = (status_code == 200 and len(text) > 0)
+        log_test("POST /api/v1/chat (basic)", passed,
+                f"HTTP {status_code}, text length={len(text)} chars")
+        return passed
+    except Exception as e:
+        log_test("POST /api/v1/chat (basic)", False, f"Exception: {e}")
+        return False
+
+def test_chat_rate_limit():
+    """Test POST /api/v1/chat rate limit (>15 requests within ~60s -> HTTP 429)"""
+    print("\n=== TEST 6: POST /api/v1/chat (rate limit >15/min) ===")
+    print("Sending 16 chat requests...")
+    
+    try:
+        # Send 16 requests (15 should succeed, 16th should be rate-limited)
+        responses = []
+        for i in range(16):
+            response = requests.post(f"{BASE_URL}/chat",
+                                    json={"session_id": "sectest", "message": f"test {i}"},
+                                    timeout=90)
+            try:
+                data = response.json()
+            except Exception:  # noqa
+                # If JSON parsing fails, it might be a 429 with non-JSON response
+                data = {"status": "unknown", "text": response.text[:100]}
+            
+            responses.append({
+                "attempt": i + 1,
+                "status_code": response.status_code,
+                "data": data
+            })
+            if i < 5 or i >= 14:  # Only print first 5 and last 2
+                print(f"  Attempt {i+1}: HTTP {response.status_code}, status='{data.get('status', 'ok')}'")
+            elif i == 5:
+                print(f"  ... (attempts 6-14) ...")
+            time.sleep(0.2)  # Small delay between requests
+        
+        # Check that at least one request returned HTTP 429 with status='rate_limited'
+        rate_limited = any(r['status_code'] == 429 and r['data'].get('status') == 'rate_limited'
+                          for r in responses)
+        
+        passed = rate_limited
+        log_test("POST /api/v1/chat (rate limit)", passed,
+                f"Rate limit triggered: {rate_limited}")
+        return passed
+    except Exception as e:
+        log_test("POST /api/v1/chat (rate limit)", False, f"Exception: {e}")
+        return False
+
+def test_bitmark_no_passcode():
+    """Test POST /api/v1/bitmark/run with no passcode -> {status:'unauthorized'}"""
+    print("\n=== TEST 7: POST /api/v1/bitmark/run (no passcode) ===")
+    try:
+        response = requests.post(f"{BASE_URL}/bitmark/run", json={}, timeout=30)
+        data = response.json()
+        
+        passed = (data.get('status') == 'unauthorized')
+        log_test("POST /api/v1/bitmark/run (no passcode)", passed,
+                f"status='{data.get('status')}'")
+        return passed
+    except Exception as e:
+        log_test("POST /api/v1/bitmark/run (no passcode)", False, f"Exception: {e}")
+        return False
+
+def test_bitmark_correct_passcode():
+    """Test POST /api/v1/bitmark/run with correct passcode -> status in [started, busy, rate_limited]"""
+    print("\n=== TEST 8: POST /api/v1/bitmark/run (correct passcode) ===")
+    try:
+        response = requests.post(f"{BASE_URL}/bitmark/run", 
+                                json={"passcode": ADMIN_PASSCODE}, 
+                                timeout=30)
+        data = response.json()
+        status = data.get('status')
+        
+        # Must NOT be 'unauthorized', should be one of: started, busy, rate_limited
+        passed = (status in ['started', 'busy', 'rate_limited'])
+        log_test("POST /api/v1/bitmark/run (correct passcode)", passed,
+                f"status='{status}' (expected: started/busy/rate_limited, NOT unauthorized)")
+        return passed
+    except Exception as e:
+        log_test("POST /api/v1/bitmark/run (correct passcode)", False, f"Exception: {e}")
+        return False
+
+def test_albert_insight():
+    """Test GET /api/v1/albert/insight?section=overview -> status in [ready, fallback], no 500"""
+    print("\n=== TEST 9: GET /api/v1/albert/insight?section=overview ===")
+    try:
+        response = requests.get(f"{BASE_URL}/albert/insight?section=overview", timeout=90)
+        status_code = response.status_code
+        data = response.json()
+        status = data.get('status')
+        
+        passed = (status_code != 500 and status in ['ready', 'fallback'])
+        log_test("GET /api/v1/albert/insight (first call)", passed,
+                f"HTTP {status_code}, status='{status}'")
+        
+        # Second identical call should return cached=true
+        if passed:
+            print("  Testing second call for caching...")
+            response2 = requests.get(f"{BASE_URL}/albert/insight?section=overview", timeout=90)
+            data2 = response2.json()
+            cached = data2.get('cached', False)
+            print(f"  Second call: cached={cached}")
+            log_test("GET /api/v1/albert/insight (cached)", cached,
+                    f"cached={cached}")
+        
+        return passed
+    except Exception as e:
+        log_test("GET /api/v1/albert/insight", False, f"Exception: {e}")
+        return False
+
+def test_news_refresh():
+    """Test POST /api/v1/news/refresh -> {status:'started'} once; >3/min -> HTTP 429"""
+    print("\n=== TEST 10: POST /api/v1/news/refresh ===")
+    try:
+        # First call should return status='started'
+        response = requests.post(f"{BASE_URL}/news/refresh", timeout=30)
+        status_code = response.status_code
+        data = response.json()
+        
+        passed = (status_code == 200 and data.get('status') == 'started')
+        log_test("POST /api/v1/news/refresh (first call)", passed,
+                f"HTTP {status_code}, status='{data.get('status')}'")
+        
+        # Hammer >3/min to trigger rate limit
+        print("  Testing rate limit (sending 4 more requests)...")
+        rate_limited = False
+        for i in range(4):
+            response = requests.post(f"{BASE_URL}/news/refresh", timeout=30)
+            if response.status_code == 429:
+                rate_limited = True
+                print(f"  Attempt {i+2}: HTTP 429 (rate limited)")
+                break
+            else:
+                print(f"  Attempt {i+2}: HTTP {response.status_code}")
+            time.sleep(0.5)
+        
+        log_test("POST /api/v1/news/refresh (rate limit)", rate_limited,
+                f"Rate limit triggered: {rate_limited}")
+        
+        return passed
+    except Exception as e:
+        log_test("POST /api/v1/news/refresh", False, f"Exception: {e}")
+        return False
+
+def test_regression_dashboard():
+    """Regression: GET /api/v1/dashboard -> status='ready'"""
+    print("\n=== REGRESSION TEST 1: GET /api/v1/dashboard ===")
+    try:
+        response = requests.get(f"{BASE_URL}/dashboard", timeout=30)
+        status_code = response.status_code
+        data = response.json()
+        
+        passed = (status_code == 200 and data.get('status') == 'ready')
+        log_test("GET /api/v1/dashboard", passed,
+                f"HTTP {status_code}, status='{data.get('status')}'")
+        return passed
+    except Exception as e:
+        log_test("GET /api/v1/dashboard", False, f"Exception: {e}")
+        return False
+
+def test_regression_ticker():
+    """Regression: GET /api/v1/ticker -> returns a numeric price"""
+    print("\n=== REGRESSION TEST 2: GET /api/v1/ticker ===")
+    try:
+        response = requests.get(f"{BASE_URL}/ticker", timeout=30)
+        status_code = response.status_code
+        data = response.json()
+        price = data.get('price')
+        
+        passed = (status_code == 200 and isinstance(price, (int, float)) and price > 0)
+        log_test("GET /api/v1/ticker", passed,
+                f"HTTP {status_code}, price=${price:,.2f}" if passed else f"HTTP {status_code}, price={price}")
+        return passed
+    except Exception as e:
+        log_test("GET /api/v1/ticker", False, f"Exception: {e}")
+        return False
+
+def test_regression_health():
+    """Regression: GET /api/v1/health -> status='ok'"""
+    print("\n=== REGRESSION TEST 3: GET /api/v1/health ===")
+    try:
+        response = requests.get(f"{BASE_URL}/health", timeout=30)
+        status_code = response.status_code
+        data = response.json()
+        
+        passed = (status_code == 200 and data.get('status') == 'ok')
+        log_test("GET /api/v1/health", passed,
+                f"HTTP {status_code}, status='{data.get('status')}'")
+        return passed
+    except Exception as e:
+        log_test("GET /api/v1/health", False, f"Exception: {e}")
+        return False
+
+def main():
+    print("=" * 80)
+    print("SECURITY HARDENING BACKEND TEST SUITE")
+    print("=" * 80)
+    print(f"Base URL: {BASE_URL}")
+    print(f"Admin Passcode: {ADMIN_PASSCODE}")
+    print("=" * 80)
+    
+    # Run tests in order (rate limit tests LAST as instructed)
+    
+    # 1. POST /api/v1/refresh - passcode tests
+    test_refresh_no_body()
+    test_refresh_wrong_passcode()
+    test_refresh_correct_passcode()
+    
+    # 2. POST /api/v1/chat - basic test
+    test_chat_basic()
+    
+    # 3. POST /api/v1/bitmark/run - passcode tests
+    test_bitmark_no_passcode()
+    test_bitmark_correct_passcode()
+    
+    # 4. GET /api/v1/albert/insight - basic test
+    test_albert_insight()
+    
+    # 5. POST /api/v1/news/refresh - basic test
+    test_news_refresh()
+    
+    # 6. Regression tests (GETs are NOT rate-limited)
+    test_regression_dashboard()
+    test_regression_ticker()
+    test_regression_health()
+    
+    # Wait 60s before rate limit tests to allow per-minute window to reset
+    print("\n" + "=" * 80)
+    print("WAITING 60 SECONDS BEFORE RATE LIMIT TESTS (to reset per-minute window)...")
+    print("=" * 80)
+    time.sleep(60)
+    
+    # 7. Rate limit tests (LAST as instructed)
+    test_refresh_rate_limit()
+    test_chat_rate_limit()
+    
+    # Print summary
+    print("\n" + "=" * 80)
+    print("TEST SUMMARY")
+    print("=" * 80)
+    print(f"Total Tests: {tests_passed + tests_failed}")
+    print(f"Passed: {tests_passed}")
+    print(f"Failed: {tests_failed}")
+    print("=" * 80)
+    
+    if tests_failed > 0:
+        print("\n❌ SOME TESTS FAILED")
+        print("\nFailed tests:")
+        for result in test_results:
+            if not result['passed']:
+                print(f"  - {result['test']}: {result['details']}")
+        sys.exit(1)
+    else:
+        print("\n✅ ALL TESTS PASSED")
+        sys.exit(0)
+
 if __name__ == "__main__":
-    success = test_chat_grounding()
-    exit(0 if success else 1)
+    main()

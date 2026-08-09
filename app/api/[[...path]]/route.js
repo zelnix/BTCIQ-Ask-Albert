@@ -14,6 +14,15 @@ async function proxy(request, context) {
     method: request.method,
     headers: { 'content-type': request.headers.get('content-type') || 'application/json' },
   };
+
+  // Forward the real client IP so the FastAPI per-client rate limiter buckets by
+  // actual user (not 127.0.0.1). Without this, one user's limit would block everyone.
+  const fwd = request.headers.get('x-forwarded-for');
+  const realIp = request.headers.get('x-real-ip');
+  if (fwd) init.headers['x-forwarded-for'] = fwd;
+  else if (realIp) init.headers['x-forwarded-for'] = realIp;
+  if (realIp) init.headers['x-real-ip'] = realIp;
+
   if (!['GET', 'HEAD'].includes(request.method)) {
     init.body = await request.text();
   }

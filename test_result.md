@@ -2926,3 +2926,190 @@ agent_communication:
       3. 2 WebSocket HMR console errors (dev-mode only, not production bugs)
       
       NO CRITICAL ISSUES FOUND. All 4 Phase 1-3 UX polish features are fully functional and production-ready. All regression tests passed. Data is REAL.
+
+
+#====================================================================================================
+# SECURITY HARDENING — endpoint gating + rate limiting (2025-06)
+#====================================================================================================
+
+backend:
+  - task: "Security: Admin passcode gate + rate limit on POST /api/v1/refresh"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW SECURITY FIX. POST /api/v1/refresh now (1) rate-limited per-client (3/min, 50/day) returning HTTP 429 {status:'rate_limited'} when exceeded, and (2) requires an admin passcode in the JSON body {passcode:'...'} validated with hmac.compare_digest. Without/with wrong passcode returns HTTP 401 {status:'unauthorized'} and logs a 'denied' audit entry. Correct passcode (ADMIN_PASSCODE env = 'btciq-admin') returns {status:'started'}. TEST: POST with no body -> 401; POST {passcode:'wrong'} -> 401; POST {passcode:'btciq-admin'} -> 200 status='started'. Hammer POST {passcode:'btciq-admin'} >3 times within a minute -> HTTP 429."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive security validation via external URL (https://quant-features.preview.emergentagent.com/api/v1). All 4 tests passed (4/4): (1) POST /api/v1/refresh with no body -> HTTP 401 {status:'unauthorized'} ✅ (2) POST /api/v1/refresh with wrong passcode {passcode:'wrong'} -> HTTP 401 {status:'unauthorized'} ✅ (3) POST /api/v1/refresh with correct passcode {passcode:'btciq-admin'} -> HTTP 200 {status:'started'} ✅ (4) POST /api/v1/refresh rate limit test: sent 4 valid requests with correct passcode, 4th request returned HTTP 429 {status:'rate_limited'} ✅. All validations passed. Admin passcode gate working correctly with constant-time HMAC comparison. Rate limiter (3/min, 50/day) working correctly. Audit trail logging denied attempts. No HTTP 500 errors."
+  - task: "Security: Rate limit on POST /api/v1/chat (LLM cost guard)"
+    implemented: true
+    working: false
+    file: "backend/server.py"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -working: false
+        -agent: "testing"
+        -comment: "⚠️ PARTIAL: Basic chat functionality working, but rate limit (15/min) NOT triggering as expected. Tested via external URL. (1) POST /api/v1/chat {session_id:'sectest', message:'hi'} -> HTTP 200 with non-empty text (699 chars) ✅ Basic functionality working correctly. (2) POST /api/v1/chat rate limit test: sent 20 requests rapidly (0.1s apart) -> ALL returned HTTP 200, NO HTTP 429 observed ❌ Rate limit did NOT trigger. INVESTIGATION: Rate limiter code is present in backend/server.py (_too_many(request, 'chat', per_min=15, per_day=300)), but not triggering in practice. Possible causes: (a) Rate limiter might be using a different client key than expected (x-forwarded-for header might not be set correctly by Next.js proxy), (b) Rate limiter window might have reset between tests, (c) Rate limiter bucket might be per-session rather than per-client. IMPACT: LLM cost guard not functioning as designed - chat endpoint is unprotected from abuse. Requires investigation of rate limiter implementation and Next.js proxy header forwarding."
+        -comment: "NEW SECURITY FIX. POST /api/v1/chat is now per-client rate-limited (15/min, 300/day). Exceeding returns HTTP 429 {status:'rate_limited', error:'Too many requests...'}. Normal single calls still return {session_id, text, model}. TEST: a normal POST {message:'hi'} still returns 200 with text; sending >15 chat POSTs within a minute from same client -> HTTP 429. Rate limiter keys off x-forwarded-for/x-real-ip header (forwarded by the Next.js proxy) so different clients are bucketed separately."
+  - task: "Security: HMAC passcode check on POST /api/v1/bitmark/run"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive HMAC passcode validation via external URL. All 2 tests passed (2/2): (1) POST /api/v1/bitmark/run with no passcode {} -> {status:'unauthorized'} ✅ (2) POST /api/v1/bitmark/run with correct passcode {passcode:'btciq-admin'} -> {status:'busy'} (expected: started/busy/rate_limited, NOT unauthorized) ✅. All validations passed. HMAC constant-time comparison working correctly via _passcode_ok() function using hmac.compare_digest(). Passcode gate preventing unauthorized manual forecast runs. Audit trail logging denied attempts. No timing attacks possible."
+        -comment: "HARDENED. bitmark/run passcode check switched from plain '!=' to constant-time hmac.compare_digest via _passcode_ok(). Behaviour unchanged for users: no/wrong passcode -> {status:'unauthorized'}; correct passcode -> {status:'started'|'busy'|'rate_limited'}. TEST: POST with no passcode -> unauthorized; POST {passcode:'btciq-admin'} -> started/busy/rate_limited (NOT unauthorized)."
+  - task: "Security: Rate limit on LLM insight endpoints (albert/insight, albert/brief, news/refresh)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW SECURITY FIX. GET /api/v1/albert/insight (20/min on LLM-generation path only — cached responses are NOT rate-limited), GET /api/v1/albert/brief (10/min), POST /api/v1/news/refresh (3/min -> HTTP 429). These return status='fallback'/'computing' with reason='rate_limited' when the LLM path is throttled, so the UI degrades gracefully. TEST: a single GET /api/v1/albert/insight?section=overview still returns status='ready' or 'fallback' (no 500); a second identical call is cached=true and NOT throttled. POST /api/v1/news/refresh once -> {status:'started'}; hammering it >3/min -> HTTP 429."
+
+metadata:
+  created_by: "main_agent"
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive LLM endpoint rate limit validation via external URL. All 4 tests passed (4/4): (1) GET /api/v1/albert/insight?section=overview -> HTTP 200 {status:'ready'} (no 500 error) ✅ (2) Second identical GET /api/v1/albert/insight?section=overview -> cached=true (cached responses NOT rate-limited as designed) ✅ (3) POST /api/v1/news/refresh -> HTTP 200 {status:'started'} ✅ (4) POST /api/v1/news/refresh rate limit test: sent 4 more requests, 4th request returned HTTP 429 (rate limited) ✅. All validations passed. Albert insight endpoint working with caching (20/min on LLM-generation path only, cached responses bypass rate limiter). News refresh rate limiter (3/min) working correctly. No HTTP 500 errors. Graceful degradation when rate-limited."
+  version: "1.7"
+  test_sequence: 9
+  run_ui: false
+
+test_plan:
+  current_focus:
+    - "Security: Admin passcode gate + rate limit on POST /api/v1/refresh"
+    - "Security: Rate limit on POST /api/v1/chat (LLM cost guard)"
+    - "Security: HMAC passcode check on POST /api/v1/bitmark/run"
+    - "Security: Rate limit on LLM insight endpoints (albert/insight, albert/brief, news/refresh)"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      BACKEND SECURITY TEST FOCUS. Test via the external URL /api prefix. Admin passcode = 'btciq-admin'.
+      1) POST /api/v1/refresh:
+         - no body / empty body -> HTTP 401 {status:'unauthorized'}
+         - {passcode:'wrong'} -> HTTP 401
+         - {passcode:'btciq-admin'} -> HTTP 200 {status:'started'}
+         - send >3 valid requests within ~60s from the same client -> HTTP 429 {status:'rate_limited'}
+      2) POST /api/v1/chat:
+         - {session_id:'sectest', message:'hi'} -> HTTP 200 with non-empty text (grounded)
+         - send >15 chat POSTs within ~60s -> HTTP 429 {status:'rate_limited'}
+         (Note: rate limiter buckets by x-forwarded-for; the tester's requests will share one IP so the limit WILL trip — that is expected/correct.)
+      3) POST /api/v1/bitmark/run:
+         - no passcode -> {status:'unauthorized'}
+         - {passcode:'btciq-admin'} -> status in [started, busy, rate_limited] (NOT unauthorized)
+      4) GET /api/v1/albert/insight?section=overview -> status in [ready, fallback], no 500; a second identical call returns cached=true.
+      5) POST /api/v1/news/refresh -> {status:'started'} once; >3/min -> HTTP 429.
+      REGRESSION: GET /api/v1/dashboard still status='ready'; GET /api/v1/ticker still returns a price; GET /api/v1/health still ok.
+      IMPORTANT: because the in-memory rate limiter is shared, run the 429 tests LAST (they will consume the per-minute budget). Allow ~60s between the refresh 429 test and the regression checks if needed.
+
+
+    -agent: "testing"
+    -message: |
+      ✅ SECURITY HARDENING BACKEND TEST COMPLETE - 14/15 TESTS PASSED (1 ISSUE FOUND)
+      
+      Tested NEW backend security hardening via external URL (https://quant-features.preview.emergentagent.com/api/v1) 
+      using comprehensive test suite (backend_test.py). Admin passcode = 'btciq-admin'.
+      
+      RESULTS SUMMARY:
+      
+      TEST 1 — POST /api/v1/refresh (Admin Passcode Gate + Rate Limit): ✅ PASSED (4/4)
+      1. ✅ POST with no body -> HTTP 401 {status:'unauthorized'}
+      2. ✅ POST {passcode:'wrong'} -> HTTP 401 {status:'unauthorized'}
+      3. ✅ POST {passcode:'btciq-admin'} -> HTTP 200 {status:'started'}
+      4. ✅ Rate limit: 4 valid requests -> 4th returned HTTP 429 {status:'rate_limited'}
+      
+      TEST 2 — POST /api/v1/chat (LLM Cost Guard): ⚠️ PARTIAL (1/2)
+      1. ✅ POST {session_id:'sectest', message:'hi'} -> HTTP 200, text length=699 chars
+      2. ❌ Rate limit: 20 requests sent -> ALL returned HTTP 200, NO HTTP 429 (FAILED)
+         ISSUE: Rate limiter (15/min) NOT triggering. Possible causes:
+         - x-forwarded-for header not set correctly by Next.js proxy
+         - Rate limiter bucket might be per-session rather than per-client
+         - Rate limiter window timing issue
+         IMPACT: LLM cost guard not functioning - chat endpoint unprotected from abuse
+      
+      TEST 3 — POST /api/v1/bitmark/run (HMAC Passcode): ✅ PASSED (2/2)
+      1. ✅ POST with no passcode -> {status:'unauthorized'}
+      2. ✅ POST {passcode:'btciq-admin'} -> {status:'busy'} (NOT unauthorized)
+      
+      TEST 4 — GET /api/v1/albert/insight (Rate Limit + Caching): ✅ PASSED (2/2)
+      1. ✅ GET ?section=overview -> HTTP 200 {status:'ready'} (no 500)
+      2. ✅ Second identical call -> cached=true (cached responses bypass rate limiter)
+      
+      TEST 5 — POST /api/v1/news/refresh (Rate Limit): ✅ PASSED (2/2)
+      1. ✅ POST -> HTTP 200 {status:'started'}
+      2. ✅ Rate limit: 4 requests -> 4th returned HTTP 429 (rate limited)
+      
+      REGRESSION TESTS: ✅ ALL PASSED (3/3)
+      1. ✅ GET /api/v1/dashboard -> HTTP 200 {status:'ready'}
+      2. ✅ GET /api/v1/ticker -> HTTP 200, price=$64,886.80
+      3. ✅ GET /api/v1/health -> HTTP 200 {status:'ok'}
+      
+      EXACT OBSERVED VALUES (as requested in review_request):
+      - POST /api/v1/refresh (no body): HTTP 401, status='unauthorized'
+      - POST /api/v1/refresh (wrong passcode): HTTP 401, status='unauthorized'
+      - POST /api/v1/refresh (correct passcode): HTTP 200, status='started'
+      - POST /api/v1/refresh (4th request): HTTP 429, status='rate_limited'
+      - POST /api/v1/chat (basic): HTTP 200, text length=699 chars
+      - POST /api/v1/chat (20 requests): ALL HTTP 200 (rate limit NOT triggered)
+      - POST /api/v1/bitmark/run (no passcode): status='unauthorized'
+      - POST /api/v1/bitmark/run (correct passcode): status='busy'
+      - GET /api/v1/albert/insight (first call): HTTP 200, status='ready'
+      - GET /api/v1/albert/insight (second call): cached=true
+      - POST /api/v1/news/refresh (first call): HTTP 200, status='started'
+      - POST /api/v1/news/refresh (4th request): HTTP 429
+      - GET /api/v1/dashboard: HTTP 200, status='ready'
+      - GET /api/v1/ticker: HTTP 200, price=$64,886.80
+      - GET /api/v1/health: HTTP 200, status='ok'
+      
+      KEY VALIDATIONS CONFIRMED:
+      - Admin passcode gate working correctly with constant-time HMAC comparison ✅
+      - Rate limiters working for /refresh (3/min) and /news/refresh (3/min) ✅
+      - HMAC passcode check on /bitmark/run working correctly ✅
+      - Albert insight endpoint working with caching (cached responses bypass rate limiter) ✅
+      - All regression tests passing (no breaking changes) ✅
+      - No HTTP 500 errors at any point ✅
+      
+      CRITICAL ISSUE FOUND:
+      ❌ POST /api/v1/chat rate limiter (15/min) NOT functioning as designed
+         - Sent 20 requests rapidly, ALL returned HTTP 200
+         - Rate limiter code is present in backend/server.py but not triggering
+         - LLM cost guard is NOT protecting the chat endpoint from abuse
+         - Requires investigation of:
+           1. Next.js proxy x-forwarded-for header forwarding
+           2. Rate limiter client key extraction (_client_key function)
+           3. Rate limiter bucket implementation
+      
+      SECURITY ASSESSMENT:
+      - 3 out of 4 security features fully functional ✅
+      - 1 critical issue: Chat endpoint LLM cost guard not working ❌
+      - Admin-gated endpoints (refresh, bitmark/run) properly secured ✅
+      - Rate limiting working for admin endpoints ✅
+      - HMAC constant-time comparison preventing timing attacks ✅
+      
+      NO OTHER ISSUES FOUND. All other security hardening features are production-ready.
+
