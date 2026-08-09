@@ -131,6 +131,128 @@ const REMOVED_SECTIONS = ['compare'];
 // (Albert insights, Ask Albert chat) fetch data for the right asset.
 const SymbolContext = React.createContext('BTC');
 
+/* --------------------------- Error Boundary ------------------------- */
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false };
+  }
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error, info) {
+    // eslint-disable-next-line no-console
+    console.error('BTCIQ ErrorBoundary caught:', this.props.label || '', error, info);
+  }
+  componentDidUpdate(prevProps) {
+    // Reset the boundary when the key context (e.g. active section) changes.
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false });
+    }
+  }
+  render() {
+    if (this.state.hasError) {
+      if (this.props.silent) return null;
+      return (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-5 text-sm">
+          <p className="font-semibold text-amber-300">This panel hit a snag{this.props.label ? ` (${this.props.label})` : ''}.</p>
+          <p className="mt-1 text-slate-400">The rest of BTCIQ is still live. You can retry just this panel.</p>
+          <button onClick={() => this.setState({ hasError: false })}
+            className="mt-3 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800">Retry</button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+/* --------------------------- Loading Skeleton ----------------------- */
+function Shimmer({ className = '', style }) {
+  return <div className={`animate-pulse rounded-md bg-slate-800/70 ${className}`} style={style} />;
+}
+
+function DashboardSkeleton({ ticker }) {
+  const navRows = Array.from({ length: 12 });
+  return (
+    <div className="flex min-h-screen bg-slate-950">
+      {/* Sidebar */}
+      <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-800 bg-slate-900/40 px-4 py-5 md:flex">
+        <img src="/btciq-logo.png" alt="BTCIQ" className="mb-1 h-9 w-auto object-contain" />
+        <div className="mb-6 text-[10px] text-slate-600">Powered by BitCentAI</div>
+        <div className="space-y-1.5">
+          {navRows.map((_, i) => (
+            <div key={i} className="flex items-center gap-3 rounded-lg px-3 py-2">
+              <Shimmer className="h-4 w-4 rounded" />
+              <Shimmer className="h-3.5" style={{ width: `${55 + ((i * 7) % 35)}%` }} />
+            </div>
+          ))}
+        </div>
+        <div className="mt-auto rounded-xl border border-slate-800 bg-slate-900/60 p-3">
+          <Shimmer className="mb-2 h-3 w-20" />
+          <Shimmer className="h-6 w-16" />
+        </div>
+      </aside>
+      {/* Main */}
+      <div className="flex-1">
+        {/* Top bar with LIVE price (progressive hydration) */}
+        <div className="flex items-center gap-3 border-b border-slate-800 px-4 py-3 md:px-8">
+          <Shimmer className="h-8 w-24 rounded-lg" />
+          {ticker && ticker.price ? (
+            <div className="flex items-center gap-2">
+              <span className="flex items-center gap-1 text-[11px] font-bold text-emerald-400"><span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />LIVE</span>
+              <span className="text-lg font-bold text-white">{fmtUsd(ticker.price)}</span>
+              {ticker.price_aud && <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-xs font-semibold text-amber-300">≈ {fmtAud(ticker.price_aud)}</span>}
+              {typeof ticker.change24h === 'number' && <span className={`text-sm font-semibold ${ticker.change24h >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ticker.change24h}%</span>}
+            </div>
+          ) : (
+            <Shimmer className="h-6 w-40" />
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <Shimmer className="h-8 w-8 rounded-lg" />
+            <Shimmer className="h-8 w-20 rounded-lg" />
+          </div>
+        </div>
+        {/* Overview-shaped skeleton */}
+        <main className="mx-auto max-w-6xl space-y-4 px-4 py-6 md:px-8">
+          <div className="flex items-center gap-3">
+            <Shimmer className="h-8 w-8 rounded-lg" />
+            <Shimmer className="h-6 w-40" />
+          </div>
+          {/* Albert review card */}
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
+            <div className="mb-3 flex items-center gap-2"><Shimmer className="h-9 w-9 rounded-full" /><Shimmer className="h-4 w-32" /></div>
+            <Shimmer className="mb-2 h-3 w-full" /><Shimmer className="mb-2 h-3 w-[92%]" /><Shimmer className="h-3 w-[70%]" />
+          </div>
+          {/* KPI tiles row */}
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+                <Shimmer className="mb-2 h-3 w-16" />
+                <Shimmer className="mb-1 h-7 w-14" />
+                <Shimmer className="h-3 w-20" />
+              </div>
+            ))}
+          </div>
+          {/* Chart + side panel */}
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5 lg:col-span-2">
+              <Shimmer className="mb-4 h-4 w-48" />
+              <Shimmer className="h-56 w-full rounded-lg" />
+            </div>
+            <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+              <Shimmer className="h-4 w-32" />
+              {Array.from({ length: 5 }).map((_, i) => (
+                <div key={i} className="flex items-center gap-3"><Shimmer className="h-8 w-8 rounded-lg" /><div className="flex-1"><Shimmer className="mb-1 h-3 w-full" /><Shimmer className="h-3 w-[60%]" /></div></div>
+              ))}
+            </div>
+          </div>
+          <p className="pt-2 text-center text-xs text-slate-600">Building your live Bitcoin intelligence… core price is already live above.</p>
+        </main>
+      </div>
+    </div>
+  );
+}
+
 /* --------------------------- small components ------------------------ */
 function ChartTooltip({ active, payload, label }) {
   if (!active || !payload || !payload.length) return null;
@@ -5633,13 +5755,7 @@ export default function DashboardPage() {
   };
 
   if (!data && (status === 'loading' || status === 'computing')) {
-    return (
-      <main className="flex min-h-screen flex-col items-center justify-center gap-6 bg-slate-950 px-6">
-        <img src="/btciq-logo.png" alt="BTCIQ" className="h-14 w-auto object-contain" />
-        <div className="relative"><div className="h-16 w-16 animate-spin rounded-full border-4 border-slate-800 border-t-sky-400" /><Cpu className="absolute inset-0 m-auto h-6 w-6 text-sky-400" /></div>
-        <div className="text-center"><h2 className="text-lg font-semibold text-slate-100">{symbol === 'BTC' ? 'Building Bitcoin intelligence…' : `Building ${(coins.find((c) => c.symbol === symbol) || {}).name || symbol} intelligence…`}</h2><p className="mt-1 text-sm text-slate-400">BTCIQ · powered by BitCentAI · decision engine · news-linked forecasts · backtests</p></div>
-      </main>
-    );
+    return <DashboardSkeleton ticker={ticker} />;
   }
   if (!data && status === 'error') {
     return (
@@ -5762,7 +5878,7 @@ export default function DashboardPage() {
             ))}
           </div>
 
-          <main className="mx-auto max-w-6xl px-4 py-6 md:px-8">{renderSection()}</main>
+          <main className="mx-auto max-w-6xl px-4 py-6 md:px-8"><ErrorBoundary label={activeSection?.label || active} resetKey={active}>{renderSection()}</ErrorBoundary></main>
           <footer className="space-y-2 px-4 pb-8 text-center md:px-8">
             <p className="mx-auto max-w-3xl rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-2.5 text-[11px] leading-relaxed text-slate-500">
               BTCIQ provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes.

@@ -3,11 +3,29 @@ import './globals.css';
 export const metadata = {
   title: 'BTCIQ — Bitcoin Intelligence, powered by BitCentAI',
   description: 'BTCIQ: real Bitcoin data, a unified decision engine, probability forecasts, news-linked odds and an AI analyst — powered by BitCentAI, our Bitcoin-Centred Intelligence Engine.',
-  icons: {
-    icon: '/btciq-logo.png',
-    shortcut: '/btciq-logo.png',
-    apple: '/btciq-logo.png',
+  applicationName: 'BTCIQ',
+  manifest: '/manifest.webmanifest',
+  appleWebApp: {
+    capable: true,
+    title: 'BTCIQ',
+    statusBarStyle: 'black-translucent',
   },
+  icons: {
+    icon: [
+      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
+    shortcut: '/btciq-logo.png',
+    apple: [{ url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
+  },
+};
+
+export const viewport = {
+  themeColor: '#0b1220',
+  colorScheme: 'dark',
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
 };
 
 export default function RootLayout({ children }) {
