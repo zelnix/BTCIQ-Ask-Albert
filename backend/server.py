@@ -2106,12 +2106,40 @@ def _parse_bitbo_etf():
         return None
 
 
+def _fetch_tftc_etf():
+    """Full-history US spot BTC ETF daily net flows from tftc.io/bitcoin-etf-flows/data.json
+    (Farside data, keyless). Values arrive in USD -> converted to $M. ~660+ days since 2024-01-11."""
+    try:
+        js = _engine_get('https://www.tftc.io/bitcoin-etf-flows/data.json', headers=ETF_UA, timeout=25)
+        days = js.get('days') if isinstance(js, dict) else None
+        if not days:
+            return None
+        daily = []
+        for d in days:
+            per = d.get('perEtfUsd') or {}
+            flows = {k: round(v / 1e6, 1) for k, v in per.items() if v is not None}
+            tot = d.get('netFlowUsd')
+            total = round(tot / 1e6, 1) if tot is not None else round(sum(flows.values()), 1)
+            daily.append({'date': d.get('date'), 'flows': flows, 'total': total,
+                          'btc_close': d.get('btcCloseUsd')})
+        daily = [x for x in daily if x.get('date')]
+        if not daily:
+            return None
+        issuers = list((days[-1].get('perEtfUsd') or {}).keys())
+        daily.sort(key=lambda x: x['date'], reverse=True)
+        return {'issuers': issuers, 'daily': daily, 'summary': {},
+                'source': 'tftc.io (Farside full-history data)'}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return None
+
+
 def _refresh_etf_bg():
     if _etf_state.get('running'):
         return
     _etf_state['running'] = True
     try:
-        data = _parse_bitbo_etf()
+        data = _fetch_tftc_etf() or _parse_bitbo_etf()
         if data and data.get('daily'):
             data['_id'] = 'btc'
             data['fetched_ts'] = time.time()
@@ -2182,6 +2210,11 @@ WHALE_SEED = [
     {'address': '3LYJfcfHPXYJreMsASk2jkn69LWEYKzexb', 'name': 'Unknown mega-whale', 'category': 'Whale'},
     {'address': '1LdRcdxfbSnmCYYNdeYpUnztiYzVfBEQeC', 'name': 'Unknown mega-whale', 'category': 'Whale'},
     {'address': '12ib7dApVFvg82TXKycWBNpN8kFyiAN1dr', 'name': 'Early whale', 'category': 'Whale'},
+    {'address': '1PeizMg76Cf96nUQrYg8xuoZWLQozU5zGW', 'name': 'Early mega-whale', 'category': 'Whale'},
+    {'address': 'bc1ql49ydapnjafl5t2cp9zqpjwe6pdgmxy98859v2', 'name': 'Coinbase (cold)', 'category': 'Exchange'},
+    {'address': '12tkqA9xSoowkzoERHMWNKsTey55YEBqkv', 'name': 'Poloniex (cold)', 'category': 'Exchange'},
+    {'address': '1Kr6QSydW9bFQG1mXiPNNu6WpJGmUa9i1g', 'name': 'OKX', 'category': 'Exchange'},
+    {'address': 'bc1qazcm763858nkj2dj986etajv6wquslv8uxwczt', 'name': 'MicroStrategy / Strategy (attributed)', 'category': 'Treasury'},
 ]
 
 
@@ -2487,6 +2520,33 @@ def _build_whale_tx_feed(min_btc=50.0, per_addr=25):
             'source': 'mempool.space · curated entity labels'}
 
 
+WHALE_TX_ALERT_MIN = 1000.0   # BTC — fire a Smart Alert on moves at/above this size
+WHALE_TX_ALERT_MAX_AGE = 14 * 86400  # seconds — only alert on recent moves (avoid backfilling old history)
+
+
+def _fire_whale_tx_alert(e):
+    """Fire a de-duplicated Smart Alert for a single large labeled transaction."""
+    try:
+        txid = e.get('txid') or ''
+        aid = f"whaletx_{txid[:16]}_{e.get('address', '')[:8]}"
+        amt = e.get('amount') or 0
+        usd = e.get('amount_usd')
+        sev = 'high' if amt >= 5000 else 'warning'
+        arrow = 'into' if e.get('direction') == 'in' else 'out of'
+        title = f"Whale move: {amt:,.0f} BTC {arrow} {e.get('entity')}"
+        usd_txt = f" (~${usd/1e6:,.0f}M)" if usd else ''
+        msg = (f"{amt:,.0f} BTC{usd_txt} moved {arrow} {e.get('entity')} ({e.get('category')}). "
+               f"Read: {e.get('impact')}.")
+        smart_alerts_col.update_one({'_id': aid}, {'$setOnInsert': {
+            '_id': aid, 'id': aid, 'ts': datetime.datetime.utcnow().isoformat(),
+            'as_of': datetime.date.today().isoformat(), 'symbol': 'BTC', 'category': 'Whale',
+            'severity': sev, 'title': title, 'message': msg,
+            'signal': e.get('signal', 'Neutral'), 'seen': False,
+            'txid': txid, 'link': f'https://mempool.space/tx/{txid}'}}, upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+
+
 def _refresh_whale_tx_bg(min_btc=50.0):
     if _whale_tx_state.get('running'):
         return
@@ -2496,6 +2556,12 @@ def _refresh_whale_tx_bg(min_btc=50.0):
         data['_id'] = 'feed'
         data['fetched_ts'] = time.time()
         whale_tx_col.update_one({'_id': 'feed'}, {'$set': data}, upsert=True)
+        # Fire Smart Alerts for big, RECENT moves (de-duped by txid)
+        now = time.time()
+        for e in (data.get('feed') or []):
+            if (e.get('amount') or 0) >= WHALE_TX_ALERT_MIN and e.get('time') \
+               and (now - e['time']) <= WHALE_TX_ALERT_MAX_AGE:
+                _fire_whale_tx_alert(e)
     except Exception:  # noqa
         traceback.print_exc()
     finally:
@@ -4012,7 +4078,7 @@ def whale_tx_feed(min_btc: float = 50.0, limit: int = 40, refresh: int = 0):
 
 @app.get('/api/v1/etf-flows')
 def etf_flows_feed(refresh: int = 0):
-    """US spot Bitcoin ETF daily net flows ($M) — REAL, keyless (Farside via bitbo mirror)."""
+    """US spot Bitcoin ETF daily net flows ($M) — REAL, keyless (Farside via tftc.io full history)."""
     try:
         c = get_etf_flows(refresh=bool(refresh))
         daily = c.get('daily') or []
@@ -4022,24 +4088,35 @@ def etf_flows_feed(refresh: int = 0):
         net_1d = totals[0] if totals else None
         net_7d = round(sum(totals[:7]), 1) if totals else None
         net_30d = round(sum(totals[:30]), 1) if totals else None
-        # cumulative over the visible window (oldest -> newest)
+        # cumulative over FULL history (oldest -> newest) for the long-trend chart
         cum, running = [], 0.0
         for d in reversed(daily):
             running += (d.get('total') or 0)
             cum.append({'date': d['date'], 'cum': round(running, 1)})
-        # per-issuer window totals (leaderboard)
+        cum_total = round(running, 1)  # net flow since inception
+        # downsample cumulative to <= ~180 points for a light payload
+        if len(cum) > 180:
+            step = len(cum) / 180.0
+            cum_ds = [cum[int(i * step)] for i in range(180)]
+            cum_ds[-1] = cum[-1]
+            cum = cum_ds
+        # per-issuer leaderboard over the RECENT 30-day window (current demand)
         issuers = c.get('issuers') or []
+        recent = daily[:30]
         board = []
         for tick in issuers:
-            s = round(sum((d.get('flows') or {}).get(tick) or 0 for d in daily), 1)
+            s = round(sum((d.get('flows') or {}).get(tick) or 0 for d in recent), 1)
             board.append({'ticker': tick, 'window_total': s})
         board.sort(key=lambda x: x['window_total'], reverse=True)
         return {'status': 'ready', 'symbol': 'BTC', 'unit': 'USD millions',
                 'issuers': issuers, 'daily': daily, 'cumulative': cum,
-                'leaderboard': board, 'summary': c.get('summary') or {},
+                'cum_total': cum_total, 'history_days': len(daily),
+                'leaderboard': board, 'leaderboard_window': 30,
+                'summary': c.get('summary') or {},
                 'net_1d': net_1d, 'net_7d': net_7d, 'net_30d': net_30d,
-                'source': c.get('source', 'bitbo.io (Farside mirror)'),
-                'as_of': c.get('fetched_at'), 'latest_date': daily[0].get('date')}
+                'source': c.get('source', 'tftc.io (Farside data)'),
+                'as_of': c.get('fetched_at'),
+                'span_from': daily[-1].get('date'), 'latest_date': daily[0].get('date')}
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error', 'daily': []}
@@ -4382,6 +4459,24 @@ async def albert_insight(section: str = 'overview', mode: str = 'plain', refresh
                     lines.append(f"LARGEST LABELED BITCOIN WALLETS (source {wd.get('source')}):")
                     for w in (wd.get('whales') or [])[:8]:
                         lines.append(f"- {w['name']} ({w['category']}): {round(w['balance']):,} BTC, 7d change {w.get('change_7d')} BTC, signal {w['signal']}.")
+                except Exception:  # noqa
+                    pass
+                try:
+                    imp = compute_whale_impact()
+                    lines.append(f"WHALE IMPACT (30d, on-chain reconstruction): net flow {imp.get('net_flow_30d')} BTC -> "
+                                 f"trend {imp.get('trend')}. Held by holders {round(imp.get('holder_balance') or 0):,} BTC, "
+                                 f"on exchanges {round(imp.get('exchange_balance') or 0):,} BTC. "
+                                 f"(Exchange OUTFLOWS read bullish = supply leaving; holder accumulation reads bullish.)")
+                    for c in (imp.get('contributors') or [])[:4]:
+                        lines.append(f"- Mover: {c['name']} ({c['category']}) 30d {c['delta_30d']} BTC -> {c['signal']}.")
+                except Exception:  # noqa
+                    pass
+                try:
+                    es = etf_summary()
+                    if es and es.get('net_1d') is not None:
+                        lines.append(f"US SPOT ETF NET FLOWS (Farside data): {es['net_1d']:+.0f} $M last day, "
+                                     f"{es.get('net_7d'):+.0f} $M last 7 days. Sustained ETF inflows are institutional demand "
+                                     f"(bullish); outflows are the opposite. Tie the ETF picture together with the whale flows above.")
                 except Exception:  # noqa
                     pass
             elif section in ('scorecard', 'performance'):

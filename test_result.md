@@ -178,6 +178,20 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive Phase 3 validation via external URL. All 4 tests passed (4/4): (1) GET /api/v1/whales/transactions?min_btc=50&limit=40 returns status='ready' ✅, feed: 10 entries (non-empty) ✅, each entry has all required fields: txid, entity='Binance' (labeled name), category, direction='in' (in [in, out]) ✅, amount=3984.27 BTC >= 50 ✅, amount_usd (numeric) ✅, signal='Bearish' (in [Bullish, Bearish]) ✅, impact (string), date (ISO format with 'T') ✅. (2) GET /api/v1/whales/transactions?min_btc=500 filter test: 9 entries returned, ALL have amount >= 500 BTC ✅ (min_btc filter honored). (3) GET /api/v1/whales/transactions?limit=10 limit test: exactly 10 entries returned ✅ (limit honored). (4) GET /api/v1/whales/transactions?refresh=1 works without 500 error ✅. All validations passed. Data is REAL (mempool.space labeled transactions). No HTTP 500 errors."
+  - task: "Whale Intelligence Enhancements — ETF Full History, Whale-TX Smart Alerts, Expanded Whale Seed, Albert Whale Review"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW 4 enhancements to Whale Intelligence. (1) ETF FULL HISTORY: GET /api/v1/etf-flows now returns full Farside history (~660 days from 2024-01-11) via tftc.io scraper, with cumulative net flows (<=180 downsampled points oldest->newest), cum_total (total net inflow since launch ~$52B), history_days, span_from, leaderboard_window=30. (2) WHALE-TX SMART ALERTS: compute_smart_alerts now fires 'whaletx_' alerts for whale moves >=1000 BTC within last 14 days; category='Whale', title='Whale move: N BTC in/out of ENTITY', signal Bullish/Bearish, severity high/warning, link to mempool.space. Triggered by whale-tx refresh background rebuild. (3) EXPANDED WHALE SEED: GET /api/v1/whales now returns ~15 whales (was 10), including NEW labels: 'Coinbase (cold)', 'Poloniex (cold)', 'OKX', 'MicroStrategy / Strategy (attributed)', 'Early mega-whale'. (4) ALBERT WHALE REVIEW: GET /api/v1/albert/insight?section=whales&symbol=BTC returns grounded insight referencing BOTH whale flows/accumulation AND ETF flows (context injects whale impact + ETF net flows). First call ~40s (reconstructs impact), second call cached=true. Test: all 4 features + regression (dashboard, whales/impact, whales/history still 'ready'). No 500s."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation of all 4 NEW Whale Intelligence enhancements via external URL (https://quant-features.preview.emergentagent.com/api). All tests passed (5/5 including regression). TEST 1 - ETF FULL HISTORY: GET /api/v1/etf-flows returns status='ready' ✅, source='tftc.io (Farside full-history data)' ✅, history_days=661 (>=400) ✅, span_from='2024-01-11' ✅, cumulative: 180 points (<=180) oldest->newest with {date,cum} ✅, cum_total=$52,148M (large positive) ✅, net_1d=98.8, net_7d=821.2, net_30d=127.5 (all numeric) ✅, leaderboard: 13 items with leaderboard_window=30 ✅, daily: 661 items ✅, refresh=1 works ✅, GET /api/v1/dashboard institutional.metrics 'Spot ETF net flow (1d)' NOT inactive with value='$+92M' ✅. TEST 2 - WHALE-TX SMART ALERTS: GET /api/v1/whales/transactions?refresh=1 triggered ✅, waited 90s for background rebuild ✅, GET /api/v1/alerts?limit=60 returns 4 whale-tx alerts (id starts with 'whaletx_') ✅, validated first alert: category='Whale' ✅, title='Whale move: 6,765 BTC out of Binance' ✅, signal='Bullish' (in [Bullish,Bearish]) ✅, severity='high' (in [high,warning]) ✅, link contains mempool.space ✅, POST /api/v1/alerts/ack returns ok ✅. TEST 3 - EXPANDED WHALE SEED: GET /api/v1/whales returns 15 whales (~15) ✅, all NEW labels present: 'Coinbase (cold)', 'Poloniex (cold)', 'OKX', 'MicroStrategy / Strategy (attributed)', 'Early mega-whale' ✅, all whales have numeric balance>0 ✅. TEST 4 - ALBERT WHALE REVIEW: GET /api/v1/albert/insight?section=whales&symbol=BTC returns status='ready' ✅, text is non-empty (759 chars) ✅, text references BOTH whale flows/accumulation AND ETF flows ✅, second call returns cached=true ✅. REGRESSION: GET /api/v1/dashboard status='ready' ✅, GET /api/v1/whales/impact status='ready' ✅, GET /api/v1/whales/history?address=1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF status='ready' ✅. All validations passed. Data is REAL (tftc.io Farside full-history, mempool.space whale transactions, Gemini 3 Flash Albert insights). No HTTP 500 errors. Feature is fully functional."
 
 
     implemented: true
@@ -594,16 +608,32 @@ frontend:
 
 
 test_plan:
-  current_focus:
-    - "Whale Intelligence Phase 1 — ETF Flows (GET /api/v1/etf-flows + institutional panel ETF line REAL)"
-    - "Whale Intelligence Phase 2 — Historical balances + impact (GET /api/v1/whales/history, /api/v1/whales/impact)"
-    - "Whale Intelligence Phase 3 — Labeled large-transaction feed (GET /api/v1/whales/transactions)"
+  current_focus: []
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
-    -agent: "testing"
+    -agent: "main"
+    -message: |
+      NEW TEST FOCUS — Whale Intelligence follow-ups (4 enhancements). All REAL data. Test via
+      external base URL + /api prefix.
+      1) ETF FULL HISTORY: GET /api/v1/etf-flows -> status='ready', source mentions 'tftc',
+         history_days ~660, span_from ~ '2024-01-11', cumulative non-empty (<=180 pts, {date,cum}),
+         cum_total large positive (~50000+ $M), net_1d/7d/30d numeric, leaderboard non-empty
+         (leaderboard_window==30). refresh=1 works. No 500s. dashboard institutional still has a
+         live (non-inactive) 'Spot ETF net flow (1d)'.
+      2) WHALE-TX ALERTS: GET /api/v1/whales/transactions?refresh=1 (wait ~60-90s) then
+         GET /api/v1/alerts?limit=60 -> expect >=1 alert id starting 'whaletx_', category 'Whale',
+         title 'Whale move: N BTC in/out of ENTITY', signal Bullish/Bearish, severity high|warning,
+         'link' to mempool.space. (Only >=1000 BTC moves within 14d fire.)
+      3) EXPANDED WHALES: GET /api/v1/whales -> ~15 whales incl. 'Coinbase (cold)', 'Poloniex (cold)',
+         'OKX', 'MicroStrategy / Strategy (attributed)', 'Early mega-whale'; each balance>0.
+      4) ALBERT WHALE REVIEW: GET /api/v1/albert/insight?section=whales&symbol=BTC -> status='ready',
+         non-empty text referencing whale flows AND ETF flows; 2nd call cached=true; first ~40s. No 500s.
+      REGRESSION: dashboard 'ready'; whales/impact and whales/history still 'ready'. No WebSockets.
+
+    -agent: "testing_previous_run"
     -message: |
       ✅ WHALE INTELLIGENCE UI TESTING COMPLETE — All features working correctly.
       
@@ -2035,3 +2065,86 @@ agent_communication:
       - First calls may take 30-60s (whale reconstruction), subsequent calls cached
       
       NO CRITICAL ISSUES FOUND. All 3 phases are production-ready. Feature is fully functional with REAL data.
+
+
+    -agent: "testing"
+    -message: |
+      ✅ WHALE INTELLIGENCE ENHANCEMENTS (4 NEW FEATURES) BACKEND TEST COMPLETE - ALL TESTS PASSED (5/5)
+      
+      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (whale_enhancements_test.py).
+      
+      TEST 1 — ETF FULL HISTORY (ENHANCED FROM PHASE 1):
+      ✅ GET /api/v1/etf-flows returns status='ready'
+      ✅ source='tftc.io (Farside full-history data)' (mentions 'tftc' as required)
+      ✅ history_days=661 (>=400, ~660 as expected)
+      ✅ span_from='2024-01-11' (≈ 2024-01-11 as expected)
+      ✅ cumulative: 180 points (<=180), oldest->newest, each with {date, cum}
+      ✅ cum_total=$52,148M (large positive, ~50000+ $M as expected)
+      ✅ net_1d=98.8, net_7d=821.2, net_30d=127.5 (all numeric)
+      ✅ leaderboard: 13 items with leaderboard_window=30
+      ✅ daily: 661 items (non-empty)
+      ✅ GET /api/v1/etf-flows?refresh=1 works (no 500)
+      ✅ GET /api/v1/dashboard institutional.metrics 'Spot ETF net flow (1d)' NOT inactive, value='$+92M'
+      
+      TEST 2 — WHALE-TX SMART ALERTS (NEW FEATURE):
+      ✅ GET /api/v1/whales/transactions?refresh=1 triggered successfully
+      ✅ Waited 90 seconds for background rebuild to fire alerts
+      ✅ GET /api/v1/alerts?limit=60 returns 4 whale-tx alerts (>=1 as required)
+      ✅ Alert IDs start with 'whaletx_' (e.g., 'whaletx_eb013fac7dec8d46_3M219KR5')
+      ✅ category='Whale' (as required)
+      ✅ title='Whale move: 6,765 BTC out of Binance' (matches pattern 'Whale move: N BTC in/out of ENTITY')
+      ✅ signal='Bullish' (in [Bullish, Bearish])
+      ✅ severity='high' (in [high, warning])
+      ✅ link='https://mempool.space/tx/eb013fac7dec8d46...' (contains mempool.space)
+      ✅ POST /api/v1/alerts/ack returns status='ok'
+      
+      TEST 3 — EXPANDED WHALE SEED (NEW FEATURE):
+      ✅ GET /api/v1/whales returns 15 whales (~15 as expected, was 10)
+      ✅ All NEW labels present:
+         - 'Coinbase (cold)' ✅
+         - 'Poloniex (cold)' ✅
+         - 'OKX' ✅
+         - 'MicroStrategy / Strategy (attributed)' ✅
+         - 'Early mega-whale' ✅
+      ✅ All whales have numeric balance > 0
+      
+      TEST 4 — ALBERT WHALE REVIEW (NEW FEATURE):
+      ✅ GET /api/v1/albert/insight?section=whales&symbol=BTC returns status='ready'
+      ✅ text is non-empty (759 chars)
+      ✅ text references BOTH whale flows/accumulation AND ETF flows (as required)
+      ✅ Sample text: "The largest Bitcoin wallets reveal a cautious 'distribution' phase, where large holders move coins toward exchanges. Binance and Coinbase hold the lion's share, with Binance's top two wallets totaling over 433,000 BTC. Over the past 30 days, the net flow shows 41,824 BTC moving onto exchanges—a bear..."
+      ✅ Second identical call returns cached=true (caching works)
+      ✅ First call took 0.1s (fast, may take ~40s on first-ever call to reconstruct impact)
+      
+      REGRESSION TESTS (3/3 PASSED):
+      ✅ GET /api/v1/dashboard returns status='ready'
+      ✅ GET /api/v1/whales/impact returns status='ready'
+      ✅ GET /api/v1/whales/history?address=1FeexV6bAHb8ybZjqQMjJrcCrHGW9sb6uF returns status='ready'
+      
+      DATA SOURCES CONFIRMED:
+      - ETF flows: tftc.io (Farside full-history) - REAL daily net flows for 13 US spot Bitcoin ETF issuers, ~660 days of history
+      - Whale-tx alerts: mempool.space - REAL labeled large transactions (>=1000 BTC within 14 days)
+      - Expanded whale seed: 15 curated whales including new exchanges and entities
+      - Albert whale review: Gemini 3 Flash grounded in whale impact + ETF net flows context
+      
+      KEY OBSERVATIONS:
+      - All 4 NEW features working correctly with REAL data
+      - ETF history now spans ~660 days (was ~8 days in Phase 1)
+      - Whale-tx alerts fire correctly for large moves (4 alerts found, all Binance moves >=1000 BTC)
+      - Expanded whale seed includes 5 new entities (Coinbase cold, Poloniex cold, OKX, MicroStrategy, Early mega-whale)
+      - Albert whale review successfully references both whale flows AND ETF flows in generated text
+      - All refresh=1 parameters work correctly
+      - No HTTP 500 errors at any point
+      - All regression tests passed (no breaking changes)
+      
+      EXACT OBSERVED VALUES (as requested in review_request):
+      - history_days: 661 (>=400 ✅)
+      - span_from: '2024-01-11' (≈ 2024-01-11 ✅)
+      - cumulative points: 180 (<=180 ✅)
+      - cum_total: $52,148M (~50000+ ✅)
+      - leaderboard_window: 30 (==30 ✅)
+      - whale count: 15 (~15 ✅)
+      - whale-tx alerts: 4 (>=1 ✅)
+      - Albert text length: 759 chars (non-empty ✅)
+      
+      NO CRITICAL ISSUES FOUND. All 4 enhancements are production-ready. Feature is fully functional with REAL data.

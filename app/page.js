@@ -2819,7 +2819,8 @@ function EtfFlowsCard() {
     return () => { alive = false; };
   }, []);
   const daily = (d && d.daily) || [];
-  const bars = [...daily].reverse().map((x) => ({ date: shortDate(x.date), total: x.total }));
+  const bars = daily.slice(0, 30).reverse().map((x) => ({ date: shortDate(x.date), total: x.total }));
+  const cum = (d && d.cumulative) || [];
   const lead = (d && d.leaderboard) || [];
   const maxLead = Math.max(1, ...lead.map((l) => Math.abs(l.window_total || 0)));
   const netColor = (v) => (v == null ? 'text-slate-300' : v >= 0 ? 'text-emerald-400' : 'text-red-400');
@@ -2845,7 +2846,7 @@ function EtfFlowsCard() {
               </div>
             ))}
           </div>
-          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Daily net flow ($M)</div>
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Daily net flow ($M){d.latest_date ? ` · latest ${shortDate(d.latest_date)}` : ''}</div>
           <div className="h-40 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={bars} margin={{ top: 5, right: 5, left: -18, bottom: 0 }}>
@@ -2860,7 +2861,33 @@ function EtfFlowsCard() {
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <div className="mt-4 mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">By issuer (window total)</div>
+          {cum.length > 1 && (
+            <>
+              <div className="mt-4 mb-2 flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                Cumulative net flow since launch ($M)
+                {d.cum_total != null && <span className={`normal-case ${netColor(d.cum_total)}`}>· total {fMln(d.cum_total)}</span>}
+                {d.history_days ? <span className="ml-auto normal-case text-slate-600">{d.history_days} days{d.span_from ? ` · from ${shortDate(d.span_from)}` : ''}</span> : null}
+              </div>
+              <div className="h-44 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={cum} margin={{ top: 5, right: 5, left: -6, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="etfCum" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#38bdf8" stopOpacity={0.35} />
+                        <stop offset="100%" stopColor="#38bdf8" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                    <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} tickLine={false} axisLine={{ stroke: '#1e293b' }} minTickGap={40} tickFormatter={shortDate} />
+                    <YAxis tick={{ fontSize: 9, fill: '#64748b' }} tickLine={false} axisLine={false} width={52} tickFormatter={(v) => (Math.abs(v) >= 1000 ? (v / 1000).toFixed(0) + 'B' : v)} />
+                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155', borderRadius: 8, fontSize: 12 }} labelFormatter={shortDate} formatter={(v) => [fMln(v), 'Cumulative']} />
+                    <Area type="monotone" dataKey="cum" stroke="#38bdf8" strokeWidth={1.8} fill="url(#etfCum)" dot={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </>
+          )}
+          <div className="mt-4 mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">By issuer (last 30 days)</div>
           <div className="space-y-1.5">
             {lead.slice(0, 8).map((l, i) => (
               <div key={i} className="flex items-center gap-2 text-xs">
@@ -3070,6 +3097,7 @@ function WhaleWatch() {
   return (
     <div className="space-y-5">
       <SectionHead icon={Fish} title="Whale Watch" blurb={sec('whales').blurb} coin="BTC" />
+      <AiReview section="whales" text="Albert is reviewing whale flows and ETF demand…" voice />
       <WhaleImpactCard />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="mb-4 flex flex-wrap items-center gap-2">
