@@ -2378,7 +2378,7 @@ backend:
 metadata:
   created_by: "main_agent"
   version: "1.3"
-  test_sequence: 5
+  test_sequence: 11
   run_ui: false
 
 test_plan:
@@ -2390,17 +2390,30 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      NEW TEST FOCUS — Data Audit Phase 1 & 2 + FRED macro. Test ONLY these 4 endpoints (backend, via external URL):
-      1) GET /api/v1/composite-price -> status='ready', numeric composite>0 & median>0, venue_count 1-4,
-         confidence in [HIGH,MEDIUM,LOW], venues list (each source+ok, outliers flagged if any), method present.
-      2) GET /api/v1/cross-asset -> status='ready', numeric btc_dominance>0, regime string, read non-empty
-         (eth_btc MAY be null — acceptable).
-      3) GET /api/v1/news-signals -> EITHER status='ready' (numeric tone_latest, non-empty series[{date,tone}],
-         mood, direction) OR status='unavailable' with active=false + reason (GDELT rate-limits this host —
-         both outcomes are ACCEPTABLE, must NOT 500). Use timeout >= 45s (builder retries GDELT 3x w/ 6s backoff).
-      4) GET /api/v1/macro-fred -> status='ready' (FRED_API_KEY is set), series non-empty (>=5), each item has
-         numeric value + label + date. Must NOT return status='inactive'.
-      Regression (quick): GET /api/v1/dashboard (BTC) still status='ready'. Do NOT test frontend.
+      TEST SEQUENCE 11 — Backend Refactor Regression (Option A: config.py + security.py extraction).
+      Context: Extracted two modules from server.py with NO behaviour changes — backend/config.py (env, Mongo 
+      connection, all collection handles, API keys/model names) and backend/security.py (rate limiter + passcode 
+      helpers). server.py now imports from them. Admin passcode changed to 000000.
+      
+      Test via external URL /api prefix:
+      1) GET /api/v1/health -> HTTP 200, status='ok'
+      2) GET /api/v1/dashboard -> status='ready' (may briefly be 'computing'; retry a few times if so). 
+         Confirm it returns real data (signal, quant_score, price).
+      3) GET /api/v1/ticker -> HTTP 200 with a numeric BTC price.
+      4) POST /api/v1/refresh (admin gate + rate limit, passcode = 000000):
+         - no body / empty body -> HTTP 401 {status:'unauthorized'}
+         - {"passcode":"wrong"} -> HTTP 401
+         - {"passcode":"000000"} -> HTTP 200 {status:'started'}
+         - send >3 valid {"passcode":"000000"} within ~60s -> HTTP 429 {status:'rate_limited'} and the JSON 
+           should include a numeric "retry_in" field.
+      5) POST /api/v1/chat {"session_id":"reftest","message":"hi"} -> HTTP 200 with a non-empty "text" field 
+         (confirms LLM + config import work).
+      6) Spot-check 1-2 other data endpoints still work, e.g. GET /api/v1/news-signals and GET /api/v1/macro-fred 
+         -> HTTP 200 with data (not 500).
+      
+      KEY QUESTION: Did the refactor break any endpoint (any 500s / import errors)?
+      Note: pre-existing background-task errors (compute_cycle_context HALVINGS unpack; a news-summary 
+      JSONDecodeError) are NOT from this refactor and should be ignored.
 
     -agent: "testing"
     -message: |
@@ -2488,6 +2501,127 @@ agent_communication:
       - Dashboard regression passed (no breaking changes)
       
       NO CRITICAL ISSUES FOUND. All 4 Data Audit endpoints are production-ready. Feature is fully functional with REAL data.
+
+    -agent: "testing"
+    -message: |
+      ✅ BACKEND REFACTOR REGRESSION TEST COMPLETE (TEST SEQUENCE 11) - ALL TESTS PASSED (8/8)
+      
+      Tested Option A refactor (config.py + security.py extraction) via external URL 
+      (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
+      
+      REFACTOR SUMMARY:
+      - Extracted backend/config.py: env vars, MongoDB connection, all collection handles, API keys/model names
+      - Extracted backend/security.py: rate limiter + passcode helpers
+      - server.py now imports from both modules
+      - Admin passcode changed from 'btciq-admin' to '000000'
+      
+      TEST RESULTS:
+      
+      TEST 1 — GET /api/v1/health: ✅ PASSED
+      - HTTP 200 ✅
+      - status='ok' ✅
+      - compute_status='idle' ✅
+      - No import errors ✅
+      
+      TEST 2 — GET /api/v1/dashboard: ✅ PASSED
+      - HTTP 200 ✅
+      - status='ready' (no 'computing' delay) ✅
+      - Real data confirmed:
+        * signal='UP' ✅
+        * quant_score=60 ✅
+        * last_close=$65,177.50 ✅
+      - No import errors ✅
+      
+      TEST 3 — GET /api/v1/ticker: ✅ PASSED
+      - HTTP 200 ✅
+      - price=$65,200.10 (numeric) ✅
+      - All fields present (price, price_aud, aud_rate, change24h, high, low, source, ts) ✅
+      
+      TEST 4 — POST /api/v1/refresh (Admin Gate + Rate Limit): ✅ PASSED (4/4 sub-tests)
+      
+      4a. No body / empty body: ✅ PASSED
+      - HTTP 401 ✅
+      - status='unauthorized' ✅
+      - message='A valid admin passcode is required...' ✅
+      
+      4b. Wrong passcode {"passcode":"wrong"}: ✅ PASSED
+      - HTTP 401 ✅
+      - status='unauthorized' ✅
+      
+      4c. Correct passcode {"passcode":"000000"}: ✅ PASSED
+      - HTTP 200 ✅
+      - status='started' ✅
+      - NEW PASSCODE (000000) WORKS CORRECTLY ✅
+      
+      4d. Rate limit test (>3 requests within 60s): ✅ PASSED
+      - Already rate-limited from previous test (acceptable) ✅
+      - HTTP 429 ✅
+      - status='rate_limited' ✅
+      - retry_in=60 (numeric field present) ✅
+      - Rate limiter from security.py working correctly ✅
+      
+      TEST 5 — POST /api/v1/chat: ✅ PASSED
+      - HTTP 200 ✅
+      - text field present and non-empty (757 chars) ✅
+      - Text preview: "Hello there! I am Albert, the BTCIQ HuCentAI Quant. It is a pleasure to meet you. 
+        As of today, August 9, 2026, Bitcoin is trading at $65,177.5. My engine currently shows a Quant 
+        Score of 60/100, whi..." ✅
+      - LLM integration working (confirms EMERGENT_LLM_KEY and CHAT_MODEL imports from config.py) ✅
+      
+      TEST 6a — GET /api/v1/news-signals: ✅ PASSED
+      - HTTP 200 (NOT 500) ✅
+      - status='ready' ✅
+      - tone_latest=-0.825 (numeric) ✅
+      - mood='Negative', direction='Improving' ✅
+      - series with 21 data points ✅
+      - No import errors ✅
+      
+      TEST 6b — GET /api/v1/macro-fred: ✅ PASSED
+      - HTTP 200 (NOT 500) ✅
+      - status='ready' ✅
+      - series: 7 items (Fed Funds Rate, 2Y Treasury, 10Y Treasury, 10Y-2Y Spread, CPI, M2 Money Supply, 
+        Unemployment) ✅
+      - All series have numeric value + label + date ✅
+      - FRED_API_KEY import from config.py working ✅
+      
+      EXACT HTTP CODES + JSON OBSERVED:
+      - GET /api/v1/health: HTTP 200, {"status":"ok","compute_status":"idle","error":null,"runs":1}
+      - GET /api/v1/dashboard: HTTP 200, {"status":"ready","signal":"UP","quant_score":60,"last_close":65177.5,...}
+      - GET /api/v1/ticker: HTTP 200, {"symbol":"BTC","price":65200.1,...}
+      - POST /api/v1/refresh (no body): HTTP 401, {"status":"unauthorized","message":"A valid admin passcode..."}
+      - POST /api/v1/refresh (wrong): HTTP 401, {"status":"unauthorized",...}
+      - POST /api/v1/refresh (000000): HTTP 200, {"status":"started"}
+      - POST /api/v1/refresh (rate limit): HTTP 429, {"status":"rate_limited","retry_in":60,...}
+      - POST /api/v1/chat: HTTP 200, {"session_id":"reftest","text":"Hello there! I am Albert...","model":"gemini-3-flash-preview"}
+      - GET /api/v1/news-signals: HTTP 200, {"status":"ready","tone_latest":-0.825,...}
+      - GET /api/v1/macro-fred: HTTP 200, {"status":"ready","series":[...7 items...]}
+      
+      KEY VALIDATIONS CONFIRMED:
+      - ✅ NO HTTP 500 errors at any endpoint (no import errors)
+      - ✅ NO breaking changes from refactor
+      - ✅ config.py imports working correctly (ADMIN_PASSCODE, EMERGENT_LLM_KEY, CHAT_MODEL, collections)
+      - ✅ security.py imports working correctly (_passcode_ok, _rate_limited, _retry_after_secs, _too_many)
+      - ✅ Admin passcode changed to 000000 and working correctly
+      - ✅ Rate limiting working correctly (MongoDB-backed, exact across replicas)
+      - ✅ All endpoints return expected responses with real data
+      - ✅ LLM integration working (Gemini 3 Flash via Emergent gateway)
+      - ✅ All data sources working (ccxt Kraken, GDELT, FRED, MongoDB)
+      
+      PRE-EXISTING BACKGROUND ERRORS (NOT FROM REFACTOR):
+      - compute_cycle_context HALVINGS unpack error (pre-existing, ignored as instructed)
+      - news-summary JSONDecodeError (pre-existing, ignored as instructed)
+      
+      ANSWER TO KEY QUESTION:
+      ❌ NO, the refactor did NOT break any endpoint.
+      ✅ All imports work correctly.
+      ✅ All endpoints return expected HTTP codes and JSON responses.
+      ✅ No 500 errors or import errors detected.
+      
+      CONCLUSION:
+      The Option A refactor (config.py + security.py extraction) was successful with ZERO breaking changes. 
+      All 8 tests passed. The backend is fully functional and production-ready. The refactor achieved its goal 
+      of code organization without any behaviour changes.
+
 
 
 
@@ -3238,3 +3372,20 @@ agent_communication:
       
       NO ISSUES FOUND. The MongoDB-backed rate limiter is working correctly and blocking requests beyond the limit. 
       Feature is production-ready and solves the cross-replica rate limit accuracy problem.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      REFACTOR (Option A, test_sequence 11): Extracted two self-contained modules from server.py with NO
+      behaviour changes: (1) backend/config.py = env load, Mongo client/db, ALL collection handles,
+      GLASSNODE_API_KEY/ADMIN_PASSCODE/EMERGENT_LLM_KEY/GEMINI_MODEL/CHAT_MODEL; (2) backend/security.py =
+      _client_key, _rate_limited, _passcode_ok, _retry_after_secs, _too_many (MongoDB-backed rate limiter).
+      server.py now imports these. Please REGRESSION TEST that nothing broke:
+      - GET /api/v1/health -> status='ok'
+      - GET /api/v1/dashboard -> status='ready' (or 'computing' then 'ready')
+      - GET /api/v1/ticker -> numeric price
+      - POST /api/v1/refresh: no/empty body -> 401 unauthorized; {"passcode":"000000"} -> 200 started;
+        (NOTE: admin passcode is now 000000). >3 valid within 60s -> 429 rate_limited with retry_in.
+      - POST /api/v1/chat {"session_id":"reftest","message":"hi"} -> 200 with non-empty text.
+      Admin passcode = 000000. Pre-existing (NOT from refactor, do not fix): compute_cycle_context HALVINGS
+      unpack ValueError and a news-summary JSONDecodeError in background tasks.

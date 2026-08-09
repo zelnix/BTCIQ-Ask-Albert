@@ -43,49 +43,19 @@ from pymongo import MongoClient
 from apscheduler.schedulers.background import BackgroundScheduler
 from dotenv import load_dotenv
 
-load_dotenv('/app/.env')
+# --- Central configuration (env, Mongo connection, collections, API keys) ---
+# Extracted to config.py (Option A refactor) — imported here for use across the module.
+from config import (
+    db, runs_col, signals_col, dominance_col, news_col, chat_col, predictions_col,
+    bitmark_col, smart_alerts_col, audit_col, insights_col, compare_col, coin_dash_col,
+    coin_news_col, coin_dom_col, markets_col, analogs_col, glassnode_col,
+    GLASSNODE_API_KEY, ADMIN_PASSCODE, EMERGENT_LLM_KEY, GEMINI_MODEL, CHAT_MODEL,
+)
 
-MONGO_URL = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
-DB_NAME = os.environ.get('DB_NAME', 'your_database_name')
-
-client = MongoClient(MONGO_URL)
-db = client[DB_NAME]
-runs_col = db['btc_runs']
-signals_col = db['live_signals']
-dominance_col = db['dominance_hist']
-news_col = db['news']
-chat_col = db['ask_quant_chat']
-predictions_col = db['predictions']
-bitmark_col = db['bitmark_snapshots']
-smart_alerts_col = db['smart_alerts']
-audit_col = db['forecast_audit']
-rate_col = db['rate_limits']  # cluster-wide per-client rate limiter (shared across replicas)
-try:
-    # Auto-expire hits after 25h so the 24h daily window is always fully covered.
-    rate_col.create_index('ts', expireAfterSeconds=90000)
-    rate_col.create_index([('key', 1), ('ts', 1)])
-except Exception:  # noqa
-    pass
-insights_col = db['albert_insights']  # cache for AI-generated section insights
-compare_col = db['compare_coins']  # cache for per-coin comparison summaries
-coin_dash_col = db['coin_dashboards']  # cache for per-coin full dashboards (altcoins)
-coin_news_col = db['coin_news']  # cache for per-coin news (altcoins)
-coin_dom_col = db['coin_dominance_hist']  # per-coin market-cap dominance history
-markets_col = db['markets_cache']  # per-coin vs traditional-markets comparison, cached daily
-analogs_col = db['analogs_cache']  # historical-analog engine (Bitcoin), cached daily
-glassnode_col = db['glassnode_cache']  # cached Glassnode on-chain metrics (Smart Money panel)
-# Glassnode on-chain data (Smart Money panel). Advanced Light tier: 14d daily history, low call budget.
-GLASSNODE_API_KEY = os.environ.get('GLASSNODE_API_KEY')
-# Admin passcode gate for manual forecast runs (Stage-1: passcode instead of full auth)
-ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', 'btciq-admin')
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
 _forecast_trigger = {'reason': None}
 _bitmark_last_manual = {'ts': 0.0}
 
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
-GEMINI_MODEL = 'gemini-2.5-flash'
-# Ask Quant conversational model (Gemini 3 Flash via Emergent gateway, verified available)
-CHAT_MODEL = os.environ.get('CHAT_MODEL', 'gemini-3-flash-preview')
 try:
     from emergentintegrations.llm.chat import LlmChat, UserMessage
     import feedparser
@@ -158,90 +128,9 @@ app.add_middleware(
 )
 
 
-# ---- Lightweight in-memory per-client rate limiter (cost/DoS guard) ----
-_rl_lock = threading.Lock()
-_rl_hits = {}  # key -> [timestamps]
-
-
-def _client_key(request):
-    try:
-        xff = request.headers.get('x-forwarded-for') or request.headers.get('x-real-ip')
-        if xff:
-            return xff.split(',')[0].strip()
-        return request.client.host if request.client else 'unknown'
-    except Exception:  # noqa
-        return 'unknown'
-
-
-def _rate_limited(request, bucket, per_min=15, per_day=300):
-    """Return True if this client has exceeded the limit for `bucket`.
-
-    Backed by MongoDB so limits are EXACT across all deployment replicas (each
-    request inserts a timestamped hit; we then count hits in the 60s / 24h windows).
-    Falls back to a per-process in-memory window if the DB is briefly unavailable.
-    """
-    now = time.time()
-    key = f'{bucket}:{_client_key(request)}'
-    try:
-        now_dt = datetime.datetime.utcnow()
-        rate_col.insert_one({'_id': str(uuid.uuid4()), 'key': key, 'ts': now_dt})
-        minute_ago = now_dt - datetime.timedelta(seconds=60)
-        day_ago = now_dt - datetime.timedelta(seconds=86400)
-        recent = rate_col.count_documents({'key': key, 'ts': {'$gte': minute_ago}})
-        if recent > per_min:
-            return True
-        daily = rate_col.count_documents({'key': key, 'ts': {'$gte': day_ago}})
-        return daily > per_day
-    except Exception:  # noqa — DB hiccup: degrade to in-memory limiter, never crash the request
-        with _rl_lock:
-            hits = [t for t in _rl_hits.get(key, []) if now - t < 86400]
-            recent = sum(1 for t in hits if now - t < 60)
-            if recent >= per_min or len(hits) >= per_day:
-                _rl_hits[key] = hits
-                return True
-            hits.append(now)
-            _rl_hits[key] = hits
-            return False
-
-
-def _passcode_ok(supplied):
-    """Constant-time admin passcode check. Denies if no passcode is configured."""
-    expected = ADMIN_PASSCODE or ''
-    supplied = supplied or ''
-    if not expected:
-        return False
-    return hmac.compare_digest(str(supplied), str(expected))
-
-
-def _retry_after_secs(request, bucket, per_min):
-    """Estimate seconds until this client can retry (when enough hits age out of the 60s window)."""
-    key = f'{bucket}:{_client_key(request)}'
-    try:
-        now_dt = datetime.datetime.utcnow()
-        minute_ago = now_dt - datetime.timedelta(seconds=60)
-        docs = list(rate_col.find({'key': key, 'ts': {'$gte': minute_ago}}, {'ts': 1}).sort('ts', 1))
-        n = len(docs)
-        if n <= per_min:
-            return 1
-        # After the oldest (n - per_min) hits age out, the count drops to per_min (allowed).
-        idx = n - per_min - 1
-        free_at = docs[idx]['ts'] + datetime.timedelta(seconds=60)
-        secs = (free_at - now_dt).total_seconds()
-        return max(1, min(60, int(secs) + 1))
-    except Exception:  # noqa
-        return 30
-
-
-def _too_many(request, bucket, per_min=15, per_day=300):
-    """Return a JSONResponse(429) if rate-limited, else None."""
-    if _rate_limited(request, bucket, per_min=per_min, per_day=per_day):
-        retry = _retry_after_secs(request, bucket, per_min)
-        return JSONResponse(
-            status_code=429,
-            content={'status': 'rate_limited', 'retry_in': retry,
-                     'error': 'Too many requests — please slow down and try again shortly.'},
-        )
-    return None
+# ---- Security helpers (per-client rate limiting + admin passcode) ----
+# Extracted to security.py (Option A refactor).
+from security import _client_key, _rate_limited, _passcode_ok, _retry_after_secs, _too_many
 
 _state = {'status': 'idle', 'error': None, 'started_at': None}
 _lock = threading.Lock()
