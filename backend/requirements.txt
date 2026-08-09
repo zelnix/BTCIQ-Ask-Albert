@@ -1,3 +1,4 @@
+--extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/
 fastapi
 uvicorn
 ccxt
@@ -8,3 +9,6 @@ joblib
 apscheduler
 pymongo
 python-dotenv
+requests
+feedparser
+emergentintegrations
