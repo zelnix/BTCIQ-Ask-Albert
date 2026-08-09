@@ -2736,6 +2736,7 @@ function SettingsSection({ onManualRun }) {
         <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
         <p className="text-xs leading-relaxed text-slate-400">BTCIQ — Bitcoin Market Analysis, powered by BitCentAI, our Bitcoin-Centred Intelligence Engine. BitMarkAI measures the market and produces probability-based forecasts. Albert is BTCIQ’s HuCentAI Quant Analyst.</p>
         <p className="mt-3 text-[11px] leading-relaxed text-slate-500">BTCIQ provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes. Albert is an original fictional BTCIQ HuCentAI Quant character and is not Albert Einstein.</p>
+        <a href="https://btciq.app" target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300"><Globe className="h-3 w-3" />btciq.app</a>
       </Card>
     </div>
   );
@@ -4384,6 +4385,9 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between"><span className="text-[10px] uppercase text-slate-500">Quant Score</span><span className="text-[10px] text-slate-500">{d.data_source}</span></div>
             <div className="mt-1 flex items-center gap-2"><span className="text-2xl font-black" style={{ color: scoreColor(d.quant_score) }}>{d.quant_score}</span><span className="text-xs text-slate-400">{d.quant_label}</span></div>
           </div>
+          <a href="https://btciq.app" target="_blank" rel="noopener noreferrer" className="mt-3 flex items-center justify-center gap-1 text-[11px] font-semibold text-slate-500 transition-colors hover:text-sky-300">
+            <Globe className="h-3 w-3" />btciq.app
+          </a>
         </aside>
 
         {/* Main */}
