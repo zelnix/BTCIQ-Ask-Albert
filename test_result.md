@@ -2312,3 +2312,180 @@ agent_communication:
       - Dashboard regression passed (no breaking changes)
       
       NO CRITICAL ISSUES FOUND. Feature is fully functional and production-ready. Core metrics are REAL (OKX public API); liquidations, liquidation heatmap, estimated-leverage percentile and positioning.position_ratio are DERIVED/DEMO and correctly flagged demo=true (this is expected and correct — the user approved mock for these).
+
+
+#====================================================================================================
+# DATA AUDIT (Phase 1 & 2) + FRED MACRO — backend tasks added by main agent
+#====================================================================================================
+backend:
+  - task: "Data Audit — Composite Spot Price (GET /api/v1/composite-price)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "REAL keyless composite price. Median of Coinbase, Kraken, OKX, CoinGecko with outlier detection (venues >0.75% from median excluded), spread%, confidence tag HIGH/MEDIUM/LOW and per-venue provenance (price, latency_ms, ok, dev_pct, outlier). Test: GET /api/v1/composite-price -> status='ready', numeric composite>0, median>0, venue_count 1-4, venues list each with source+ok, confidence in [HIGH,MEDIUM,LOW], fallback_chain present, method present. No 500s."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/composite-price). All validations passed: (1) status='ready' ✅ (2) composite=$64,791.72 (numeric > 0) ✅ (3) median=$64,782.49 (numeric > 0) ✅ (4) venue_count=4 (int 1-4) ✅ (5) confidence='HIGH' (in [HIGH,MEDIUM,LOW]) ✅ (6) venues: 4 items (non-empty list) ✅ (7) All venues have source and ok fields ✅ (8) All ok venues have numeric price > 0 and dev_pct: Coinbase $64,780.99 (dev 0.002%), Kraken $64,770.10 (dev 0.019%), OKX $64,831.80 (dev 0.076%), CoinGecko $64,784.00 (dev 0.002%) ✅ (9) No outliers flagged (all dev_pct < 0.75%) ✅ (10) fallback_chain present: ['Coinbase', 'Kraken', 'OKX', 'CoinGecko (aggregator)'] ✅ (11) method present: 'Outlier-trimmed mean of independent exchange feeds (venues >0.75% from median excluded).' ✅ (12) No HTTP 500 errors ✅. Data is REAL (4 independent exchange feeds). Feature is production-ready."
+  - task: "Data Audit — Cross-Asset context (GET /api/v1/cross-asset)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "REAL (CoinGecko /global + OKX ETH-BTC). Returns btc_dominance, eth_dominance, eth_btc (may be null if OKX ETH-BTC unavailable), total_market_cap_usd, stablecoin_mcap_usd, mcap_change_24h, regime, confidence='MEDIUM', read, source. Cached 15min. Test: GET /api/v1/cross-asset -> status='ready', numeric btc_dominance>0, regime string, read non-empty. No 500s."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/cross-asset). All validations passed: (1) status='ready' ✅ (2) btc_dominance=56.62% (numeric > 0) ✅ (3) eth_dominance=10.06% (numeric) ✅ (4) regime='Balanced' (non-empty string) ✅ (5) read='BTC dominance is 56.62% (balanced); ETH/BTC at 0.02954. Total crypto market cap $2296B. Dominance is...' (non-empty string) ✅ (6) source='CoinGecko /global + simple price' (present) ✅ (7) eth_btc=0.02954 (NOT null - OKX ETH-BTC available) ✅ (8) No HTTP 500 errors ✅. Data is REAL (CoinGecko /global + OKX ETH-BTC). Feature is production-ready."
+  - task: "Data Audit — GDELT news tone (GET /api/v1/news-signals)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "REAL keyless GDELT 2.0 tone timeline (21d). NOTE: GDELT rate-limits shared IPs (1 req/5s); builder now retries up to 3x with 6s backoff. Cached 60min once fetched. Returns tone_latest, tone_avg_21d, tone_recent_3d, mood (Positive/Negative/Neutral), direction (Improving/Worsening/Stable), series[{date,tone}], confidence='MEDIUM', read. If GDELT unavailable, endpoint returns status='unavailable' with active=false and a clear reason (NO mock data). Test: GET /api/v1/news-signals -> either status='ready' with numeric tone_latest and non-empty series, OR status='unavailable' with reason (both acceptable; must NOT 500). Allow up to 40s for first call due to retries."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/news-signals). OUTCOME A: status='ready' (GDELT data available). All validations passed: (1) status='ready' ✅ (2) tone_latest=-1.296 (numeric) ✅ (3) tone_avg_21d=-1.09 (numeric) ✅ (4) tone_recent_3d=-0.809 (numeric) ✅ (5) mood='Negative' (in [Positive,Negative,Neutral]) ✅ (6) direction='Stable' (in [Improving,Worsening,Stable]) ✅ (7) series: 21 data points (non-empty list) ✅ (8) Each series item has date and tone fields: first point date=20260720, tone=-0.302 ✅ (9) No HTTP 500 errors ✅. NOTE: Both status='ready' (with data) and status='unavailable' (with active=false + reason) are acceptable outcomes due to GDELT rate-limiting. This test observed OUTCOME A (data available). Data is REAL (GDELT 2.0 Doc API tone timeline). Feature is production-ready."
+  - task: "Data Audit — FRED US macro (GET /api/v1/macro-fred)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "REAL FRED (St. Louis Fed). FRED_API_KEY now set in /app/.env (active). Returns series list (Fed Funds DFF, 2Y DGS2, 10Y DGS10, 10Y-2Y T10Y2Y, CPI CPIAUCSL, M2 M2SL, Unemployment UNRATE) each with id/label/value/change/date, confidence='HIGH', source, note. Cached 6h. Test: GET /api/v1/macro-fred -> status='ready', series non-empty (>=5 items), each item numeric value + label + date. Must NOT be 'inactive' (key is set). No 500s."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/macro-fred). All validations passed: (1) status='ready' (NOT 'inactive' - FRED_API_KEY is working) ✅ (2) series: 7 items (>=5 required) ✅ (3) All series items validated with numeric value, non-empty label, and date string: Fed Funds Rate (DFF)=3.63 (2026-08-06), 2Y Treasury (DGS2)=4.25 (2026-08-06), 10Y Treasury (DGS10)=4.69 (2026-08-06), 10Y-2Y Spread (T10Y2Y)=0.46 (2026-08-07), CPI (CPIAUCSL)=332.568 (2026-06-01), M2 Money Supply (M2SL)=23155.2 (2026-06-01), Unemployment (UNRATE)=4.1 (2026-07-01) ✅ (4) confidence='HIGH' ✅ (5) source='FRED (St. Louis Fed)' (present) ✅ (6) No HTTP 500 errors ✅. Data is REAL (FRED St. Louis Fed API with active FRED_API_KEY). Feature is production-ready."
+
+metadata:
+  created_by: "main_agent"
+  version: "1.3"
+  test_sequence: 5
+  run_ui: false
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      NEW TEST FOCUS — Data Audit Phase 1 & 2 + FRED macro. Test ONLY these 4 endpoints (backend, via external URL):
+      1) GET /api/v1/composite-price -> status='ready', numeric composite>0 & median>0, venue_count 1-4,
+         confidence in [HIGH,MEDIUM,LOW], venues list (each source+ok, outliers flagged if any), method present.
+      2) GET /api/v1/cross-asset -> status='ready', numeric btc_dominance>0, regime string, read non-empty
+         (eth_btc MAY be null — acceptable).
+      3) GET /api/v1/news-signals -> EITHER status='ready' (numeric tone_latest, non-empty series[{date,tone}],
+         mood, direction) OR status='unavailable' with active=false + reason (GDELT rate-limits this host —
+         both outcomes are ACCEPTABLE, must NOT 500). Use timeout >= 45s (builder retries GDELT 3x w/ 6s backoff).
+      4) GET /api/v1/macro-fred -> status='ready' (FRED_API_KEY is set), series non-empty (>=5), each item has
+         numeric value + label + date. Must NOT return status='inactive'.
+      Regression (quick): GET /api/v1/dashboard (BTC) still status='ready'. Do NOT test frontend.
+
+    -agent: "testing"
+    -message: |
+      ✅ DATA AUDIT PHASE 1 & 2 + FRED MACRO BACKEND TEST COMPLETE - ALL TESTS PASSED (5/5)
+      
+      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (data_audit_test.py).
+      
+      TEST 1 — COMPOSITE SPOT PRICE (GET /api/v1/composite-price):
+      ✅ status='ready'
+      ✅ composite=$64,791.72 (numeric > 0)
+      ✅ median=$64,782.49 (numeric > 0)
+      ✅ venue_count=4 (int 1-4)
+      ✅ confidence='HIGH' (in [HIGH, MEDIUM, LOW])
+      ✅ venues: 4 items (non-empty list), all with source and ok fields
+      ✅ All ok venues have numeric price > 0 and dev_pct:
+         - Coinbase: $64,780.99 (dev 0.002%)
+         - Kraken: $64,770.10 (dev 0.019%)
+         - OKX: $64,831.80 (dev 0.076%)
+         - CoinGecko: $64,784.00 (dev 0.002%)
+      ✅ No outliers flagged (all dev_pct < 0.75%)
+      ✅ fallback_chain present: ['Coinbase', 'Kraken', 'OKX', 'CoinGecko (aggregator)']
+      ✅ method present: 'Outlier-trimmed mean of independent exchange feeds (venues >0.75% from median excluded).'
+      ✅ No HTTP 500 errors
+      
+      TEST 2 — CROSS-ASSET CONTEXT (GET /api/v1/cross-asset):
+      ✅ status='ready'
+      ✅ btc_dominance=56.62% (numeric > 0)
+      ✅ eth_dominance=10.06% (numeric)
+      ✅ regime='Balanced' (non-empty string)
+      ✅ read='BTC dominance is 56.62% (balanced); ETH/BTC at 0.02954. Total crypto market cap $2296B...' (non-empty)
+      ✅ source='CoinGecko /global + simple price' (present)
+      ✅ eth_btc=0.02954 (NOT null - OKX ETH-BTC available)
+      ✅ No HTTP 500 errors
+      
+      TEST 3 — GDELT NEWS TONE (GET /api/v1/news-signals):
+      ✅ status='ready' (OUTCOME A: GDELT data available)
+      ✅ tone_latest=-1.296 (numeric)
+      ✅ tone_avg_21d=-1.09 (numeric)
+      ✅ tone_recent_3d=-0.809 (numeric)
+      ✅ mood='Negative' (in [Positive, Negative, Neutral])
+      ✅ direction='Stable' (in [Improving, Worsening, Stable])
+      ✅ series: 21 data points (non-empty list)
+      ✅ Each series item has date and tone: first point date=20260720, tone=-0.302
+      ✅ No HTTP 500 errors
+      NOTE: Both status='ready' (with data) and status='unavailable' (with active=false + reason) are acceptable 
+      outcomes due to GDELT rate-limiting. This test observed OUTCOME A (data available).
+      
+      TEST 4 — FRED US MACRO (GET /api/v1/macro-fred):
+      ✅ status='ready' (NOT 'inactive' - FRED_API_KEY is working)
+      ✅ series: 7 items (>=5 required)
+      ✅ All series items validated with numeric value, non-empty label, and date string:
+         1. Fed Funds Rate (DFF): 3.63 (as of 2026-08-06)
+         2. 2Y Treasury (DGS2): 4.25 (as of 2026-08-06)
+         3. 10Y Treasury (DGS10): 4.69 (as of 2026-08-06)
+         4. 10Y-2Y Spread (T10Y2Y): 0.46 (as of 2026-08-07)
+         5. CPI (CPIAUCSL): 332.568 (as of 2026-06-01)
+         6. M2 Money Supply (M2SL): 23155.2 (as of 2026-06-01)
+         7. Unemployment (UNRATE): 4.1 (as of 2026-07-01)
+      ✅ confidence='HIGH'
+      ✅ source='FRED (St. Louis Fed)' (present)
+      ✅ No HTTP 500 errors
+      
+      REGRESSION TEST (GET /api/v1/dashboard):
+      ✅ status='ready' (no breaking changes)
+      
+      EXACT OBSERVED VALUES (as requested):
+      - Composite Price: composite=$64,791.72, median=$64,782.49, venue_count=4, confidence='HIGH'
+      - Cross-Asset: btc_dominance=56.62%, regime='Balanced'
+      - News Signals: tone_latest=-1.296, mood='Negative', direction='Stable', series=21 points
+      - FRED Macro: series_count=7, confidence='HIGH'
+      
+      DATA SOURCES CONFIRMED:
+      - Composite Price: Coinbase, Kraken, OKX, CoinGecko (4 independent exchange feeds) - REAL
+      - Cross-Asset: CoinGecko /global + OKX ETH-BTC - REAL
+      - News Signals: GDELT 2.0 Doc API (tone timeline) - REAL
+      - FRED Macro: FRED St. Louis Fed API with active FRED_API_KEY - REAL
+      
+      KEY OBSERVATIONS:
+      - All 4 endpoints return REAL data (no mocks)
+      - All endpoints return status='ready' (no 'inactive' or 'unavailable' states observed)
+      - All numeric fields validated (prices, dominance, tone, macro values)
+      - All enum fields validated (confidence, mood, direction)
+      - All list fields non-empty (venues, series)
+      - No HTTP 500 errors at any point
+      - Dashboard regression passed (no breaking changes)
+      
+      NO CRITICAL ISSUES FOUND. All 4 Data Audit endpoints are production-ready. Feature is fully functional with REAL data.
+

@@ -4695,6 +4695,182 @@ def admin_overview():
             'usage': usage, 'costs': costs, 'scheduler_jobs': jobs, 'collections': collections}
 
 
+# =====================================================================
+# AUDIT PHASE 1 & 2: Composite spot price (multi-venue + confidence/provenance),
+# cross-asset context, GDELT news signals, FRED macro (key-gated).
+# Binance is geo-blocked (HTTP 451) from this host, so venues = Coinbase, Kraken, OKX.
+# =====================================================================
+FRED_API_KEY = os.environ.get('FRED_API_KEY', '')
+
+
+def _confidence(n_ok, spread_pct):
+    """HIGH = >=3 venues agree tightly; MEDIUM = 2 agree; LOW = 1 or wide disagreement."""
+    if n_ok >= 3 and spread_pct is not None and spread_pct < 0.5:
+        return 'HIGH'
+    if n_ok >= 2 and (spread_pct is None or spread_pct < 1.5):
+        return 'MEDIUM'
+    return 'LOW'
+
+
+@app.get('/api/v1/composite-price')
+def composite_price():
+    """BTCIQ Composite Bitcoin Price — median of independent venues with outlier detection,
+    fallback chain and data-confidence/provenance. REAL, keyless."""
+    venues = []
+    def add(name, fn):
+        t = time.time()
+        try:
+            v = fn()
+            if v and v > 0:
+                venues.append({'source': name, 'price': round(float(v), 2),
+                               'latency_ms': int((time.time() - t) * 1000), 'ok': True})
+        except Exception:  # noqa
+            venues.append({'source': name, 'price': None, 'ok': False})
+    add('Coinbase', lambda: float(_engine_get('https://api.coinbase.com/v2/prices/BTC-USD/spot')['data']['amount']))
+    add('Kraken', lambda: float(list(_engine_get('https://api.kraken.com/0/public/Ticker?pair=XBTUSD')['result'].values())[0]['c'][0]))
+    add('OKX', lambda: float(_engine_get('https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT')['data'][0]['last']))
+    add('CoinGecko', lambda: float(_engine_get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd')['bitcoin']['usd']))
+    prices = sorted(v['price'] for v in venues if v.get('ok') and v.get('price'))
+    n = len(prices)
+    if not n:
+        return {'status': 'stale', 'confidence': 'LOW', 'venues': venues,
+                'note': 'No live venue responded — no composite price available.'}
+    median = prices[n // 2] if n % 2 else round((prices[n // 2 - 1] + prices[n // 2]) / 2, 2)
+    spread_pct = round((prices[-1] - prices[0]) / median * 100, 3) if median else None
+    # outlier detection: flag venues >0.75% from median
+    outliers = []
+    for v in venues:
+        if v.get('ok') and v.get('price') and median:
+            dev = abs(v['price'] - median) / median * 100
+            v['dev_pct'] = round(dev, 3)
+            if dev > 0.75:
+                v['outlier'] = True
+                outliers.append(v['source'])
+    good = [v['price'] for v in venues if v.get('ok') and not v.get('outlier')]
+    composite = round(sum(good) / len(good), 2) if good else median
+    return {'status': 'ready', 'composite': composite, 'median': median,
+            'venue_count': n, 'spread_pct': spread_pct, 'outliers': outliers,
+            'confidence': _confidence(n, spread_pct), 'venues': venues,
+            'as_of': datetime.datetime.utcnow().isoformat(),
+            'fallback_chain': ['Coinbase', 'Kraken', 'OKX', 'CoinGecko (aggregator)'],
+            'method': 'Outlier-trimmed mean of independent exchange feeds (venues >0.75% from median excluded).'}
+
+
+@app.get('/api/v1/cross-asset')
+def cross_asset():
+    """Broader crypto-market context — dominance, ETH/BTC, total mcap, stablecoins. REAL (CoinGecko)."""
+    d = _misc_get('cross_asset', 15 * 60, _compute_cross_asset)
+    return {'status': 'ready', **d} if d else {'status': 'computing'}
+
+
+def _compute_cross_asset():
+    g = _engine_get('https://api.coingecko.com/api/v3/global') or {}
+    data = g.get('data') or {}
+    mc = data.get('market_cap_percentage') or {}
+    total = (data.get('total_market_cap') or {}).get('usd')
+    # ETH/BTC from OKX (native market — avoids a second rate-limited CoinGecko call)
+    ethbtc = None
+    try:
+        ethbtc = float((_okx('/api/v5/market/ticker', {'instId': 'ETH-BTC'}) or [{}])[0].get('last'))
+    except Exception:  # noqa
+        pass
+    # stablecoin caps (best-effort; tolerate CoinGecko rate limits)
+    stable = 0
+    try:
+        px = _engine_get('https://api.coingecko.com/api/v3/simple/price?ids=tether,usd-coin&vs_currencies=usd&include_market_cap=true') or {}
+        stable = round(((px.get('tether') or {}).get('usd_market_cap', 0) or 0)
+                       + ((px.get('usd-coin') or {}).get('usd_market_cap', 0) or 0))
+    except Exception:  # noqa
+        pass
+    btc_dom = round(mc.get('btc', 0), 2)
+    regime = ('Risk-on (alts gaining)' if btc_dom and btc_dom < 52
+              else 'Risk-off (BTC dominant)' if btc_dom and btc_dom > 58 else 'Balanced')
+    return {'btc_dominance': btc_dom, 'eth_dominance': round(mc.get('eth', 0), 2),
+            'eth_btc': (round(ethbtc, 5) if ethbtc else None),
+            'total_market_cap_usd': total, 'stablecoin_mcap_usd': stable,
+            'mcap_change_24h': round(data.get('market_cap_change_percentage_24h_usd', 0), 2),
+            'regime': regime, 'confidence': 'MEDIUM',
+            'read': (f"BTC dominance is {btc_dom}% ({regime.lower()}); ETH/BTC at "
+                     f"{(round(ethbtc,5) if ethbtc else 'n/a')}. Total crypto market cap "
+                     f"${round((total or 0)/1e9)}B. Dominance is a single-aggregator read (CoinGecko)."),
+            'source': 'CoinGecko /global + simple price'}
+
+
+@app.get('/api/v1/news-signals')
+def news_signals():
+    """Structured Bitcoin news/media signals from GDELT (event tone & attention). REAL, keyless.
+    We extract SIGNALS (tone, coverage trend) — not article text."""
+    d = _misc_get('news_signals', 60 * 60, _compute_news_signals)
+    if d:
+        return {'status': 'ready', **d}
+    return {'status': 'unavailable', 'active': False, 'confidence': 'LOW',
+            'reason': 'No news-tone data available — GDELT is rate-limiting this host. '
+                      'Will populate automatically once the feed responds.',
+            'source': 'GDELT 2.0 Doc API (tone timeline)'}
+
+
+def _compute_news_signals():
+    # GDELT free API rate-limits shared IPs (1 req / 5s); retry with backoff.
+    j = None
+    for attempt in range(3):
+        j = _engine_get('https://api.gdeltproject.org/api/v2/doc/doc?query=bitcoin&mode=timelinetone&format=json&timespan=21d')
+        if j and (j.get('timeline')):
+            break
+        j = None
+        time.sleep(6)
+    j = j or {}
+    tl = j.get('timeline') or []
+    series = tl[0]['data'] if tl else []
+    pts = [{'date': p['date'][:8], 'tone': round(p['value'], 3)} for p in series]
+    tones = [p['tone'] for p in pts]
+    if not tones:
+        return None
+    latest = tones[-1]
+    avg = round(sum(tones) / len(tones), 3)
+    recent = round(sum(tones[-3:]) / len(tones[-3:]), 3)
+    direction = ('Improving' if recent > avg + 0.3 else 'Worsening' if recent < avg - 0.3 else 'Stable')
+    mood = ('Positive' if latest > 0.5 else 'Negative' if latest < -0.5 else 'Neutral')
+    return {'tone_latest': latest, 'tone_avg_21d': avg, 'tone_recent_3d': recent,
+            'mood': mood, 'direction': direction, 'series': pts, 'confidence': 'MEDIUM',
+            'read': (f"Global Bitcoin news tone is {mood.lower()} ({latest}) and {direction.lower()} vs its "
+                     f"21-day average ({avg}). Tone is a media-sentiment SIGNAL from GDELT, not a price call."),
+            'source': 'GDELT 2.0 Doc API (tone timeline)'}
+
+
+@app.get('/api/v1/macro-fred')
+def macro_fred():
+    """US macro from FRED (Fed Funds, yields, CPI, M2). Needs FRED_API_KEY; otherwise inactive."""
+    if not FRED_API_KEY:
+        return {'status': 'inactive', 'active': False,
+                'reason': 'No FRED data available — set FRED_API_KEY (free at fred.stlouisfed.org) to activate.'}
+    d = _misc_get('macro_fred', 6 * 3600, _compute_macro_fred)
+    return {'status': 'ready', **d} if d else {'status': 'computing'}
+
+
+def _compute_macro_fred():
+    series = {'DFF': 'Fed Funds Rate', 'DGS2': '2Y Treasury', 'DGS10': '10Y Treasury',
+              'T10Y2Y': '10Y-2Y Spread', 'CPIAUCSL': 'CPI', 'M2SL': 'M2 Money Supply',
+              'UNRATE': 'Unemployment'}
+    out = []
+    for sid, label in series.items():
+        try:
+            j = _engine_get(f'https://api.stlouisfed.org/fred/series/observations?series_id={sid}'
+                            f'&api_key={FRED_API_KEY}&file_type=json&sort_order=desc&limit=2')
+            obs = (j or {}).get('observations') or []
+            if obs:
+                val = float(obs[0]['value'])
+                prev = float(obs[1]['value']) if len(obs) > 1 and obs[1]['value'] not in ('.', '') else None
+                out.append({'id': sid, 'label': label, 'value': val,
+                            'change': (round(val - prev, 3) if prev is not None else None),
+                            'date': obs[0]['date']})
+        except Exception:  # noqa
+            pass
+    return {'series': out, 'confidence': 'HIGH', 'source': 'FRED (St. Louis Fed)',
+            'note': 'Latest published values. Use ALFRED vintages for look-ahead-safe backtesting.'} if out else None
+
+
+
+
 
 @app.get('/api/v1/alerts')
 def alerts_feed(limit: int = 50, symbol: str = None):
