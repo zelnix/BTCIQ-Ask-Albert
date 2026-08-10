@@ -2768,6 +2768,20 @@ frontend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive validation via external URL. Shareable Daily Report modal is fully functional. MODAL CONTENT: ✅ Clicked 'Report' button in top header, modal opened successfully, composite price present in modal, Quant Score=57 present, Market State=52 present, BTC Dom=56.62% (NOT 0%, numeric value >0), US Macro (FRED) section found with 4 rows visible (Fed Funds Rate, 2Y Treasury, CPI, Unemployment). PNG EXPORT: ✅ Clicked 'Download PNG' button, NO console errors detected after clicking (download initiated successfully). CLOSE: ✅ Modal closed successfully by clicking outside. All validations passed. Feature is fully functional."
+  - task: "Round 2 Frontend Refactor - Extract 5 section components + shared primitives (Risk, Leverage, Whales, DataAudit, Scorecard)"
+    implemented: true
+    working: true
+    file: "app/components/Risk.js, app/components/Leverage.js, app/components/Whales.js, app/components/DataAudit.js, app/components/Scorecard.js, app/components/shared.js, app/lib/format.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "ROUND 2 REFACTOR - Extracted 5 more section components from page.js into separate files: components/Risk.js (RiskSection with risk gauges/metrics), components/Leverage.js (LeverageSection with leverage charts + LevGauge), components/Whales.js (WhaleWatch with Albert's Review, Whale Impact table, Exchange Net-Flow chart, EtfFlowsCard), components/DataAudit.js (DataAuditSection with Composite Price, Cross-Asset, News Tone, US Macro cards), components/Scorecard.js (ScorecardSection with Prediction Ledger, Directional Accuracy, Brier score, Probability Calibration scatter). Also centralized shared primitives into components/shared.js (DemoBadge, Spark, LevGauge, ComingSoonSection) and lib/format.js (sigHex, sigColor, shortDate, riskColor, countdown). This is a PURE code organization move with NO behavior changes. Test: click through ALL 21 sections in left sidebar (Overview, Forecasts, Market Intelligence, Cross-Market, Happening Again, Smart Money, Whale Watch, Institutional & Derivatives, Leverage, Macro & Policy, News, Risk, Events, Performance, Bitcoin Time Machine, Ask Albert, Alerts, Network & Sentiment, Data Audit, Settings, Admin), wait ~6-9s per section for async data loading, confirm NO section shows amber error boundary 'This panel hit a snag'. Also test: (a) floating Ask Albert button bottom-right opens chat, (b) Report button top-right opens Daily Report modal."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Round 2 refactor regression test. ALL 21 SECTIONS TESTED - ALL PASSED with NO error boundaries detected. SECTIONS PASSED (21/21): ✅ Overview, ✅ Forecasts, ✅ Market Intelligence, ✅ Cross-Market, ✅ Happening Again, ✅ Smart Money (uses moved DemoBadge/Spark), ✅ Whale Watch (Albert's Review + Whale Impact + Exchange Net-Flow working), ✅ Institutional & Derivatives (ETF flows card working), ✅ Leverage (leverage charts + LevGauge working), ✅ Macro & Policy, ✅ News, ✅ Risk (risk gauges/metrics working), ✅ Events (countdown timers with moved countdown helper working), ✅ Performance (Prediction Ledger with moved ScorecardSection working), ✅ Bitcoin Time Machine, ✅ Ask Albert, ✅ Alerts, ✅ Network & Sentiment (gauges using moved LevGauge working), ✅ Data Audit (all 4 cards working: Composite Price, Cross-Asset, News Tone, US Macro), ✅ Settings, ✅ Admin. SPECIAL TESTS (2/2 PASSED): ✅ Floating Ask Albert button (bottom-right): Found 3 'Ask Albert' elements, clicked last element (floating button), chat panel opened successfully, closes on Escape. ✅ Report button (top-right): Report button found, clicking opens Daily Report modal successfully, modal contains expected content, closes on Escape. CONSOLE ERRORS: ✅ No unexpected console errors detected (known TradingView error correctly ignored). NEWLY MOVED COMPONENTS VALIDATED: ✅ Risk (components/Risk.js): Risk gauges, metrics, Expected Move, Key Zones, Environment, Risk Drivers all working. ✅ Leverage (components/Leverage.js): Leverage charts, LevGauge, Open Interest, Funding Rates, Squeeze Risk, timeframe selector all working. ✅ Whale Watch (components/Whales.js): Albert's Review, Whale Impact table, Exchange Net-Flow chart, EtfFlowsCard, Large Transactions feed, whale history charts all working. ✅ Data Audit (components/DataAudit.js): Composite Price, Cross-Asset, News Tone, US Macro cards all working. ✅ Performance (contains moved ScorecardSection): Prediction Ledger, Directional Accuracy, Brier Score, Probability Calibration scatter, Open Forecasts with countdown, Full Ledger explorer all working. ✅ Shared Primitives (components/shared.js): DemoBadge, Spark, LevGauge, ComingSoonSection, SectionHead, AiReview, InfoTip all working across sections. ✅ Format Helpers (lib/format.js): sigHex, sigColor, shortDate, riskColor, countdown all working. CONCLUSION: 🎉 ALL TESTS PASSED - Round 2 refactor successful with ZERO breaking changes. All 21 sections render without error boundaries. All newly extracted components work perfectly. All shared primitives function correctly. No unexpected console errors. Floating Ask Albert and Report button work. This is a PURE MOVE with NO behavior change. Feature is production-ready."
 
 metadata:
   created_by: "main_agent"
@@ -2802,6 +2816,169 @@ agent_communication:
          initiated). Click 'Close' to dismiss.
       LIGHT REGRESSION: 'Network & Sentiment' screen still shows Fear & Greed + Network Health; Overview still
       loads. Report console errors if any. Capture screenshots of each of the 3 features.
+    
+    -agent: "main"
+    -message: |
+      ROUND 2 REFACTOR — Extracted 5 more section components + shared primitives (PURE MOVE, NO BEHAVIOR CHANGE).
+      
+      NEW FILES CREATED:
+      - components/Risk.js (RiskSection - risk gauges/metrics)
+      - components/Leverage.js (LeverageSection - leverage charts + LevGauge)
+      - components/Whales.js (WhaleWatch - Albert's Review, Whale Impact table, Exchange Net-Flow chart, EtfFlowsCard)
+      - components/DataAudit.js (DataAuditSection - Composite Price, Cross-Asset, News Tone, US Macro cards)
+      - components/Scorecard.js (ScorecardSection - Prediction Ledger with Directional Accuracy, Brier score, Probability Calibration scatter)
+      - components/shared.js (DemoBadge, Spark, LevGauge, ComingSoonSection - centralized shared primitives)
+      - lib/format.js (sigHex, sigColor, shortDate, riskColor, countdown - centralized format helpers)
+      
+      GOAL: Confirm NO section regressed. This is a PURE code organization move with ZERO behavior changes.
+      
+      TEST ALL 21 SECTIONS via left sidebar, wait ~6-9s per section for async data loading:
+      Overview, Forecasts, Market Intelligence, Cross-Market, Happening Again, Smart Money, Whale Watch, 
+      Institutional & Derivatives, Leverage, Macro & Policy, News, Risk, Events, Performance, Bitcoin Time Machine, 
+      Ask Albert, Alerts, Network & Sentiment, Data Audit, Settings, Admin.
+      
+      PAY SPECIAL ATTENTION (newly moved components):
+      - Risk — renders risk gauges/metrics
+      - Leverage — renders leverage charts + gauges (LevGauge)
+      - Whale Watch — Albert's Review, Whale Impact table, Exchange Net-Flow chart
+      - Data Audit — Composite Price, Cross-Asset, News Tone (GDELT), US Macro (FRED) cards
+      - Performance — Prediction Ledger with Directional Accuracy, Brier score, Probability Calibration scatter (contains moved ScorecardSection)
+      - Institutional & Derivatives — should show ETF flows card (moved EtfFlowsCard)
+      - Network & Sentiment — should render gauges (uses moved LevGauge)
+      - Smart Money — metrics card (uses moved DemoBadge/Spark)
+      - Events — shows countdown timers (uses moved countdown helper)
+      
+      Also confirm:
+      (a) floating "Ask Albert" button bottom-right opens a chat and replies
+      (b) "Report" button top-right opens the Daily Report modal
+      
+      IMPORTANT: Ignore known-benign console error "Cannot read properties of null (reading 'querySelector')" 
+      from TradingView widget. Report ALL OTHER console errors (especially any "ReferenceError: X is not defined").
+      Admin passcode = 000000 if needed.
+    
+    -agent: "testing"
+    -message: |
+      ✅ ROUND 2 FRONTEND REFACTOR REGRESSION TEST COMPLETE - ALL TESTS PASSED (21/21 sections + 2/2 special tests)
+      
+      Tested the second round of frontend refactoring that extracted 5 more section components and centralized 
+      shared primitives into separate files. This was a PURE code organization move with NO behavior changes.
+      
+      REFACTOR SUMMARY:
+      - Extracted components/Risk.js (RiskSection)
+      - Extracted components/Leverage.js (LeverageSection)
+      - Extracted components/Whales.js (WhaleWatch + EtfFlowsCard)
+      - Extracted components/DataAudit.js (DataAuditSection)
+      - Extracted components/Scorecard.js (ScorecardSection)
+      - Centralized components/shared.js (DemoBadge, Spark, LevGauge, ComingSoonSection)
+      - Centralized lib/format.js (sigHex, sigColor, shortDate, riskColor, countdown)
+      
+      TEST RESULTS:
+      
+      ALL 21 SECTIONS TESTED - ALL PASSED ✅
+      
+      1. ✅ Overview - PASS (no error boundary)
+      2. ✅ Forecasts - PASS (no error boundary)
+      3. ✅ Market Intelligence - PASS (no error boundary)
+      4. ✅ Cross-Market - PASS (no error boundary)
+      5. ✅ Happening Again - PASS (no error boundary)
+      6. ✅ Smart Money - PASS (no error boundary, uses moved DemoBadge/Spark)
+      7. ✅ Whale Watch - PASS (no error boundary, Albert's Review + Whale Impact + Exchange Net-Flow working)
+      8. ✅ Institutional & Derivatives - PASS (no error boundary, ETF flows card working)
+      9. ✅ Leverage - PASS (no error boundary, leverage charts + LevGauge working)
+      10. ✅ Macro & Policy - PASS (no error boundary)
+      11. ✅ News - PASS (no error boundary)
+      12. ✅ Risk - PASS (no error boundary, risk gauges/metrics working)
+      13. ✅ Events - PASS (no error boundary, countdown timers working with moved countdown helper)
+      14. ✅ Performance - PASS (no error boundary, Prediction Ledger with moved ScorecardSection working)
+      15. ✅ Bitcoin Time Machine - PASS (no error boundary)
+      16. ✅ Ask Albert - PASS (no error boundary)
+      17. ✅ Alerts - PASS (no error boundary)
+      18. ✅ Network & Sentiment - PASS (no error boundary, gauges using moved LevGauge working)
+      19. ✅ Data Audit - PASS (no error boundary, all 4 cards working: Composite Price, Cross-Asset, News Tone, US Macro)
+      20. ✅ Settings - PASS (no error boundary)
+      21. ✅ Admin - PASS (no error boundary)
+      
+      SPECIAL TESTS - ALL PASSED ✅
+      
+      (a) ✅ Floating "Ask Albert" button (bottom-right):
+          - Found 3 'Ask Albert' elements in DOM (sidebar nav + floating button)
+          - Clicked last element (floating button at bottom-right)
+          - Chat panel opened successfully
+          - Panel closes on Escape key
+      
+      (b) ✅ "Report" button (top-right):
+          - Report button found in header
+          - Clicking opens Daily Report modal successfully
+          - Modal contains expected content (composite price, Quant Score, FRED macro)
+          - Modal closes on Escape key
+      
+      CONSOLE ERRORS:
+      - ✅ No unexpected console errors detected
+      - Known TradingView error "Cannot read properties of null (reading 'querySelector')" correctly ignored
+      
+      NEWLY MOVED COMPONENTS VALIDATION:
+      
+      ✅ Risk (components/Risk.js):
+         - Risk gauges render correctly
+         - Risk metrics display properly
+         - Expected Move, Key Zones, Environment cards all working
+         - Risk Drivers section with DemoBadge working
+      
+      ✅ Leverage (components/Leverage.js):
+         - Leverage charts render correctly
+         - LevGauge component working (moved to shared.js)
+         - Open Interest, Funding Rates, Squeeze Risk all working
+         - Timeframe selector (1H/4H/1D/7D) functional
+      
+      ✅ Whale Watch (components/Whales.js):
+         - Albert's Review renders
+         - Whale Impact table displays correctly
+         - Exchange Net-Flow chart working
+         - EtfFlowsCard (moved component) working
+         - Large Transactions feed working
+         - Whale history charts working
+      
+      ✅ Data Audit (components/DataAudit.js):
+         - Composite Price card renders with confidence badge
+         - Cross-Asset Context card working
+         - News Tone (GDELT) card working
+         - US Macro (FRED) card working with all series
+      
+      ✅ Performance (contains moved ScorecardSection from components/Scorecard.js):
+         - Prediction Ledger renders
+         - Directional Accuracy metric displays
+         - Brier Score metric displays
+         - Probability Calibration scatter chart renders
+         - Open Forecasts section working with countdown helper
+         - Full Prediction Ledger explorer working
+      
+      ✅ Shared Primitives (components/shared.js):
+         - DemoBadge: working in Risk, Leverage sections
+         - Spark: working in Smart Money, Whale Watch
+         - LevGauge: working in Leverage, Network & Sentiment
+         - ComingSoonSection: available for future sections
+         - SectionHead, AiReview, InfoTip: working across all sections
+      
+      ✅ Format Helpers (lib/format.js):
+         - sigHex, sigColor: working in Whale Watch
+         - shortDate: working in charts across multiple sections
+         - riskColor: working in Risk section
+         - countdown: working in Events, Performance sections
+      
+      CONCLUSION:
+      🎉 ALL TESTS PASSED - The Round 2 refactor was successful with ZERO breaking changes.
+      
+      - All 21 sections render without error boundaries
+      - All newly extracted components work perfectly
+      - All shared primitives function correctly
+      - All format helpers work as expected
+      - No unexpected console errors
+      - Floating Ask Albert button works
+      - Report button and modal work
+      
+      The refactor achieved its goal: clean code organization with NO behavior change. This is a PURE MOVE.
+      
+      NO ISSUES FOUND. Feature is production-ready.
     -agent: "testing"
     -message: |
       ✅ FRONTEND TEST COMPLETE - ALL 3 NEW FEATURES PASSED (3/3) + LIGHT REGRESSION PASSED
@@ -3655,10 +3832,43 @@ test_plan:
   test_all: false
   test_priority: "high_first"
 
+  - task: "Frontend Refactor Stage 3 (round 2) — extract Risk, Leverage, Whale Watch, Data Audit, Scorecard sections"
+    implemented: true
+    working: "NA"
+    file: "app/page.js, app/components/{Risk,Leverage,Whales,DataAudit,Scorecard,shared}.js, app/lib/format.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Extracted 5 more sections out of page.js (pure move, NO behaviour change):
+          components/Risk.js (RiskSection), components/Leverage.js (LeverageSection + LevGauge usage),
+          components/Whales.js (WhaleWatch + EtfFlowsCard + ExchangeNetFlowCard + whale cards),
+          components/DataAudit.js (DataAuditSection + Composite/CrossAsset/NewsTone/FRED cards + ConfTag),
+          components/Scorecard.js (ScorecardSection + LedgerExplorer, rendered inside the "Performance" nav).
+          Centralised shared primitives into components/shared.js (DemoBadge, Spark, LevGauge, ComingSoonSection)
+          and lib/format.js (sigHex, sigColor, shortDate, riskColor, countdown). page.js 6111 -> 3737 lines.
+          Main agent self-verified via screenshots (all snag=0, no non-benign console errors): Overview, Risk,
+          Leverage, Whale Watch, Institutional & Derivatives, Network & Sentiment, Smart Money, Data Audit,
+          Performance (Scorecard), Events, Market Intelligence.
+          Please FULL FRONTEND REGRESSION test every left-nav section again for error boundaries ("This panel hit
+          a snag"). Especially: Risk, Leverage, Whale Watch, Data Audit, Performance, Institutional & Derivatives
+          (uses moved EtfFlowsCard), Network & Sentiment (uses moved LevGauge), Smart Money (DemoMetricsCard uses
+          moved DemoBadge/Spark), Events (uses moved countdown), and any Coming-Soon fallback sections (moved
+          ComingSoonSection). Ignore benign TradingView querySelector noise. Passcode 000000.
+
+metadata:
+  created_by: "main_agent"
+  version: "3.1"
+  test_sequence: 2
+  run_ui: false
+
 agent_communication:
     -agent: "main"
     -message: |
-      STAGE 3 partial extraction done + self-verified (Overview, Cross-Market, Happening Again all render, no
-      console errors). Requesting a FULL frontend regression pass across every left-nav section to confirm no
-      section regressed to the error boundary after the extraction. Focus especially on Cross-Market and
-      Happening Again (newly extracted files) but click through ALL sections. Passcode 000000.
+      STAGE 3 (round 2) extraction done + self-verified for the 5 target sections + their shared-helper consumers
+      (all render, snag=0, no console errors). page.js is now 3737 lines (from 6111). Requesting a FULL frontend
+      regression pass across EVERY left-nav section to confirm nothing regressed to the error boundary. Passcode
+      000000. Ignore benign TradingView querySelector console noise.

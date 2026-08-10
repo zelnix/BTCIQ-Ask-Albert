@@ -21,3 +21,20 @@ export const scoreColor = (s) =>
 export const signalText = (w) =>
   w === 'Bullish' || w === 'UP' ? 'text-emerald-400'
     : w === 'Bearish' || w === 'DOWN' ? 'text-red-400' : 'text-slate-300';
+
+// ---- shared color / date helpers (centralised during Stage 3 refactor) ----
+export const sigHex = (s) => s === 'Bullish' ? '#34d399' : s === 'Bearish' ? '#f87171' : '#94a3b8';
+export const sigColor = (s) => s === 'Bullish' ? 'text-emerald-400' : s === 'Bearish' ? 'text-red-400' : 'text-slate-400';
+export const shortDate = (iso) => { try { return new Date(iso + (iso.length <= 10 ? 'T00:00:00Z' : '')).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' }); } catch { return iso; } };
+export const riskColor = (lvl) => ({
+  Low: 'text-emerald-400', Moderate: 'text-lime-400', Elevated: 'text-amber-400',
+  High: 'text-orange-400', Extreme: 'text-red-400',
+}[lvl] || 'text-slate-300');
+
+// ---- countdown (centralised) ----
+export function countdown(dateStr) {
+  const t = new Date(dateStr + 'T13:30:00Z').getTime() - Date.now();
+  if (t <= 0) return 'now';
+  const d = Math.floor(t / 86400000); const h = Math.floor((t % 86400000) / 3600000);
+  return d > 0 ? `${d}d ${h}h` : `${h}h`;
+}

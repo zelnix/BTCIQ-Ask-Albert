@@ -3,6 +3,7 @@
 import React from 'react';
 import { RefreshCw, Sparkles, Info, Brain, Volume2, VolumeX, Clock, X } from 'lucide-react';
 import { Card } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { API_BASE } from '../lib/api';
 import { fmtUsd, fmtPct, scoreColor } from '../lib/format';
 import { SymbolContext } from '../lib/context';
@@ -282,4 +283,64 @@ const SectionHead = ({ icon: Icon, title, blurb, coin }) => {
   );
 };
 
-export { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead };
+
+function DemoBadge({ label = 'Inactive' }) {
+  return <span className="rounded border border-slate-500/40 bg-slate-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-slate-300">{label}</span>;
+}
+
+function Spark({ data, color = '#94a3b8', width = 72, height = 22 }) {
+  if (!data || data.length < 2) return null;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const rng = (max - min) || 1;
+  const pts = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * (width - 2) + 1;
+    const y = height - 1 - ((v - min) / rng) * (height - 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  const last = data[data.length - 1];
+  const lx = width - 1;
+  const ly = height - 1 - ((last - min) / rng) * (height - 2);
+  return (
+    <svg width={width} height={height} className="shrink-0" aria-hidden="true">
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={lx.toFixed(1)} cy={ly.toFixed(1)} r="1.6" fill={color} />
+    </svg>
+  );
+}
+
+function LevGauge({ value = 0, label = '', color = '#f87171' }) {
+  const v = Math.max(0, Math.min(100, value || 0));
+  const R = 34, C = Math.PI * R; // semicircle
+  const off = C * (1 - v / 100);
+  return (
+    <div className="flex flex-col items-center">
+      <svg width="96" height="58" viewBox="0 0 96 58">
+        <path d="M8 52 A40 40 0 0 1 88 52" fill="none" stroke="#1e293b" strokeWidth="8" strokeLinecap="round" />
+        <path d="M8 52 A40 40 0 0 1 88 52" fill="none" stroke={color} strokeWidth="8" strokeLinecap="round"
+          strokeDasharray={C} strokeDashoffset={off} />
+        <text x="48" y="46" textAnchor="middle" className="fill-white" style={{ fontSize: 18, fontWeight: 700 }}>{Math.round(v)}</text>
+      </svg>
+      <span className="text-[11px] font-semibold" style={{ color }}>{label}</span>
+    </div>
+  );
+}
+
+
+
+function ComingSoonSection({ section }) {
+  const Icon = section.icon;
+  return (
+    <div className="space-y-5">
+      <SectionHead icon={Icon} title={section.label} blurb={section.blurb} />
+      <Card className="flex flex-col items-center justify-center gap-4 border-0 bg-slate-900 p-16 ring-1 ring-slate-800">
+        <div className="rounded-full bg-slate-800 p-4"><Icon className="h-8 w-8 text-sky-400" /></div>
+        <h3 className="text-xl font-bold text-white">{section.label} is coming soon</h3>
+        <p className="max-w-md text-center text-sm text-slate-400">This section is on the roadmap. The core intelligence engine (score, regime, forecasts, performance) is live now — this builds on top of it.</p>
+        <Badge variant="outline" className="border-slate-700 text-slate-400">Roadmap</Badge>
+      </Card>
+    </div>
+  );
+}
+
+export { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, DemoBadge, Spark, LevGauge, ComingSoonSection };
