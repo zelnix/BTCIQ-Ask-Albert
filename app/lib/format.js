@@ -38,3 +38,24 @@ export function countdown(dateStr) {
   const d = Math.floor(t / 86400000); const h = Math.floor((t % 86400000) / 3600000);
   return d > 0 ? `${d}d ${h}h` : `${h}h`;
 }
+
+// ---- forecast lookups + news direction colours (centralised) ----
+export const f24 = (d) => (d.forecasts || []).find((x) => x.horizon === '24H');
+export const fBy = (d, h) => (d.forecasts || []).find((x) => x.horizon === h);
+export const DIR_COLOR = {
+  bullish: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10',
+  bearish: 'text-red-400 border-red-500/30 bg-red-500/10',
+  mixed: 'text-amber-400 border-amber-500/30 bg-amber-500/10',
+  neutral: 'text-slate-400 border-slate-700 bg-slate-800/40',
+};
+
+// ---- correlation color helper (for cross-market correlations) ----
+export const corrColor = (corr) => {
+  if (corr == null) return 'text-slate-500';
+  const val = parseFloat(corr);
+  if (val >= 0.5) return 'text-emerald-400';
+  if (val >= 0.2) return 'text-lime-400';
+  if (val > -0.2) return 'text-slate-400';
+  if (val > -0.5) return 'text-orange-400';
+  return 'text-red-400';
+};
