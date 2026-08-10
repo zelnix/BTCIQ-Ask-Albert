@@ -3834,11 +3834,11 @@ test_plan:
 
   - task: "Frontend Refactor Stage 3 (round 2) — extract Risk, Leverage, Whale Watch, Data Audit, Scorecard sections"
     implemented: true
-    working: "NA"
+    working: true
     file: "app/page.js, app/components/{Risk,Leverage,Whales,DataAudit,Scorecard,shared}.js, app/lib/format.js"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
