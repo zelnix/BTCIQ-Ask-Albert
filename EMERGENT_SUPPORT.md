@@ -96,3 +96,15 @@ INFO:     Uvicorn running on http://0.0.0.0:8001
 ```
 
 **Conclusion:** In preview the FastAPI backend starts, serves JSON directly (`:8001`) and through the Next.js proxy (`:3000/api/*`). On **production (btciq.app)** the identical `/api/*` requests return an HTML page instead of JSON — i.e., the backend service is not being started in the production container. Please enable `[program:backend]` (uvicorn `server:app` on port 8001, dir `/app/backend`) in the production deployment.
+
+---
+
+# Appendix B — Compute resources for scikit-learn (please confirm)
+
+The FastAPI backend uses **scikit-learn** (a RandomForest classifier) for the Bitcoin forecast engine. The deployment readiness check flagged that ML libraries may exceed the standard deployment resources (250m CPU / 1Gi memory / 2 replicas).
+
+Please advise / confirm:
+1. Does the fullstack production container for this project provide **enough CPU/memory** to run scikit-learn inference (and periodic model refit) on the FastAPI backend? If not, can resources be raised for this deployment?
+2. If scikit-learn is not supported on standard resources, what is the recommended path (higher-resource tier, or moving model training off the request path / to a scheduled job — which this app already does via APScheduler)?
+
+Note: model training runs on a background scheduler (not per-request), and inference is lightweight, so steady-state memory/CPU should be modest — but please confirm the allocation is sufficient before/after enabling the backend service.
