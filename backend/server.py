@@ -2254,6 +2254,38 @@ def _misc_get(key, ttl, builder):
     return c.get('data')
 
 
+# Non-blocking cache: serve cached data immediately (even if stale) and refresh in the
+# background. Prevents slow upstream fetches (e.g. GDELT's 3x6s retry) from blocking the
+# request and causing 504s at the proxy.
+_misc_refreshing = set()
+_misc_refresh_lock = threading.Lock()
+
+
+def _misc_refresh_bg(key, builder):
+    try:
+        data = builder()
+        if data:
+            misc_col.update_one({'_id': key}, {'$set': {'_id': key, 'data': data,
+                                'fetched_ts': time.time()}}, upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+    finally:
+        with _misc_refresh_lock:
+            _misc_refreshing.discard(key)
+
+
+def _misc_get_async(key, ttl, builder):
+    c = misc_col.find_one({'_id': key}, {'_id': 0}) or {}
+    data = c.get('data')
+    fresh = data and (time.time() - c.get('fetched_ts', 0)) < ttl
+    if not fresh:
+        with _misc_refresh_lock:
+            if key not in _misc_refreshing:
+                _misc_refreshing.add(key)
+                threading.Thread(target=_misc_refresh_bg, args=(key, builder), daemon=True).start()
+    return data  # may be stale or None; the caller decides how to present it
+
+
 def compute_fear_greed():
     j = _engine_get('https://api.alternative.me/fng/?limit=90&format=json')
     data = (j or {}).get('data') or []
@@ -4822,12 +4854,12 @@ def _compute_cross_asset():
 def news_signals():
     """Structured Bitcoin news/media signals from GDELT (event tone & attention). REAL, keyless.
     We extract SIGNALS (tone, coverage trend) — not article text."""
-    d = _misc_get('news_signals', 60 * 60, _compute_news_signals)
+    d = _misc_get_async('news_signals', 60 * 60, _compute_news_signals)
     if d:
         return {'status': 'ready', **d}
     return {'status': 'unavailable', 'active': False, 'confidence': 'LOW',
-            'reason': 'No news-tone data available — GDELT is rate-limiting this host. '
-                      'Will populate automatically once the feed responds.',
+            'reason': 'News-tone data is being fetched — GDELT rate-limits this host. '
+                      'It will populate automatically in a few seconds; refresh shortly.',
             'source': 'GDELT 2.0 Doc API (tone timeline)'}
 
 
