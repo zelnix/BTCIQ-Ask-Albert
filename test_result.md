@@ -3498,3 +3498,20 @@ agent_communication:
       NO ISSUES FOUND. All code review fixes are working correctly. The collection consolidation did NOT break any endpoints. 
       Feature is production-ready.
 
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      FRONTEND REFACTOR (Option B, Stages 0-2 done). Extracted from page.js with NO intended behaviour change:
+      lib/api.js (API_BASE), lib/format.js (formatters/colors), lib/context.js (SymbolContext),
+      lib/useFetch.js (fetch hook), components/FloatingAlbert.js (floating Ask Albert widget),
+      components/DailyReport.js (shareable Daily Report modal). Please FRONTEND regression test:
+      1) App loads, Overview renders with live data (no error boundary / blank screen).
+      2) Floating "Ask Albert" launcher (bottom-right) opens; sending a message returns a reply;
+         switching screens resets its thread; the rate-limit countdown banner still works.
+      3) The full "Ask Albert" section (left nav) still works (send/receive).
+      4) The Daily Report modal opens (the share/report button on Overview), renders the snapshot card,
+         and the "Download PNG" button triggers a download (html2canvas).
+      5) General navigation across a few screens (News, Leverage, Macro) works; chart timeframe buttons
+         (macro window, leverage 1H/4H/1D/7D) are clickable and larger on mobile (>=44px).
+      Admin passcode = 000000. Backend is healthy. Report any console errors / broken screens.

@@ -18,18 +18,14 @@ import {
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-
-// Single source of truth for the API prefix used by every call in this file.
-// The deployed edge routes /api/* to a separate backend origin; if that prefix ever
-// has to move, change it here (or set NEXT_PUBLIC_API_BASE at build time) and all
-// call sites follow. A matching Next.js catch-all route must exist for the prefix.
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
+import { API_BASE } from './lib/api';
+import { fmtUsd, fmtAud, fmtPct, CAT_COLORS, BAR_COLORS, scoreColor, signalText } from './lib/format';
+import { SymbolContext } from './lib/context';
+import { useFetch } from './lib/useFetch';
+import FloatingAlbert from './components/FloatingAlbert';
+import DailyReportModal from './components/DailyReport';
 
 /* ------------------------------ helpers ------------------------------ */
-const fmtUsd = (v) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v ?? 0);
-const fmtAud = (v) => 'A$' + new Intl.NumberFormat('en-AU', { maximumFractionDigits: 0 }).format(v ?? 0);
-const fmtPct = (v) => `${Number(v).toFixed(1)}%`;
 
 // Real coin logo (keyless jsDelivr CDN). Falls back to a text badge if the image is missing.
 function CoinIcon({ symbol, size = 24, className = '' }) {
@@ -46,19 +42,7 @@ function CoinIcon({ symbol, size = 24, className = '' }) {
   );
 }
 
-const CAT_COLORS = {
-  Trend: 'text-sky-400 bg-sky-500/10 border-sky-500/30',
-  Momentum: 'text-violet-400 bg-violet-500/10 border-violet-500/30',
-  Volatility: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
-  Volume: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
-};
-const BAR_COLORS = ['#38bdf8', '#a78bfa', '#fbbf24', '#34d399', '#f472b6', '#60a5fa', '#f87171', '#4ade80'];
-
-const scoreColor = (s) =>
-  s >= 60 ? '#34d399' : s >= 55 ? '#a3e635' : s > 45 ? '#fbbf24' : s > 40 ? '#fb923c' : '#f87171';
-const signalText = (w) =>
-  w === 'Bullish' || w === 'UP' ? 'text-emerald-400'
-    : w === 'Bearish' || w === 'DOWN' ? 'text-red-400' : 'text-slate-300';
+const CAT_COLORS_UNUSED_PLACEHOLDER = null; // (CAT_COLORS/BAR_COLORS/scoreColor/signalText moved to lib/format)
 
 const SECTIONS = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard,
@@ -133,9 +117,7 @@ const sec = (id) => SECTIONS.find(s => s.id === id)
 const BTC_ONLY_SECTIONS = ['smartmoney', 'whales', 'macro', 'events', 'timemachine', 'leverage', 'network', 'dataaudit', 'admin'];
 // Sections removed from the app entirely (superseded by the global coin picker).
 const REMOVED_SECTIONS = ['compare'];
-// The currently-selected coin flows through this context so deep components
-// (Albert insights, Ask Albert chat) fetch data for the right asset.
-const SymbolContext = React.createContext('BTC');
+// SymbolContext moved to lib/context (imported at top).
 
 /* --------------------------- Error Boundary ------------------------- */
 class ErrorBoundary extends React.Component {
@@ -3177,276 +3159,11 @@ function AskQuantSection({ d }) {
   );
 }
 
-// ---- Floating, screen-aware Ask Albert (present on every screen) ----
-const SECTION_LABELS = {
-  overview: 'all things BTCIQ', forecasts: 'Forecasts', 'market-intel': 'Market Intelligence',
-  crossmarket: 'Cross-Market', analogs: 'Happening Again', smartmoney: 'Smart Money',
-  whales: 'Whale Watch', institutional: 'Institutional & Derivatives', leverage: 'Leverage',
-  macro: 'Macro & Policy', news: 'News', risk: 'Risk', events: 'Events',
-  performance: 'Performance', timemachine: 'Time Machine', network: 'Network & Sentiment',
-  dataaudit: 'Data Audit', admin: 'Admin', settings: 'Settings', alerts: 'Alerts',
-};
-
-function FloatingAlbert({ active, symbol, onExpand }) {
-  const [open, setOpen] = React.useState(false);
-  const [sessionId] = React.useState(() => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)));
-  const [messages, setMessages] = React.useState([]);
-  const [input, setInput] = React.useState('');
-  const [loading, setLoading] = React.useState(false);
-  const [rateUntil, setRateUntil] = React.useState(0);
-  const [, setRateTick] = React.useState(0);
-  const endRef = React.useRef(null);
-  const isOverview = !active || active === 'overview';
-  const scopeLabel = SECTION_LABELS[active] || 'all things BTCIQ';
-
-  React.useEffect(() => { if (open) endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading, open]);
-  // Reset the mini-thread when the user switches screens so context stays relevant.
-  React.useEffect(() => { setMessages([]); }, [active]);
-  React.useEffect(() => {
-    if (!rateUntil) return;
-    const id = setInterval(() => {
-      if (Date.now() >= rateUntil) setRateUntil(0);
-      else setRateTick((t) => t + 1);
-    }, 1000);
-    return () => clearInterval(id);
-  }, [rateUntil]);
-  const rateSecondsLeft = rateUntil ? Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)) : 0;
-
-  const suggestions = isOverview
-    ? ['Give me the 10-second read on Bitcoin right now.', 'What is the biggest risk today?', "What's moving the market?"]
-    : [`Give me a quick read on this ${scopeLabel} screen.`, `What should I watch on ${scopeLabel}?`, `What's the key signal here?`];
-
-  const send = async (text) => {
-    const msg = (text ?? input).trim();
-    if (!msg || loading) return;
-    setInput('');
-    setMessages((m) => [...m, { role: 'user', text: msg }]);
-    setLoading(true);
-    try {
-      const r = await fetch(`${API_BASE}/v1/chat`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: msg, symbol, section: active }),
-      });
-      if (r.status === 429) {
-        const j = await r.json().catch(() => ({}));
-        const secs = Math.max(1, Math.min(120, Number(j.retry_in) || 30));
-        setLoading(false);
-        setMessages((m) => m.slice(0, -1));
-        setInput(msg);
-        setRateUntil(Date.now() + secs * 1000);
-        return;
-      }
-      const j = await r.json();
-      if (j && j.status === 'rate_limited') {
-        const secs = Math.max(1, Math.min(120, Number(j.retry_in) || 30));
-        setLoading(false);
-        setMessages((m) => m.slice(0, -1));
-        setInput(msg);
-        setRateUntil(Date.now() + secs * 1000);
-        return;
-      }
-      setRateUntil(0);
-      setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.' }]);
-    } catch (e) {
-      setMessages((m) => [...m, { role: 'assistant', text: 'Network error — please try again.' }]);
-    } finally { setLoading(false); }
-  };
-
-  return (
-    <>
-      {/* Launcher */}
-      {!open && (
-        <button onClick={() => setOpen(true)} title="Ask Albert"
-          className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-full border border-sky-500/40 bg-gradient-to-r from-sky-500 to-violet-600 py-2 pl-2 pr-4 text-white shadow-lg shadow-violet-500/30 transition-transform hover:scale-105">
-          <img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-2 ring-white/30" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-          <span className="text-sm font-semibold">Ask Albert</span>
-        </button>
-      )}
-      {/* Panel */}
-      {open && (
-        <div className="fixed bottom-5 right-5 z-50 flex h-[540px] w-[92vw] max-w-[400px] flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/50 ring-1 ring-slate-800">
-          <div className="flex items-center gap-2.5 border-b border-slate-800 bg-slate-950/60 px-4 py-3">
-            <img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-semibold text-white">Ask Albert</p>
-              <p className="truncate text-[10px] text-sky-400">{isOverview ? 'Talking about all things BTCIQ' : `Focused on: ${scopeLabel}`}</p>
-            </div>
-            {onExpand && <button onClick={() => { setOpen(false); onExpand(); }} title="Open full chat" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><Maximize2 className="h-4 w-4" /></button>}
-            <button onClick={() => setOpen(false)} title="Close" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><X className="h-4 w-4" /></button>
-          </div>
-          <div className="flex-1 space-y-3 overflow-y-auto p-4">
-            {messages.length === 0 && (
-              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-                <img src="/albert.png" alt="Albert" className="h-14 w-14 rounded-full object-cover ring-2 ring-sky-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                <p className="text-sm font-semibold text-slate-200">{isOverview ? "Hi, I'm Albert — ask me anything about Bitcoin" : `Ask me about the ${scopeLabel} screen`}</p>
-                <p className="max-w-[16rem] text-[11px] text-slate-500">I only use the live dashboard numbers — I won't invent data.</p>
-                <div className="flex flex-col gap-1.5">
-                  {suggestions.map((s, i) => (
-                    <button key={i} onClick={() => send(s)} className="rounded-full border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-[11px] text-slate-300 hover:border-sky-500/40 hover:text-sky-300">{s}</button>
-                  ))}
-                </div>
-              </div>
-            )}
-            {messages.map((m, i) => (
-              <div key={i} className={`flex items-end gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-6 w-6 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
-                <div className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${m.role === 'user' ? 'bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>{m.text}</div>
-              </div>
-            ))}
-            {loading && (
-              <div className="flex items-end justify-start gap-2">
-                <img src="/albert.png" alt="Albert" className="h-6 w-6 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                <div className="flex items-center gap-1.5 rounded-2xl bg-slate-950/60 px-3 py-2.5 ring-1 ring-slate-800">
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400" style={{ animationDelay: '0ms' }} />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400" style={{ animationDelay: '150ms' }} />
-                  <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400" style={{ animationDelay: '300ms' }} />
-                </div>
-              </div>
-            )}
-            <div ref={endRef} />
-          </div>
-          <div className="border-t border-slate-800 p-2.5">
-            {rateSecondsLeft > 0 && (
-              <div className="mb-2 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-300">
-                <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                <span>Chatting a little fast — try again in <span className="font-semibold tabular-nums">{rateSecondsLeft}s</span>.</span>
-              </div>
-            )}
-            <div className="flex items-end gap-2">
-              <textarea value={input} onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-                rows={1} placeholder={isOverview ? 'Ask about Bitcoin…' : `Ask about ${scopeLabel}…`}
-                className="max-h-24 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-[13px] text-slate-100 placeholder-slate-500 focus:border-sky-500/50 focus:outline-none" />
-              <Button onClick={() => send()} disabled={loading || !input.trim() || rateSecondsLeft > 0} size="sm" className="bg-sky-500 hover:bg-sky-400"><Send className="h-4 w-4" /></Button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
+// ---- Floating, screen-aware Ask Albert extracted to components/FloatingAlbert ----
 
 
-// ---- Shareable Daily Report (clean exportable snapshot) ----
-function DailyReportModal({ d, onClose }) {
-  const cardRef = React.useRef(null);
-  const [exporting, setExporting] = React.useState(false);
-  const [cp] = useFetch(`${API_BASE}/v1/composite-price`);
-  const [fred] = useFetch(`${API_BASE}/v1/macro-fred`);
-  const [xa] = useFetch(`${API_BASE}/v1/cross-asset`);
-  const [ns] = useFetch(`${API_BASE}/v1/news-signals`);
 
-  const today = new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  const dec = (d && d.decision) || {};
-  const score = d && d.quant_score;
-  const scoreLabel = d && d.quant_label;
-  const price = (cp && cp.composite) || (d && d.last_close);
-  const conf = cp && cp.confidence;
-  const macroBy = {};
-  ((fred && fred.series) || []).forEach((r) => { macroBy[r.id] = r; });
-  const macroRows = [macroBy['DFF'], macroBy['DGS10'], macroBy['CPIAUCSL'], macroBy['UNRATE']].filter(Boolean);
-  const sc = (v) => v == null ? '#94a3b8' : v >= 60 ? '#34d399' : v >= 55 ? '#a3e635' : v > 45 ? '#fbbf24' : v > 40 ? '#fb923c' : '#f87171';
-
-  const exportPng = async () => {
-    if (!cardRef.current) return;
-    setExporting(true);
-    try {
-      const html2canvas = (await import('html2canvas')).default;
-      const canvas = await html2canvas(cardRef.current, { backgroundColor: '#0b1220', scale: 2, useCORS: true, logging: false });
-      const link = document.createElement('a');
-      link.download = `BTCIQ-report-${new Date().toISOString().slice(0, 10)}.png`;
-      link.href = canvas.toDataURL('image/png');
-      link.click();
-    } catch (e) { /* noop */ } finally { setExporting(false); }
-  };
-
-  return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
-      <div className="max-h-[92vh] w-full max-w-md overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        {/* Exportable card */}
-        <div ref={cardRef} className="rounded-2xl border border-slate-700 bg-[#0b1220] p-6" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
-          <div className="mb-4 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-orange-500 text-sm font-black text-black">₿</span>
-              <div>
-                <div className="text-base font-black tracking-tight text-white">BTCIQ</div>
-                <div className="text-[10px] text-slate-500">Daily Bitcoin Snapshot</div>
-              </div>
-            </div>
-            <div className="text-right text-[10px] text-slate-400">{today}</div>
-          </div>
-
-          <div className="mb-4 rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-            <div className="flex items-end justify-between">
-              <div>
-                <div className="text-[10px] uppercase tracking-wide text-slate-500">Composite Price</div>
-                <div className="text-3xl font-bold text-white">{price != null ? fmtUsd(price) : '—'}</div>
-              </div>
-              {conf && <span className={`rounded border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${conf === 'HIGH' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : conf === 'MEDIUM' ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : 'border-red-500/40 bg-red-500/10 text-red-300'}`}>{conf} confidence</span>}
-            </div>
-          </div>
-
-          <div className="mb-4 grid grid-cols-2 gap-3">
-            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-center">
-              <div className="text-[10px] uppercase tracking-wide text-slate-500">Quant Score</div>
-              <div className="text-2xl font-bold" style={{ color: sc(score) }}>{score != null ? score : '—'}</div>
-              <div className="text-[10px] font-semibold" style={{ color: sc(score) }}>{scoreLabel || ''}</div>
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-center">
-              <div className="text-[10px] uppercase tracking-wide text-slate-500">Market State</div>
-              <div className="text-2xl font-bold" style={{ color: sc(dec.overall_score) }}>{dec.overall_score != null ? dec.overall_score : '—'}</div>
-              <div className="text-[10px] font-semibold text-slate-300">{dec.label || ''}</div>
-            </div>
-          </div>
-
-          <div className="mb-4 grid grid-cols-3 gap-2 text-center">
-            <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-2.5">
-              <div className="text-[9px] uppercase text-slate-500">Risk</div>
-              <div className="text-sm font-bold text-white">{dec.risk_level || '—'}</div>
-            </div>
-            <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-2.5">
-              <div className="text-[9px] uppercase text-slate-500">BTC Dom.</div>
-              <div className="text-sm font-bold text-white">{xa && xa.btc_dominance != null ? xa.btc_dominance + '%' : '—'}</div>
-            </div>
-            <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-2.5">
-              <div className="text-[9px] uppercase text-slate-500">News Tone</div>
-              <div className="text-sm font-bold" style={{ color: ns && ns.mood === 'Positive' ? '#34d399' : ns && ns.mood === 'Negative' ? '#f87171' : '#cbd5e1' }}>{ns && ns.status === 'ready' ? ns.mood : '—'}</div>
-            </div>
-          </div>
-
-          {macroRows.length > 0 && (
-            <div className="mb-3">
-              <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">US Macro (FRED)</div>
-              <div className="grid grid-cols-2 gap-2">
-                {macroRows.map((r, i) => (
-                  <div key={i} className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/40 px-2.5 py-1.5">
-                    <span className="text-[11px] text-slate-400">{r.label}</span>
-                    <span className="text-[12px] font-semibold text-white">{Number(r.value).toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {dec.regime && <div className="rounded-lg border border-sky-500/20 bg-sky-500/[0.06] p-2.5 text-[11px] text-slate-300"><span className="font-semibold text-sky-300">Regime:</span> {dec.regime}</div>}
-
-          <div className="mt-4 border-t border-slate-800 pt-2 text-center text-[9px] text-slate-600">
-            Generated by BTCIQ · powered by BitCentAI · Educational only — not financial advice
-          </div>
-        </div>
-
-        {/* Controls */}
-        <div className="mt-3 flex items-center justify-center gap-2">
-          <Button onClick={exportPng} disabled={exporting} className="gap-2 bg-gradient-to-r from-sky-500 to-violet-600 text-white hover:from-sky-400 hover:to-violet-500">
-            {exporting ? 'Rendering…' : 'Download PNG'}
-          </Button>
-          <Button onClick={onClose} variant="outline" className="border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800">Close</Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
+// DailyReportModal moved to components/DailyReport (imported at top).
 
 /* ---------------- Stage-1: Risk / Smart Money / Institutional / Settings --------------- */
 function DemoBadge({ label = 'Inactive' }) {
@@ -3591,18 +3308,7 @@ function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
 }
 
 /* ---------------- Phase A: Network & Sentiment / Exchange Flow / Morning Brief / Admin ---------------- */
-function useFetch(url, deps = []) {
-  const [d, setD] = React.useState(null);
-  const [loading, setLoading] = React.useState(true);
-  React.useEffect(() => {
-    let alive = true; setLoading(true);
-    fetch(url, { cache: 'no-store' }).then((r) => r.json())
-      .then((j) => { if (alive) { setD(j); setLoading(false); } })
-      .catch(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, deps); // eslint-disable-line
-  return [d, loading];
-}
+// useFetch moved to lib/useFetch (imported at top).
 
 function MorningBriefCard() {
   const [d, loading] = useFetch(`${API_BASE}/v1/albert/brief`);
