@@ -3619,11 +3619,11 @@ agent_communication:
 frontend:
   - task: "Frontend Refactor Stage 3 — extract shared primitives + Analogs + Cross-Market sections from page.js"
     implemented: true
-    working: "NA"
+    working: true
     file: "app/page.js, app/components/shared.js, app/lib/sections.js, app/components/Analogs.js, app/components/CrossMarket.js"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
@@ -3633,20 +3633,14 @@ frontend:
           TapInfo, AiReview, SectionHead), lib/sections.js (SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS,
           REMOVED_SECTIONS), components/Analogs.js (AnalogsSection = 'Happening Again'), components/CrossMarket.js
           (CrossMarketSection). page.js reduced 6111 -> 4938 lines; TF_TOUCH moved into lib/format.js.
-          Main agent already verified via screenshots: Overview, Cross-Market, and Happening Again render fully
-          with live data and NO console errors (except the known-benign TradingView querySelector null noise).
-          Please FRONTEND REGRESSION test the WHOLE app (extraction could have subtle knock-on effects):
-          1) App loads; Overview renders live Market State / Morning Brief / Albert's Review (no error boundary).
-          2) Left-nav navigation across ALL sections works WITHOUT hitting the amber "This panel hit a snag"
-             error boundary: Overview, Forecasts, Market Intelligence, Cross-Market, Happening Again, Smart Money,
-             Whale Watch, Institutional & Derivatives, Leverage, Macro & Policy, News, Risk, Events, Performance,
-             Bitcoin Time Machine, Ask Albert, Alerts, Network & Sentiment, Data Audit, Settings, Admin.
-          3) Cross-Market: window buttons (1M/3M/6M/YTD/1Y), Linear/Log toggle, returns table all render.
-          4) Happening Again: sliders ("Tune what matters"), overlay toggles (Top 2/Top 3, Outcome band, Model
-             forecast), and the shape-overlay chart render.
-          5) Floating "Ask Albert" (bottom-right) still opens and replies; Daily Report ("Report") modal opens.
-          6) SectionHead info (i) popovers, InfoTip/TapInfo tooltips, and AiReview "Listen"/regenerate work.
-          Admin passcode = 000000. Backend healthy. Report any console errors / broken (snag) screens by name.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          FULL REGRESSION PASS — 21/21 sections render with NO error boundary. Overview live data OK; the two
+          newly-extracted sections Cross-Market (rebased chart, window buttons, Linear/Log, returns table) and
+          Happening Again (setup list, sliders, overlay toggles, shape chart) fully functional. Floating Ask
+          Albert opens/replies; Daily Report modal opens. Only console noise: dev HMR WebSocket + known benign
+          TradingView querySelector. Refactor achieved clean organization with ZERO behaviour change.
 
 metadata:
   created_by: "main_agent"
