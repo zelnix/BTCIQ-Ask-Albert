@@ -5,7 +5,7 @@ import { BarChart3, Gauge, Lock, TrendingDown, TrendingUp, Waves, CandlestickCha
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Cell } from 'recharts';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { scoreColor, signalText, CAT_COLORS, BAR_COLORS } from '../lib/format';
+import { scoreColor, signalText, CAT_COLORS, BAR_COLORS, corrColor } from '../lib/format';
 import { SymbolContext } from '../lib/context';
 import { sec, SECTIONS } from '../lib/sections';
 import { SectionHead, AiReview, InfoTip, ChartTooltip } from './shared';
@@ -32,8 +32,6 @@ function reviewCycle(d) {
   return `${cyc}${dtxt} Cycle timing is context, not a price rule — every cycle has played out under different liquidity and macro conditions.`;
 }
 
-
-const corrColor = (v) => v == null ? 'text-slate-500' : Math.abs(v) > 0.6 ? (v > 0 ? 'text-emerald-400' : 'text-red-400') : Math.abs(v) > 0.3 ? (v > 0 ? 'text-emerald-300' : 'text-red-300') : 'text-slate-400';
 
 function AnalysisSection({ d }) {
   const isUp = d.signal === 'UP';
