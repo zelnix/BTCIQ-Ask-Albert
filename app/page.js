@@ -864,6 +864,8 @@ const TV_STUDIES = [
   { id: 'Volume@tv-basicstudies', label: 'Volume' },
 ];
 const TV_INTERVALS = [['15', '15m'], ['60', '1h'], ['240', '4h'], ['D', '1D'], ['W', '1W']];
+// Mobile-friendly touch target (>=44px) for chart timeframe/window buttons; compact on >= sm screens.
+const TF_TOUCH = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center sm:min-h-0 sm:min-w-0';
 const TV_STYLES = [['1', 'Candles'], ['3', 'Line'], ['4', 'Area'], ['8', 'Heikin Ashi']];
 const TV_SYMBOLS = ['COINBASE:BTCUSD', 'BINANCE:BTCUSDT', 'BITSTAMP:BTCUSD', 'KRAKEN:XBTUSD'];
 const DEFAULT_PRESET = { symbol: 'COINBASE:BTCUSD', interval: 'D', style: '1', studies: ['RSI@tv-basicstudies'] };
@@ -941,8 +943,8 @@ function TradingViewChart({ height = 460 }) {
         </div>
         <div className="flex items-center gap-1.5">
           {saved && <span className="text-[11px] font-semibold text-emerald-400">Preset saved ✓</span>}
-          <button onClick={() => { setDraft(preset); setCfg(!cfg); }} className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium ${cfg ? 'border-sky-400 bg-sky-500/15 text-sky-200' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}><SlidersHorizontal className="h-3.5 w-3.5" />Preset</button>
-          <button onClick={() => setFs(!fs)} className="flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white">
+          <button onClick={() => { setDraft(preset); setCfg(!cfg); }} className={`${TF_TOUCH} flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium ${cfg ? 'border-sky-400 bg-sky-500/15 text-sky-200' : 'border-slate-700 text-slate-300 hover:bg-slate-800'}`}><SlidersHorizontal className="h-3.5 w-3.5" />Preset</button>
+          <button onClick={() => setFs(!fs)} className={`${TF_TOUCH} flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800 hover:text-white`}>
             {fs ? <><Minimize2 className="h-3.5 w-3.5" />Exit</> : <><Maximize2 className="h-3.5 w-3.5" />Full screen</>}
           </button>
         </div>
@@ -960,7 +962,7 @@ function TradingViewChart({ height = 460 }) {
             <div>
               <p className="mb-1 text-[10px] uppercase tracking-wider text-slate-400">Timeframe</p>
               <div className="flex flex-wrap gap-1">
-                {TV_INTERVALS.map(([v, l]) => <button key={v} onClick={() => setDraft({ ...draft, interval: v })} className={`rounded px-2 py-1 text-xs ${draft.interval === v ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/40' : 'bg-slate-800 text-slate-400'}`}>{l}</button>)}
+                {TV_INTERVALS.map(([v, l]) => <button key={v} onClick={() => setDraft({ ...draft, interval: v })} className={`${TF_TOUCH} rounded px-2 py-1 text-xs ${draft.interval === v ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/40' : 'bg-slate-800 text-slate-400'}`}>{l}</button>)}
               </div>
             </div>
             <div>
@@ -4020,7 +4022,7 @@ function LeverageSection() {
           <div><div className="text-[11px] text-slate-500">BTC price</div><div className="text-lg font-bold text-white">{d.price ? '$' + Number(d.price).toLocaleString() : '—'} <span className={`text-xs font-semibold ${(d.price_change_24h || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{(d.price_change_24h >= 0 ? '+' : '')}{d.price_change_24h}%</span></div></div>
           <div><div className="text-[11px] text-slate-500">Updated</div><div className="text-sm text-slate-300">{ttime(d.as_of)}</div></div>
           <div className="ml-auto flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-950/40 p-1">
-            {['1H', '4H', '1D', '7D'].map((x) => (<button key={x} onClick={() => setTf(x)} className={`rounded px-2.5 py-1 text-xs font-semibold ${tf === x ? 'bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/40' : 'text-slate-500 hover:text-slate-300'}`}>{x}</button>))}
+            {['1H', '4H', '1D', '7D'].map((x) => (<button key={x} onClick={() => setTf(x)} className={`${TF_TOUCH} rounded px-2.5 py-1 text-xs font-semibold ${tf === x ? 'bg-sky-500/20 text-sky-300 ring-1 ring-sky-500/40' : 'text-slate-500 hover:text-slate-300'}`}>{x}</button>))}
           </div>
           <div className="flex overflow-hidden rounded-lg border border-slate-800">
             {['LONG', 'SHORT'].map((x) => (<button key={x} onClick={() => setEmphasis(x)} className={`px-4 py-1.5 text-xs font-bold ${emphasis === x ? (x === 'LONG' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-red-500/20 text-red-300') : 'bg-slate-950/40 text-slate-500 hover:text-slate-300'}`}>{x}</button>))}
@@ -5734,7 +5736,7 @@ function CrossMarketSection() {
         <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">Window</span>
         {MK_WINDOWS.map(([k, lbl]) => (
           <button key={k} onClick={() => setWindow(k)}
-            className={`rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${window === k ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/40' : 'bg-slate-800/60 text-slate-400 hover:text-slate-200'}`}>{lbl}</button>
+            className={`${TF_TOUCH} rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${window === k ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/40' : 'bg-slate-800/60 text-slate-400 hover:text-slate-200'}`}>{lbl}</button>
         ))}
       </div>
 
