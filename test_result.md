@@ -4076,3 +4076,160 @@ agent_communication:
       to show error boundary. Fixed by adding corrColor to lib/format.js and importing it in page.js.
       
       This is a PURE MOVE with NO behavior change (after bug fix). Feature is production-ready.
+
+#====================================================================================================
+# BACKEND FEATURE — Resend daily Alert Digest email
+#====================================================================================================
+backend:
+  - task: "Resend email integration — admin-managed recipients + test email + daily alert digest"
+    implemented: true
+    working: true
+    file: "backend/server.py, backend/config.py, backend/email_service.py, .env"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Added Resend email (REST via requests, no new dep). New endpoints (all gated by admin passcode in body):
+          POST /api/v1/email/recipients/list {passcode}  -> {recipients, from, configured, digest_time, digest_tz}
+          POST /api/v1/email/recipients {passcode,email,name?} -> add recipient
+          POST /api/v1/email/recipients/delete {passcode,email} -> remove
+          POST /api/v1/email/test {passcode, to?} -> send a test email (to `to` if given, else whole list)
+          POST /api/v1/email/digest/send-now {passcode} -> build & send the daily digest immediately (force)
+          Passcode = 000000. From address = "Harmony Wellness Group <noreply@harmonywellnessgroup.com.au>"
+          (RESEND_FROM env). Daily digest also scheduled via APScheduler cron at 08:00 Australia/Sydney.
+          Digest summarises last-24h BTC smart_alerts + current signal. Idempotent per UTC day (email_log guard).
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Resend email integration test via external URL (https://quant-features.preview.emergentagent.com/api). 
+          All 8 test scenarios passed (18/18 sub-tests). Admin passcode = 000000. Safe test address = delivered@resend.dev.
+          
+          TEST 1 — AUTH GATING (NO PASSCODE): All 5 endpoints correctly return status='unauthorized' (5/5 PASSED) ✅
+          - POST /api/v1/email/recipients/list (no passcode) → status='unauthorized' ✅
+          - POST /api/v1/email/recipients (no passcode) → status='unauthorized' ✅
+          - POST /api/v1/email/recipients/delete (no passcode) → status='unauthorized' ✅
+          - POST /api/v1/email/test (no passcode) → status='unauthorized' ✅
+          - POST /api/v1/email/digest/send-now (no passcode) → status='unauthorized' ✅
+          
+          TEST 2 — AUTH GATING (WRONG PASSCODE "111111"): All 5 endpoints correctly return status='unauthorized' (5/5 PASSED) ✅
+          - POST /api/v1/email/recipients/list (wrong passcode) → status='unauthorized' ✅
+          - POST /api/v1/email/recipients (wrong passcode) → status='unauthorized' ✅
+          - POST /api/v1/email/recipients/delete (wrong passcode) → status='unauthorized' ✅
+          - POST /api/v1/email/test (wrong passcode) → status='unauthorized' ✅
+          - POST /api/v1/email/digest/send-now (wrong passcode) → status='unauthorized' ✅
+          
+          TEST 3 — LIST RECIPIENTS (CORRECT PASSCODE "000000"): Returns expected structure (9/9 PASSED) ✅
+          - POST /api/v1/email/recipients/list {"passcode":"000000"} → status='ok' ✅
+          - Response contains 'recipients' field (empty list initially) ✅
+          - Response contains 'from' field = "Harmony Wellness Group <noreply@harmonywellnessgroup.com.au>" ✅
+          - Response contains 'configured' field = true ✅
+          - Response contains 'digest_time' field = "08:00" ✅
+          - Response contains 'digest_tz' field = "Australia/Sydney" ✅
+          - All expected fields present and valid ✅
+          
+          TEST 4 — ADD RECIPIENT: Successfully adds delivered@resend.dev (2/2 PASSED) ✅
+          - POST /api/v1/email/recipients {"passcode":"000000","email":"delivered@resend.dev","name":"Test"} → status='ok' ✅
+          - Response 'recipients' list now contains delivered@resend.dev ✅
+          
+          TEST 5 — VALIDATION: Correctly rejects invalid email (2/2 PASSED) ✅
+          - POST /api/v1/email/recipients {"passcode":"000000","email":"not-an-email"} → status='error' ✅
+          - Error message = "Enter a valid email address." (mentions 'valid email') ✅
+          
+          TEST 6 — TEST EMAIL SEND: Successfully sends test email (1/1 PASSED) ✅
+          - POST /api/v1/email/test {"passcode":"000000","to":"delivered@resend.dev"} → status='ok' ✅
+          - EXACT RESPONSE: {"status":"ok","message":"Test email sent to 1 recipient(s).","id":"f25cd70c-0022-488d-beed-16cc1d54c973"}
+          - Resend ID returned: f25cd70c-0022-488d-beed-16cc1d54c973 ✅
+          - Email successfully sent to delivered@resend.dev (Resend sandbox address) ✅
+          - NO domain verification error (domain is verified and working) ✅
+          
+          TEST 7 — DIGEST SEND: Successfully sends daily digest (1/1 PASSED) ✅
+          - POST /api/v1/email/digest/send-now {"passcode":"000000"} → status='ok' ✅
+          - EXACT RESPONSE: {"status":"ok","message":"Digest sent to 1 recipient(s) (1 alerts in 24h).","id":"2b0c5df5-1316-456b-806a-5ddf022f0e6d"}
+          - Resend ID returned: 2b0c5df5-1316-456b-806a-5ddf022f0e6d ✅
+          - Digest successfully sent to 1 recipient with 1 alert in last 24h ✅
+          - NO domain verification error (domain is verified and working) ✅
+          
+          TEST 8 — CLEANUP (DELETE RECIPIENT): Successfully removes delivered@resend.dev (2/2 PASSED) ✅
+          - POST /api/v1/email/recipients/delete {"passcode":"000000","email":"delivered@resend.dev"} → status='ok' ✅
+          - Response 'recipients' list is now empty (delivered@resend.dev removed) ✅
+          
+          KEY VALIDATIONS CONFIRMED:
+          - ✅ All endpoints correctly gated by admin passcode (000000)
+          - ✅ All endpoints reject requests with no passcode or wrong passcode
+          - ✅ List recipients returns expected structure (recipients, from, configured, digest_time, digest_tz)
+          - ✅ Add recipient successfully adds email to list
+          - ✅ Validation correctly rejects invalid email addresses
+          - ✅ Test email successfully sends via Resend (domain is verified)
+          - ✅ Digest email successfully sends via Resend (domain is verified)
+          - ✅ Delete recipient successfully removes email from list
+          - ✅ Only safe Resend sandbox address (delivered@resend.dev) used for testing
+          - ✅ Cleanup completed (recipient removed at end)
+          - ✅ No HTTP 500 errors at any point
+          
+          RESEND INTEGRATION STATUS:
+          - Resend API key is configured and working ✅
+          - Sending domain (harmonywellnessgroup.com.au) is VERIFIED ✅
+          - Both test email and digest email sent successfully ✅
+          - Resend IDs returned for both sends (f25cd70c-0022-488d-beed-16cc1d54c973, 2b0c5df5-1316-456b-806a-5ddf022f0e6d) ✅
+          
+          NO ISSUES FOUND. All 5 email endpoints are production-ready. Feature is fully functional with REAL Resend integration.
+
+metadata:
+  created_by: "main_agent"
+  version: "3.3"
+  test_sequence: 5
+  run_ui: false
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Please test the new Resend email endpoints. Use admin passcode 000000. IMPORTANT: only ever use the SAFE
+      Resend test address delivered@resend.dev as a recipient/`to` — never a real personal inbox. Report the
+      EXACT response for the send calls (a 403 "domain not verified" from Resend is a valid, informative result
+      to surface). Clean up any recipient you add at the end.
+    -agent: "testing"
+    -message: |
+      ✅ RESEND EMAIL INTEGRATION TEST COMPLETE - ALL TESTS PASSED (18/18)
+      
+      Tested all 5 NEW Resend email endpoints via external URL (https://quant-features.preview.emergentagent.com/api) 
+      using comprehensive test suite (backend_test.py). Admin passcode = 000000. Safe test address = delivered@resend.dev.
+      
+      RESULTS SUMMARY:
+      1. ✅ AUTH GATING (NO PASSCODE): All 5 endpoints return status='unauthorized' (5/5 PASSED)
+      2. ✅ AUTH GATING (WRONG PASSCODE): All 5 endpoints return status='unauthorized' (5/5 PASSED)
+      3. ✅ LIST RECIPIENTS: Returns expected structure with all required fields (9/9 PASSED)
+      4. ✅ ADD RECIPIENT: Successfully adds delivered@resend.dev to list (2/2 PASSED)
+      5. ✅ VALIDATION: Correctly rejects invalid email addresses (2/2 PASSED)
+      6. ✅ TEST EMAIL SEND: Successfully sends test email via Resend (1/1 PASSED)
+         - EXACT RESPONSE: {"status":"ok","message":"Test email sent to 1 recipient(s).","id":"f25cd70c-0022-488d-beed-16cc1d54c973"}
+         - Resend ID: f25cd70c-0022-488d-beed-16cc1d54c973
+         - Domain is VERIFIED (no 403 error)
+      7. ✅ DIGEST SEND: Successfully sends daily digest via Resend (1/1 PASSED)
+         - EXACT RESPONSE: {"status":"ok","message":"Digest sent to 1 recipient(s) (1 alerts in 24h).","id":"2b0c5df5-1316-456b-806a-5ddf022f0e6d"}
+         - Resend ID: 2b0c5df5-1316-456b-806a-5ddf022f0e6d
+         - Domain is VERIFIED (no 403 error)
+      8. ✅ CLEANUP: Successfully removes delivered@resend.dev from list (2/2 PASSED)
+      
+      ENDPOINTS TESTED:
+      - POST /api/v1/email/recipients/list → Returns {recipients, from, configured, digest_time, digest_tz}
+      - POST /api/v1/email/recipients → Adds recipient to list
+      - POST /api/v1/email/recipients/delete → Removes recipient from list
+      - POST /api/v1/email/test → Sends test email via Resend
+      - POST /api/v1/email/digest/send-now → Sends daily digest via Resend
+      
+      RESEND INTEGRATION STATUS:
+      - Resend API key: CONFIGURED and WORKING ✅
+      - Sending domain (harmonywellnessgroup.com.au): VERIFIED ✅
+      - Test email: SENT SUCCESSFULLY ✅
+      - Digest email: SENT SUCCESSFULLY ✅
+      
+      NO ISSUES FOUND. All 5 email endpoints are production-ready. Feature is fully functional with REAL Resend integration.

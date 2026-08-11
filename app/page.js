@@ -38,6 +38,7 @@ import TimeMachineSection from './components/TimeMachine';
 import NewsSection from './components/News';
 import ForecastsHubSection from './components/Forecasts';
 import MarketIntelligenceSection from './components/MarketIntel';
+import EmailAlerts from './components/EmailAlerts';
 
 /* ------------------------------ helpers ------------------------------ */
 
@@ -1690,6 +1691,7 @@ function SettingsSection({ onManualRun }) {
           {saved && <span className="text-xs font-semibold text-emerald-400">Saved ✓</span>}
         </div>
       </Card>
+      <EmailAlerts />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
         <p className="text-xs leading-relaxed text-slate-400">BTCIQ — Bitcoin Market Analysis, powered by BitCentAI, our Bitcoin-Centred Intelligence Engine. BitMarkAI measures the market and produces probability-based forecasts. Albert is BTCIQ’s HuCentAI Quant Analyst.</p>

@@ -86,3 +86,16 @@ EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 GEMINI_MODEL = 'gemini-2.5-flash'
 # Ask Quant conversational model (Gemini 3 Flash via Emergent gateway, verified available)
 CHAT_MODEL = os.environ.get('CHAT_MODEL', 'gemini-3-flash-preview')
+
+# ---- Resend transactional email (daily Alert Digest) ----
+# Key/from live in /app/.env; never exposed to the browser (all sending is backend-side).
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
+RESEND_FROM = os.environ.get('RESEND_FROM', 'BitMarkAI <onboarding@resend.dev>')
+DIGEST_TZ = os.environ.get('DIGEST_TZ', 'Australia/Sydney')
+try:
+    DIGEST_HOUR = int(os.environ.get('DIGEST_HOUR', '8'))
+    DIGEST_MINUTE = int(os.environ.get('DIGEST_MINUTE', '0'))
+except Exception:  # noqa
+    DIGEST_HOUR, DIGEST_MINUTE = 8, 0
+email_recipients_col = db['email_recipients']  # admin-managed digest recipient list
+email_log_col = db['email_log']  # sent-email audit + per-day digest idempotency guard

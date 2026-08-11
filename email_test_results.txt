@@ -1,0 +1,239 @@
+
+================================================================================
+TEST: 1a. POST /api/v1/email/recipients/list - NO passcode
+================================================================================
+HTTP 200
+{
+  "status": "unauthorized",
+  "message": "A valid admin passcode is required."
+}
+✅ PASS: Expected status='unauthorized', got: unauthorized
+
+================================================================================
+TEST: 1b. POST /api/v1/email/recipients - NO passcode
+================================================================================
+HTTP 200
+{
+  "status": "unauthorized",
+  "message": "A valid admin passcode is required."
+}
+✅ PASS: Expected status='unauthorized', got: unauthorized
+
+================================================================================
+TEST: 1c. POST /api/v1/email/recipients/delete - NO passcode
+================================================================================
+HTTP 200
+{
+  "status": "unauthorized",
+  "message": "A valid admin passcode is required."
+}
+✅ PASS: Expected status='unauthorized', got: unauthorized
+
+================================================================================
+TEST: 1d. POST /api/v1/email/test - NO passcode
+================================================================================
+HTTP 200
+{
+  "status": "unauthorized",
+  "message": "A valid admin passcode is required."
+}
+✅ PASS: Expected status='unauthorized', got: unauthorized
+
+================================================================================
+TEST: 1e. POST /api/v1/email/digest/send-now - NO passcode
+================================================================================
+HTTP 200
+{
+  "status": "unauthorized",
+  "message": "A valid admin passcode is required."
+}
+✅ PASS: Expected status='unauthorized', got: unauthorized
+
+================================================================================
+TEST: 2a. POST /api/v1/email/recipients/list - WRONG passcode
+================================================================================
+HTTP 200
+{
+  "status": "unauthorized",
+  "message": "A valid admin passcode is required."
+}
+✅ PASS: Expected status='unauthorized', got: unauthorized
+
+================================================================================
+TEST: 2b. POST /api/v1/email/recipients - WRONG passcode
+================================================================================
+HTTP 200
+{
+  "status": "unauthorized",
+  "message": "A valid admin passcode is required."
+}
+✅ PASS: Expected status='unauthorized', got: unauthorized
+
+================================================================================
+TEST: 2c. POST /api/v1/email/recipients/delete - WRONG passcode
+================================================================================
+HTTP 200
+{
+  "status": "unauthorized",
+  "message": "A valid admin passcode is required."
+}
+✅ PASS: Expected status='unauthorized', got: unauthorized
+
+================================================================================
+TEST: 2d. POST /api/v1/email/test - WRONG passcode
+================================================================================
+HTTP 200
+{
+  "status": "unauthorized",
+  "message": "A valid admin passcode is required."
+}
+✅ PASS: Expected status='unauthorized', got: unauthorized
+
+================================================================================
+TEST: 2e. POST /api/v1/email/digest/send-now - WRONG passcode
+================================================================================
+HTTP 200
+{
+  "status": "unauthorized",
+  "message": "A valid admin passcode is required."
+}
+✅ PASS: Expected status='unauthorized', got: unauthorized
+
+================================================================================
+TEST: 3a. POST /api/v1/email/recipients/list - CORRECT passcode
+================================================================================
+HTTP 200
+{
+  "status": "ok",
+  "recipients": [],
+  "from": "Harmony Wellness Group <noreply@harmonywellnessgroup.com.au>",
+  "configured": true,
+  "digest_time": "08:00",
+  "digest_tz": "Australia/Sydney"
+}
+✅ PASS: Expected status='ok', got: ok
+
+Recipients: []
+From: Harmony Wellness Group <noreply@harmonywellnessgroup.com.au>
+Configured: True
+Digest Time: 08:00 Australia/Sydney
+✅ PASS: Has 'recipients' field: True
+✅ PASS: Has 'from' field: True
+✅ PASS: Has 'configured' field: True
+✅ PASS: configured=true: True
+✅ PASS: Has 'digest_time' field: True
+✅ PASS: Has 'digest_tz' field: True
+✅ PASS: From address matches: Harmony Wellness Group <noreply@harmonywellnessgroup.com.au>
+✅ PASS: Digest time is 08:00: 08:00
+✅ PASS: Digest timezone is Australia/Sydney: Australia/Sydney
+
+================================================================================
+TEST: 4a. POST /api/v1/email/recipients - Add delivered@resend.dev
+================================================================================
+HTTP 200
+{
+  "status": "ok",
+  "recipients": [
+    {
+      "added_at": "2026-08-11T09:08:39.472968",
+      "email": "delivered@resend.dev",
+      "name": "Test"
+    }
+  ]
+}
+✅ PASS: Expected status='ok', got: ok
+✅ PASS: Recipient list contains delivered@resend.dev: True
+Current recipients: ['delivered@resend.dev']
+
+================================================================================
+TEST: 5a. POST /api/v1/email/recipients - Invalid email (not-an-email)
+================================================================================
+HTTP 200
+{
+  "status": "error",
+  "message": "Enter a valid email address."
+}
+✅ PASS: Expected status='error', got: error
+Error message: Enter a valid email address.
+✅ PASS: Error message mentions 'valid email': True
+
+================================================================================
+TEST: 6a. POST /api/v1/email/test - Send test email to delivered@resend.dev
+================================================================================
+⚠️  IMPORTANT: This will attempt to send a real email via Resend.
+    If the domain is not verified, expect a Resend 403 error (which is informative).
+HTTP 200
+{
+  "status": "ok",
+  "message": "Test email sent to 1 recipient(s).",
+  "id": "f25cd70c-0022-488d-beed-16cc1d54c973"
+}
+
+================================================================================
+EXACT RESPONSE FOR TEST EMAIL SEND:
+================================================================================
+{
+  "status": "ok",
+  "message": "Test email sent to 1 recipient(s).",
+  "id": "f25cd70c-0022-488d-beed-16cc1d54c973"
+}
+================================================================================
+✅ PASS: ✅ SUCCESS: Test email sent successfully!
+   Resend ID: f25cd70c-0022-488d-beed-16cc1d54c973
+   Message: Test email sent to 1 recipient(s).
+
+================================================================================
+TEST: 7a. POST /api/v1/email/digest/send-now - Send digest
+================================================================================
+⚠️  IMPORTANT: This will attempt to send the daily digest via Resend.
+    If the domain is not verified, expect a Resend 403 error (which is informative).
+HTTP 200
+{
+  "status": "ok",
+  "message": "Digest sent to 1 recipient(s) (1 alerts in 24h).",
+  "id": "2b0c5df5-1316-456b-806a-5ddf022f0e6d"
+}
+
+================================================================================
+EXACT RESPONSE FOR DIGEST SEND:
+================================================================================
+{
+  "status": "ok",
+  "message": "Digest sent to 1 recipient(s) (1 alerts in 24h).",
+  "id": "2b0c5df5-1316-456b-806a-5ddf022f0e6d"
+}
+================================================================================
+✅ PASS: ✅ SUCCESS: Digest sent successfully!
+   Resend ID: 2b0c5df5-1316-456b-806a-5ddf022f0e6d
+   Message: Digest sent to 1 recipient(s) (1 alerts in 24h).
+   Recipients: None
+   Alert count: None
+
+================================================================================
+TEST: 8a. POST /api/v1/email/recipients/delete - Delete delivered@resend.dev
+================================================================================
+HTTP 200
+{
+  "status": "ok",
+  "recipients": []
+}
+✅ PASS: Expected status='ok', got: ok
+✅ PASS: Recipient list no longer contains delivered@resend.dev: True
+Current recipients: []
+
+================================================================================
+TEST SUITE COMPLETE
+================================================================================
+
+KEY FINDINGS:
+1. Auth gating: All endpoints correctly reject requests with no/wrong passcode
+2. List recipients: Returns expected structure with from/configured/digest_time/digest_tz
+3. Add recipient: Successfully adds delivered@resend.dev to the list
+4. Validation: Correctly rejects invalid email addresses
+5. Test email: Sends test email (or returns informative Resend domain error)
+6. Digest send: Sends digest (or returns informative Resend domain error)
+7. Delete recipient: Successfully removes delivered@resend.dev from the list
+
+NOTE: If Resend returns '403: domain not verified', this is EXPECTED and INFORMATIVE.
+      It means the code is working correctly, but the sending domain needs verification.
+================================================================================

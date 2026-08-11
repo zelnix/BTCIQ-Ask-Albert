@@ -48,7 +48,10 @@ from config import (
     coin_news_col, coin_dom_col, markets_col, analogs_col, glassnode_col,
     onchain_col, lev_col, misc_col, usage_col, etf_col, whale_col, whale_hist_col, whale_tx_col,
     GLASSNODE_API_KEY, ADMIN_PASSCODE, EMERGENT_LLM_KEY, GEMINI_MODEL, CHAT_MODEL,
+    RESEND_API_KEY, RESEND_FROM, DIGEST_TZ, DIGEST_HOUR, DIGEST_MINUTE,
+    email_recipients_col, email_log_col,
 )
+from email_service import send_email, resend_configured
 
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
 _forecast_trigger = {'reason': None}
@@ -4246,6 +4249,15 @@ def _startup():
         scheduler.add_job(_refresh_etf_bg, 'interval', hours=3, id='etf_refresh')
         # Large-transaction feed: keep the labeled whale-tx feed fresh.
         scheduler.add_job(_refresh_whale_tx_bg, 'interval', minutes=30, id='whale_tx_refresh')
+        # Daily Alert Digest email (Resend). Per-job timezone so it fires at local send time.
+        try:
+            scheduler.add_job(send_daily_digest_bg, 'cron', hour=DIGEST_HOUR, minute=DIGEST_MINUTE,
+                              timezone=DIGEST_TZ, id='daily_digest', replace_existing=True,
+                              coalesce=True, max_instances=1)
+        except Exception:  # noqa — bad tz string shouldn't kill the whole scheduler; fall back to UTC
+            traceback.print_exc()
+            scheduler.add_job(send_daily_digest_bg, 'cron', hour=DIGEST_HOUR, minute=DIGEST_MINUTE,
+                              id='daily_digest', replace_existing=True, coalesce=True, max_instances=1)
         scheduler.start()
         _scheduler = scheduler
     except Exception:  # noqa
@@ -4950,6 +4962,203 @@ def alerts_ack(payload: dict = Body(default={})):
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error'}
+
+
+# ---------------------------------------------------------------------------
+# Email — daily Alert Digest via Resend (admin-managed recipient list)
+# ---------------------------------------------------------------------------
+_SEV_COLOR = {'high': '#ef4444', 'critical': '#dc2626', 'medium': '#f59e0b',
+              'warning': '#f59e0b', 'low': '#3b82f6', 'info': '#64748b'}
+
+
+def _recipient_list():
+    try:
+        return list(email_recipients_col.find({}, {'_id': 0}).sort('email', 1))
+    except Exception:  # noqa
+        traceback.print_exc()
+        return []
+
+
+def build_daily_digest():
+    """Build (subject, html, text, alert_count) summarising the last 24h of BTC alerts."""
+    now = datetime.datetime.utcnow()
+    cutoff = (now - datetime.timedelta(hours=24)).isoformat()
+    try:
+        alerts = list(smart_alerts_col.find(
+            {'symbol': 'BTC', 'ts': {'$gte': cutoff}}, {'_id': 0}
+        ).sort('ts', -1).limit(50))
+    except Exception:  # noqa
+        alerts = []
+    run = runs_col.find_one(sort=[('created_at', -1)]) or {}
+    quant = run.get('quant') or {}
+    signal = run.get('signal') or quant.get('signal') or 'N/A'
+    score = run.get('quant_score')
+    if score is None:
+        score = quant.get('score')
+    score_txt = '—' if score is None else str(score)
+    date_str = now.strftime('%d %b %Y')
+
+    if alerts:
+        rows = ''
+        for a in alerts:
+            sev = (a.get('severity') or 'info').lower()
+            col = _SEV_COLOR.get(sev, '#64748b')
+            title = (a.get('title') or a.get('category') or 'Alert')
+            msg = (a.get('message') or '')
+            when = (a.get('ts') or '')[:16].replace('T', ' ')
+            rows += (
+                f'<tr><td style="padding:12px 14px;border-bottom:1px solid #1e293b;border-left:4px solid {col};">'
+                f'<div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:{col};font-weight:700;">{sev}</div>'
+                f'<div style="font-size:15px;color:#e2e8f0;font-weight:600;margin:2px 0;">{title}</div>'
+                f'<div style="font-size:13px;color:#94a3b8;">{msg}</div>'
+                f'<div style="font-size:11px;color:#64748b;margin-top:4px;">{when} UTC</div>'
+                f'</td></tr>'
+            )
+    else:
+        rows = ('<tr><td style="padding:18px;color:#94a3b8;font-size:14px;">'
+                'No new alerts in the last 24 hours — markets were quiet.</td></tr>')
+
+    html = (
+        '<div style="font-family:Arial,Helvetica,sans-serif;background:#0b1220;padding:24px;">'
+        '<div style="max-width:640px;margin:0 auto;background:#0f172a;border:1px solid #1e293b;border-radius:14px;overflow:hidden;">'
+        '<div style="padding:22px 24px;background:linear-gradient(135deg,#f59e0b22,#1e293b);border-bottom:1px solid #1e293b;">'
+        '<div style="font-size:20px;font-weight:800;color:#f59e0b;">BitMarkAI · Daily Alert Digest</div>'
+        f'<div style="font-size:13px;color:#94a3b8;margin-top:6px;">{date_str} · Current signal '
+        f'<b style="color:#e2e8f0;">{signal}</b> (score {score_txt}) · {len(alerts)} alert(s) in 24h</div>'
+        '</div>'
+        f'<table style="width:100%;border-collapse:collapse;">{rows}</table>'
+        '<div style="padding:16px 24px;border-top:1px solid #1e293b;font-size:11px;color:#64748b;">'
+        'You are receiving this because your address is on the BitMarkAI digest list. '
+        'This is market information, not financial advice.'
+        '</div></div></div>'
+    )
+    text_lines = [f'BitMarkAI Daily Digest — {date_str}',
+                  f'Signal: {signal} (score {score_txt}) · {len(alerts)} alerts in 24h', '']
+    for a in alerts:
+        text_lines.append(f"- [{(a.get('severity') or 'info').upper()}] "
+                          f"{a.get('title') or a.get('category')}: {a.get('message') or ''}")
+    if not alerts:
+        text_lines.append('No new alerts in the last 24 hours.')
+    subject = f'BitMarkAI Daily Digest — {signal} · {date_str}'
+    return subject, html, '\n'.join(text_lines), len(alerts)
+
+
+def send_daily_digest_bg(force=False):
+    """Build & send the digest to all recipients. Idempotent per UTC day unless force=True."""
+    try:
+        recips = [d.get('email') for d in _recipient_list() if d.get('email')]
+        if not recips:
+            print('[digest] no recipients configured; skipping', flush=True)
+            return {'ok': False, 'error': 'No recipients configured.'}
+        if not resend_configured():
+            return {'ok': False, 'error': 'RESEND_API_KEY is not configured on the server.'}
+        today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+        if not force:
+            res = email_log_col.update_one(
+                {'_id': f'digest_{today}'},
+                {'$setOnInsert': {'_id': f'digest_{today}', 'kind': 'digest_guard',
+                                  'ts': datetime.datetime.utcnow().isoformat()}},
+                upsert=True)
+            if res.upserted_id is None:
+                print('[digest] already sent today; skipping', flush=True)
+                return {'ok': False, 'error': 'Digest already sent today.'}
+        subject, html, text, count = build_daily_digest()
+        result = send_email(recips, subject, html, text)
+        try:
+            email_log_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
+                                      'kind': 'digest_send', 'recipients': len(recips), 'alert_count': count,
+                                      'ok': result.get('ok'), 'resend_id': result.get('id'),
+                                      'error': result.get('error'), 'forced': bool(force)})
+        except Exception:  # noqa
+            pass
+        return {**result, 'recipients': len(recips), 'alert_count': count}
+    except Exception as e:  # noqa
+        traceback.print_exc()
+        return {'ok': False, 'error': str(e)}
+
+
+def _email_admin_guard(payload):
+    return _passcode_ok((payload or {}).get('passcode', ''))
+
+
+@app.post('/api/v1/email/recipients/list')
+def email_recipients_list_ep(payload: dict = Body(default={})):
+    if not _email_admin_guard(payload):
+        return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
+    return {'status': 'ok', 'recipients': _recipient_list(), 'from': RESEND_FROM,
+            'configured': resend_configured(),
+            'digest_time': f'{DIGEST_HOUR:02d}:{DIGEST_MINUTE:02d}', 'digest_tz': DIGEST_TZ}
+
+
+@app.post('/api/v1/email/recipients')
+def email_recipients_add_ep(payload: dict = Body(default={})):
+    if not _email_admin_guard(payload):
+        return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
+    email = ((payload or {}).get('email') or '').strip().lower()
+    name = ((payload or {}).get('name') or '').strip()
+    if not email or '@' not in email or '.' not in email.split('@')[-1]:
+        return {'status': 'error', 'message': 'Enter a valid email address.'}
+    try:
+        email_recipients_col.update_one(
+            {'_id': email},
+            {'$set': {'_id': email, 'email': email, 'name': name,
+                      'added_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+    except Exception as e:  # noqa
+        traceback.print_exc()
+        return {'status': 'error', 'message': str(e)}
+    return {'status': 'ok', 'recipients': _recipient_list()}
+
+
+@app.post('/api/v1/email/recipients/delete')
+def email_recipients_delete_ep(payload: dict = Body(default={})):
+    if not _email_admin_guard(payload):
+        return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
+    email = ((payload or {}).get('email') or '').strip().lower()
+    try:
+        email_recipients_col.delete_one({'_id': email})
+    except Exception as e:  # noqa
+        return {'status': 'error', 'message': str(e)}
+    return {'status': 'ok', 'recipients': _recipient_list()}
+
+
+@app.post('/api/v1/email/test')
+def email_test_ep(payload: dict = Body(default={})):
+    if not _email_admin_guard(payload):
+        return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
+    if not resend_configured():
+        return {'status': 'error', 'message': 'RESEND_API_KEY is not configured on the server.'}
+    to = ((payload or {}).get('to') or '').strip().lower()
+    recips = [to] if to else [d.get('email') for d in _recipient_list() if d.get('email')]
+    if not recips:
+        return {'status': 'error', 'message': 'No recipient — add one to the list or enter a test address.'}
+    html = ('<div style="font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;padding:24px;border-radius:12px;">'
+            '<h2 style="color:#f59e0b;margin:0 0 8px;">BitMarkAI test email ✅</h2>'
+            '<p style="color:#94a3b8;">Your Resend integration is working. Daily alert digests will arrive here.</p></div>')
+    result = send_email(recips, 'BitMarkAI — Test email ✅', html,
+                        'BitMarkAI test email. Your Resend integration is working.')
+    try:
+        email_log_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
+                                  'kind': 'test', 'recipients': len(recips), 'ok': result.get('ok'),
+                                  'resend_id': result.get('id'), 'error': result.get('error')})
+    except Exception:  # noqa
+        pass
+    if result.get('ok'):
+        return {'status': 'ok', 'message': f'Test email sent to {len(recips)} recipient(s).',
+                'id': result.get('id')}
+    return {'status': 'error', 'message': result.get('error') or 'Send failed.'}
+
+
+@app.post('/api/v1/email/digest/send-now')
+def email_digest_now_ep(payload: dict = Body(default={})):
+    if not _email_admin_guard(payload):
+        return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
+    result = send_daily_digest_bg(force=True)
+    if result.get('ok'):
+        return {'status': 'ok',
+                'message': f"Digest sent to {result.get('recipients')} recipient(s) "
+                           f"({result.get('alert_count')} alerts in 24h).",
+                'id': result.get('id')}
+    return {'status': 'error', 'message': result.get('error') or 'Send failed.'}
 
 
 @app.get('/api/v1/replay')
