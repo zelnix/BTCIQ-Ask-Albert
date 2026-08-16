@@ -4258,6 +4258,9 @@ def _startup():
             traceback.print_exc()
             scheduler.add_job(send_daily_digest_bg, 'cron', hour=DIGEST_HOUR, minute=DIGEST_MINUTE,
                               id='daily_digest', replace_existing=True, coalesce=True, max_instances=1)
+        # Instant high-severity alert emails — checked every 5 minutes (idempotent per alert).
+        scheduler.add_job(send_instant_alerts_bg, 'interval', minutes=5, id='instant_alerts',
+                          replace_existing=True, coalesce=True, max_instances=1)
         scheduler.start()
         _scheduler = scheduler
     except Exception:  # noqa
@@ -4661,8 +4664,9 @@ def admin_overview():
          'status': 'Inactive', 'cost': 'Paid — not connected'},
         {'name': 'ElevenLabs', 'category': 'Albert voice', 'auth': 'API key required',
          'status': 'Inactive', 'cost': 'Paid — not connected'},
-        {'name': 'SendGrid', 'category': 'Email digests', 'auth': 'API key required',
-         'status': 'Inactive', 'cost': 'Paid — not connected'},
+        {'name': 'Resend', 'category': 'Email digests & instant alerts', 'auth': 'API key (Resend)',
+         'status': 'Active' if RESEND_API_KEY else 'Inactive',
+         'cost': 'Free tier + user key' if RESEND_API_KEY else 'Not connected'},
     ]
     active = sum(1 for i in integrations if i['status'] == 'Active')
 
@@ -4979,8 +4983,55 @@ def _recipient_list():
         return []
 
 
+def _digest_sparkline_html(closes, up):
+    closes = [c for c in closes if isinstance(c, (int, float))][-30:]
+    if len(closes) < 2:
+        return ''
+    lo, hi = min(closes), max(closes)
+    rng = (hi - lo) or 1
+    col = '#34d399' if up else '#f87171'
+    bars = ''
+    for c in closes:
+        h = 6 + int((c - lo) / rng * 52)
+        bars += (f'<td valign="bottom" style="padding:0 1px;">'
+                 f'<div style="width:7px;height:{h}px;background:{col};border-radius:2px;"></div></td>')
+    return (f'<div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">'
+            f'Price · last {len(closes)} days</div>'
+            f'<table role="presentation" cellpadding="0" cellspacing="0" style="height:60px;"><tr>{bars}</tr></table>')
+
+
+def _digest_forecast_html(forecasts):
+    if not forecasts:
+        return ''
+    label = {'24H': 'Next 24 hours', '7D': 'Next week', '30D': 'Next month'}
+    cards = ''
+    for f in forecasts[:3]:
+        hz = f.get('horizon')
+        lean = (f.get('lean') or '').upper()
+        up = lean == 'UP'
+        col = '#34d399' if up else ('#f87171' if lean == 'DOWN' else '#94a3b8')
+        arrow = '&#9650;' if up else ('&#9660;' if lean == 'DOWN' else '&#9632;')
+        higher = f.get('higher')
+        higher_txt = '—' if higher is None else f'{higher:g}%'
+
+        def _m(v):
+            return '—' if not isinstance(v, (int, float)) else f'${v:,.0f}'
+        cards += (
+            f'<td width="33%" valign="top" style="padding:6px;">'
+            f'<div style="background:#0b1220;border:1px solid #1e293b;border-radius:10px;padding:12px;">'
+            f'<div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">{label.get(hz, hz)}</div>'
+            f'<div style="font-size:15px;font-weight:800;color:{col};margin:4px 0;">{arrow} {lean or "—"} · {higher_txt} higher</div>'
+            f'<div style="font-size:12px;color:#94a3b8;">Base <b style="color:#e2e8f0;">{_m(f.get("base"))}</b></div>'
+            f'<div style="font-size:11px;color:#64748b;">Bull {_m(f.get("bull"))} &middot; Bear {_m(f.get("bear"))}</div>'
+            f'<div style="font-size:11px;color:#64748b;margin-top:4px;">Confidence: {f.get("confidence") or "—"}</div>'
+            f'</div></td>'
+        )
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>{cards}</tr></table>')
+
+
 def build_daily_digest():
-    """Build (subject, html, text, alert_count) summarising the last 24h of BTC alerts."""
+    """Build (subject, html, text, alert_count) — a richer 'morning brief': signal, price
+    sparkline, BitMarkAI forecast horizons, and the last 24h of BTC alerts."""
     now = datetime.datetime.utcnow()
     cutoff = (now - datetime.timedelta(hours=24)).isoformat()
     try:
@@ -4997,6 +5048,30 @@ def build_daily_digest():
         score = quant.get('score')
     score_txt = '—' if score is None else str(score)
     date_str = now.strftime('%d %b %Y')
+    last_close = run.get('last_close')
+    day_change = run.get('day_change_pct')
+    forecasts = run.get('forecasts') or []
+    closes = [c.get('c') for c in ((run.get('chart') or {}).get('ohlc') or []) if isinstance(c, dict)]
+    up_trend = (isinstance(day_change, (int, float)) and day_change >= 0) or (str(signal).upper() == 'UP')
+
+    price_txt = '—' if not isinstance(last_close, (int, float)) else f'${last_close:,.0f}'
+    chg_col = '#34d399' if (isinstance(day_change, (int, float)) and day_change >= 0) else '#f87171'
+    chg_txt = '' if not isinstance(day_change, (int, float)) else \
+        f' <span style="color:{chg_col};">({day_change:+.2f}% 24h)</span>'
+
+    brief = (
+        '<div style="padding:18px 24px;border-bottom:1px solid #1e293b;">'
+        f'<div style="font-size:22px;font-weight:800;color:#e2e8f0;">{price_txt}{chg_txt}</div>'
+        f'{_digest_sparkline_html(closes, up_trend)}'
+        '</div>'
+    )
+    forecast_html = _digest_forecast_html(forecasts)
+    forecast_block = (
+        '<div style="padding:14px 18px 4px;">'
+        '<div style="font-size:12px;font-weight:700;color:#f59e0b;text-transform:uppercase;letter-spacing:.05em;padding:0 6px 4px;">'
+        'Albert\u2019s outlook</div>'
+        f'{forecast_html}</div>'
+    ) if forecast_html else ''
 
     if alerts:
         rows = ''
@@ -5022,24 +5097,33 @@ def build_daily_digest():
         '<div style="font-family:Arial,Helvetica,sans-serif;background:#0b1220;padding:24px;">'
         '<div style="max-width:640px;margin:0 auto;background:#0f172a;border:1px solid #1e293b;border-radius:14px;overflow:hidden;">'
         '<div style="padding:22px 24px;background:linear-gradient(135deg,#f59e0b22,#1e293b);border-bottom:1px solid #1e293b;">'
-        '<div style="font-size:20px;font-weight:800;color:#f59e0b;">BitMarkAI · Daily Alert Digest</div>'
+        '<div style="font-size:20px;font-weight:800;color:#f59e0b;">BitMarkAI · Daily Brief</div>'
         f'<div style="font-size:13px;color:#94a3b8;margin-top:6px;">{date_str} · Current signal '
         f'<b style="color:#e2e8f0;">{signal}</b> (score {score_txt}) · {len(alerts)} alert(s) in 24h</div>'
         '</div>'
+        f'{brief}'
+        f'{forecast_block}'
+        '<div style="font-size:12px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;padding:16px 24px 6px;">'
+        f'Alerts · last 24h ({len(alerts)})</div>'
         f'<table style="width:100%;border-collapse:collapse;">{rows}</table>'
         '<div style="padding:16px 24px;border-top:1px solid #1e293b;font-size:11px;color:#64748b;">'
         'You are receiving this because your address is on the BitMarkAI digest list. '
         'This is market information, not financial advice.'
         '</div></div></div>'
     )
-    text_lines = [f'BitMarkAI Daily Digest — {date_str}',
-                  f'Signal: {signal} (score {score_txt}) · {len(alerts)} alerts in 24h', '']
+    text_lines = [f'BitMarkAI Daily Brief — {date_str}',
+                  f'Signal: {signal} (score {score_txt}) · Price {price_txt}'
+                  + ('' if not isinstance(day_change, (int, float)) else f' ({day_change:+.2f}% 24h)'), '']
+    for f in forecasts[:3]:
+        text_lines.append(f"Outlook {f.get('horizon')}: {f.get('lean')} · {f.get('higher')}% higher · "
+                          f"base ${f.get('base')}")
+    text_lines.append('')
     for a in alerts:
         text_lines.append(f"- [{(a.get('severity') or 'info').upper()}] "
                           f"{a.get('title') or a.get('category')}: {a.get('message') or ''}")
     if not alerts:
         text_lines.append('No new alerts in the last 24 hours.')
-    subject = f'BitMarkAI Daily Digest — {signal} · {date_str}'
+    subject = f'BitMarkAI Daily Brief — {signal} · {date_str}'
     return subject, html, '\n'.join(text_lines), len(alerts)
 
 
@@ -5158,6 +5242,93 @@ def email_digest_now_ep(payload: dict = Body(default={})):
                 'message': f"Digest sent to {result.get('recipients')} recipient(s) "
                            f"({result.get('alert_count')} alerts in 24h).",
                 'id': result.get('id')}
+    return {'status': 'error', 'message': result.get('error') or 'Send failed.'}
+
+
+def build_instant_alert_email(alerts):
+    n = len(alerts)
+    rows = ''
+    for a in alerts:
+        sev = (a.get('severity') or 'high').lower()
+        col = _SEV_COLOR.get(sev, '#ef4444')
+        when = (a.get('ts') or '')[:16].replace('T', ' ')
+        rows += (
+            f'<tr><td style="padding:12px 14px;border-bottom:1px solid #1e293b;border-left:4px solid {col};">'
+            f'<div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:{col};font-weight:700;">{sev}</div>'
+            f'<div style="font-size:15px;color:#e2e8f0;font-weight:600;margin:2px 0;">{a.get("title") or a.get("category") or "Alert"}</div>'
+            f'<div style="font-size:13px;color:#94a3b8;">{a.get("message") or ""}</div>'
+            f'<div style="font-size:11px;color:#64748b;margin-top:4px;">{when} UTC</div>'
+            f'</td></tr>'
+        )
+    top = alerts[0] if alerts else {}
+    subject = f'BitMarkAI Alert: {top.get("title") or "High-priority signal"}' + (f' (+{n - 1} more)' if n > 1 else '')
+    html = (
+        '<div style="font-family:Arial,Helvetica,sans-serif;background:#0b1220;padding:24px;">'
+        '<div style="max-width:640px;margin:0 auto;background:#0f172a;border:1px solid #1e293b;border-radius:14px;overflow:hidden;">'
+        '<div style="padding:20px 24px;background:linear-gradient(135deg,#ef444422,#1e293b);border-bottom:1px solid #1e293b;">'
+        '<div style="font-size:19px;font-weight:800;color:#f87171;">&#9888; BitMarkAI Instant Alert</div>'
+        f'<div style="font-size:13px;color:#94a3b8;margin-top:6px;">{n} high-priority signal(s) just triggered.</div>'
+        '</div>'
+        f'<table style="width:100%;border-collapse:collapse;">{rows}</table>'
+        '<div style="padding:16px 24px;border-top:1px solid #1e293b;font-size:11px;color:#64748b;">'
+        'Sent immediately because these are high-severity alerts. Market information, not financial advice.'
+        '</div></div></div>'
+    )
+    text = 'BitMarkAI Instant Alert\n\n' + '\n'.join(
+        f"- [{(a.get('severity') or 'high').upper()}] {a.get('title') or a.get('category')}: {a.get('message') or ''}"
+        for a in alerts)
+    return subject, html, text
+
+
+def send_instant_alerts_bg():
+    """Email brand-new high/critical alerts (last 45 min) once each. Idempotent per alert id."""
+    try:
+        if not resend_configured():
+            return {'ok': False, 'error': 'RESEND_API_KEY is not configured on the server.'}
+        recips = [r.get('email') for r in _recipient_list() if r.get('email')]
+        if not recips:
+            return {'ok': False, 'error': 'No recipients configured.'}
+        window = (datetime.datetime.utcnow() - datetime.timedelta(minutes=45)).isoformat()
+        candidates = list(smart_alerts_col.find(
+            {'symbol': 'BTC', 'severity': {'$in': ['high', 'critical']}, 'ts': {'$gte': window}}, {'_id': 0}
+        ).sort('ts', -1).limit(15))
+        pending = [a for a in candidates
+                   if a.get('id') and not email_log_col.find_one({'_id': f"instant_{a['id']}"})]
+        if not pending:
+            return {'ok': True, 'sent': 0}
+        subject, html, text = build_instant_alert_email(pending)
+        result = send_email(recips, subject, html, text)
+        if result.get('ok'):
+            for a in pending:
+                email_log_col.update_one(
+                    {'_id': f"instant_{a['id']}"},
+                    {'$setOnInsert': {'_id': f"instant_{a['id']}", 'kind': 'instant',
+                                      'ts': datetime.datetime.utcnow().isoformat(),
+                                      'resend_id': result.get('id')}}, upsert=True)
+        try:
+            email_log_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
+                                      'kind': 'instant_send', 'recipients': len(recips),
+                                      'alert_count': len(pending), 'ok': result.get('ok'),
+                                      'resend_id': result.get('id'), 'error': result.get('error')})
+        except Exception:  # noqa
+            pass
+        return {**result, 'sent': len(pending) if result.get('ok') else 0, 'recipients': len(recips)}
+    except Exception as e:  # noqa
+        traceback.print_exc()
+        return {'ok': False, 'error': str(e)}
+
+
+@app.post('/api/v1/email/instant/send-now')
+def email_instant_now_ep(payload: dict = Body(default={})):
+    if not _email_admin_guard(payload):
+        return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
+    result = send_instant_alerts_bg()
+    if result.get('ok'):
+        sent = result.get('sent', 0)
+        return {'status': 'ok',
+                'message': (f"Sent {sent} high-priority alert(s) to {result.get('recipients')} recipient(s)."
+                            if sent else 'No new high-priority alerts to send right now.'),
+                'sent': sent}
     return {'status': 'error', 'message': result.get('error') or 'Send failed.'}
 
 

@@ -4233,3 +4233,29 @@ agent_communication:
       - Digest email: SENT SUCCESSFULLY ✅
       
       NO ISSUES FOUND. All 5 email endpoints are production-ready. Feature is fully functional with REAL Resend integration.
+
+#====================================================================================================
+# EMAIL v2 — Richer digest (morning brief) + Instant high-severity alerts
+#====================================================================================================
+backend:
+  - task: "Richer digest (price sparkline + Albert's forecast horizons) + instant high-severity alert emails"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/components/EmailAlerts.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          build_daily_digest() now renders a 'Daily Brief': live price + 24h change, a mini price sparkline
+          (HTML bars from chart.ohlc), Albert's outlook (24H/7D/30D lean, prob higher, base/bull/bear, confidence),
+          then the 24h alerts. Verified via direct build (all content checks PASS) and a REAL send to both
+          recipients (Resend id 4ab26093..., recipients:2).
+          NEW instant alerts: send_instant_alerts_bg() emails high/critical alerts from the last 45 min, once each
+          (idempotent via email_log instant_<id>), scheduled every 5 min; manual endpoint
+          POST /api/v1/email/instant/send-now (admin-gated). Verified end-to-end via sandbox delivered@resend.dev
+          with a synthetic high alert (sent:1), then cleaned up. Live no-op returns {ok, sent:0} (no spam).
+          Recipients added: roger.parenzee@gmail.com, zodiaccabinets@gmail.com. Settings UI adds a
+          "Send high-priority alerts" button. admin/overview integrations now show Resend (Active) not SendGrid.

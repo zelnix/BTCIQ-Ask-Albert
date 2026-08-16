@@ -87,14 +87,22 @@ export default function EmailAlerts() {
     setBusy('');
   };
 
+  const sendInstant = async () => {
+    setBusy('instant'); setMsg(null);
+    const j = await post('/v1/email/instant/send-now', {});
+    setMsg({ type: j.status === 'ok' ? 'ok' : 'err', text: j.message || (j.status === 'ok' ? 'Done.' : 'Send failed.') });
+    setBusy('');
+  };
+
   return (
     <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
       <h3 className="mb-1 flex items-center gap-2 font-semibold text-white">
         <Mail className="h-4 w-4 text-amber-400" />Email alert digest
       </h3>
       <p className="mb-4 text-xs leading-relaxed text-slate-500">
-        A daily summary of BitMarkAI alerts, emailed to the addresses below. Requires the admin passcode
-        (saved above). Sends automatically each day{cfg ? ` at ${cfg.digest_time} ${cfg.digest_tz}` : ''}.
+        A daily brief of BitMarkAI alerts, price and Albert&rsquo;s outlook, emailed to the addresses below.
+        High-severity alerts are also sent the moment they trigger. Requires the admin passcode (saved above).
+        Sends automatically each day{cfg ? ` at ${cfg.digest_time} ${cfg.digest_tz}` : ''}.
       </p>
 
       {!loaded && (
@@ -181,6 +189,9 @@ export default function EmailAlerts() {
             </Button>
             <Button onClick={sendDigest} disabled={busy === 'digest' || recips.length === 0} className="min-h-[40px] bg-amber-500 text-slate-950 hover:bg-amber-400">
               {busy === 'digest' ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Send className="mr-1 h-4 w-4" />Send digest now</>}
+            </Button>
+            <Button onClick={sendInstant} disabled={busy === 'instant' || recips.length === 0} variant="outline" className="min-h-[40px] border-red-500/30 bg-red-500/5 text-red-300 hover:bg-red-500/10">
+              {busy === 'instant' ? <Loader2 className="h-4 w-4 animate-spin" /> : <><AlertCircle className="mr-1 h-4 w-4" />Send high-priority alerts</>}
             </Button>
           </div>
         </div>
