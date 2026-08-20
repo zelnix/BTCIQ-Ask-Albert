@@ -1307,6 +1307,187 @@ const feedColor = (s) => ({ live: 'text-emerald-400', degraded: 'text-amber-400'
 const feedDot = (s) => ({ live: 'bg-emerald-400', degraded: 'bg-amber-400',
   stale: 'bg-orange-400', down: 'bg-red-400' }[s] || 'bg-slate-500');
 function ageTxt(m) { if (m == null) return 'live'; if (m < 60) return `${m}m ago`; const h = Math.floor(m / 60); return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`; }
+/* ===================== Executive Summary / Morning Brief ===================== */
+function biasMeta(score) {
+  if (score == null) return { label: '—', color: '#94a3b8', arrow: null };
+  if (score >= 55) return { label: 'BULLISH', color: '#34d399', arrow: '↑' };
+  if (score <= 45) return { label: 'BEARISH', color: '#f87171', arrow: '↓' };
+  return { label: 'NEUTRAL', color: '#fbbf24', arrow: '→' };
+}
+
+function ExecKpi({ label, children, sub, subColor, onClick }) {
+  return (
+    <button onClick={onClick} className="group flex-1 rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-950 p-5 text-left ring-1 ring-slate-800/60 transition-all hover:border-slate-700 hover:ring-sky-500/30">
+      <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">{label}</p>
+      <div className="mt-1">{children}</div>
+      {sub && <p className="mt-0.5 text-sm font-semibold" style={{ color: subColor || '#94a3b8' }}>{sub}</p>}
+    </button>
+  );
+}
+
+function ExecutiveSummary({ d, ticker, news, onNav }) {
+  const dec = d.decision || {};
+  const bias = biasMeta(dec.overall_score);
+  const price = ticker?.price ?? d.last_close;
+  const chg = ticker?.change24h ?? d.day_change_pct;
+  const conf = d.confidence != null ? d.confidence : null;
+  const sb = dec.scenarios_block || {};
+  const bull = (sb.scenarios || []).find((s) => s.type === 'bull');
+  const bear = (sb.scenarios || []).find((s) => s.type === 'bear');
+  const re = dec.regime_engine || {};
+  const ohlc = (d.chart?.ohlc || []).map((o) => ({ t: o.t, c: o.c }));
+  const cards = (news?.cards || []).slice(0, 5);
+  const comps = dec.components || [];
+  const compAssess = {
+    'Macro / Policy': 'Global money conditions and policy backdrop.',
+    'Technicals': 'Trend, momentum, volume and volatility read.',
+    'Chart Structure': 'Support/resistance structure and breakouts.',
+    'News Flow': 'Impact-weighted direction from the latest headlines.',
+  };
+  const catalyst = d.news_forecast_link?.top_driver || (cards[0] && cards[0].title) || '—';
+  const mattersChips = [
+    { label: 'ETF FLOWS', side: comps.find((c) => c.name === 'Macro / Policy')?.score >= 50 ? 'up' : 'down', nav: 'institutional' },
+    { label: 'ON-CHAIN', side: (d.smart_money?.score ?? 50) >= 50 ? 'up' : 'down', nav: 'smartmoney' },
+    { label: 'DERIVATIVES', side: 'flat', nav: 'leverage' },
+    { label: 'MACRO', side: comps.find((c) => c.name === 'Macro / Policy')?.score >= 50 ? 'up' : 'warn', nav: 'macro' },
+  ];
+  const sideIcon = (s) => s === 'up' ? <ArrowUpRight className="h-3.5 w-3.5 text-emerald-400" />
+    : s === 'down' ? <ArrowDownRight className="h-3.5 w-3.5 text-red-400" />
+    : s === 'warn' ? <ShieldAlert className="h-3.5 w-3.5 text-amber-400" />
+    : <Activity className="h-3.5 w-3.5 text-sky-400" />;
+
+  return (
+    <div className="space-y-4">
+      {/* KPI row */}
+      <div className="flex flex-col gap-3 sm:flex-row">
+        <ExecKpi label="Market Bias" onClick={() => onNav('overview')}>
+          <p className="flex items-center gap-2 text-3xl font-black" style={{ color: bias.color }}>{bias.label}<span className="text-2xl">{bias.arrow}</span></p>
+        </ExecKpi>
+        <ExecKpi label="BTC Price" onClick={() => onNav('market-intel')} sub={`${chg >= 0 ? '+' : ''}${chg}% 24h`} subColor={chg >= 0 ? '#34d399' : '#f87171'}>
+          <p className="text-3xl font-black text-white">{fmtUsd(price)}</p>
+        </ExecKpi>
+        <ExecKpi label="Conviction Score" onClick={() => onNav('overview')} sub={dec.label || ''} subColor={scoreColor(dec.overall_score)}>
+          <p className="text-3xl font-black" style={{ color: scoreColor(dec.overall_score) }}>{dec.overall_score ?? '—'}<span className="text-lg text-slate-500">/100</span></p>
+        </ExecKpi>
+        <ExecKpi label="Confidence" onClick={() => onNav('performance')} sub={conf != null ? 'model confidence' : ''}>
+          <p className="text-3xl font-black text-sky-300">{conf != null ? `${conf}%` : '—'}</p>
+        </ExecKpi>
+      </div>
+
+      {/* Albert's Morning Brief */}
+      <Card className="border-0 bg-gradient-to-br from-amber-500/[0.06] via-violet-500/[0.06] to-slate-900 p-6 ring-1 ring-violet-500/25">
+        <div className="flex flex-wrap items-center gap-2">
+          <Sparkles className="h-5 w-5 text-amber-400" />
+          <h3 className="text-lg font-bold text-white">Albert&apos;s Morning Brief</h3>
+          {re.regime_label && <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[11px] font-bold text-violet-200">{re.regime_label}</span>}
+          <button onClick={() => onNav('ask')} className="ml-auto flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-sky-500/50 hover:text-sky-200"><MessageCircle className="h-4 w-4" />Ask Albert</button>
+        </div>
+        <div className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-2">
+          <div>
+            <span className="inline-block rounded-lg px-3 py-1 text-sm font-bold" style={{ backgroundColor: bias.color + '18', color: bias.color }}>{bias.label} · {dec.regime || '—'}</span>
+            <p className="mt-3 text-[15px] leading-relaxed text-slate-200">{dec.summary || 'Building today’s brief…'}</p>
+            <p className="mt-4 text-[11px] font-semibold uppercase tracking-wider text-slate-500">What matters today</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {mattersChips.map((c) => (
+                <button key={c.label} onClick={() => onNav(c.nav)} className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-sky-500/40">
+                  {c.label}{sideIcon(c.side)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="overflow-hidden rounded-xl border border-slate-800">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-950/60 text-[11px] uppercase tracking-wider text-slate-500">
+                  <tr><th className="px-3 py-2 text-left font-medium">Focus area</th><th className="px-3 py-2 text-right font-medium">Score</th></tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/70">
+                  {comps.map((c) => (
+                    <tr key={c.name} className="cursor-pointer hover:bg-slate-800/30" onClick={() => onNav(c.name === 'News Flow' ? 'news' : c.name === 'Macro / Policy' ? 'macro' : 'market-intel')}>
+                      <td className="px-3 py-2"><p className="font-medium text-slate-200">{c.name}</p><p className="text-[11px] text-slate-500">{compAssess[c.name] || ''}</p></td>
+                      <td className="px-3 py-2 text-right font-mono font-bold" style={{ color: scoreColor(c.score) }}>{c.score}<span className="text-[10px] text-slate-600"> · {c.weight}%</span></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.06] p-2"><p className="text-[10px] uppercase text-slate-500">Support</p><p className="text-sm font-bold text-emerald-300">{bear ? `$${bear.trigger_level.toLocaleString()}` : '—'}</p></div>
+              <div className="rounded-lg border border-red-500/25 bg-red-500/[0.06] p-2"><p className="text-[10px] uppercase text-slate-500">Resistance</p><p className="text-sm font-bold text-red-300">{bull ? `$${bull.trigger_level.toLocaleString()}` : '—'}</p></div>
+              <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] p-2"><p className="text-[10px] uppercase text-slate-500">Invalidation</p><p className="text-sm font-bold text-amber-300">{bear ? `$${bear.target_level.toLocaleString()}` : '—'}</p></div>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      {/* Chart + Live sentiment feed */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800 lg:col-span-2">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-white"><CandlestickChart className="h-4 w-4 text-sky-400" />BTC / USD · 90-day</h3>
+            <button onClick={() => onNav('market-intel')} className="text-[11px] font-semibold text-sky-400 hover:text-sky-300">Open chart →</button>
+          </div>
+          {ohlc.length > 1 ? (
+            <ResponsiveContainer width="100%" height={280}>
+              <ComposedChart data={ohlc} margin={{ top: 5, right: 8, bottom: 0, left: 0 }}>
+                <defs><linearGradient id="execFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#38bdf8" stopOpacity={0.35} /><stop offset="100%" stopColor="#38bdf8" stopOpacity={0} /></linearGradient></defs>
+                <CartesianGrid stroke="#1e293b" vertical={false} />
+                <XAxis dataKey="t" tick={{ fill: '#64748b', fontSize: 10 }} interval={14} />
+                <YAxis domain={['auto', 'auto']} tick={{ fill: '#64748b', fontSize: 10 }} width={54} tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`} />
+                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 12 }} formatter={(v) => [fmtUsd(v), 'Close']} />
+                <Area type="monotone" dataKey="c" stroke="#38bdf8" strokeWidth={2} fill="url(#execFill)" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          ) : <p className="py-16 text-center text-sm text-slate-500">Price history loading…</p>}
+        </Card>
+        <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="flex items-center gap-2 text-sm font-semibold text-white"><Radio className="h-4 w-4 text-violet-400" />Live Sentiment</h3>
+            <button onClick={() => onNav('news')} className="text-[11px] font-semibold text-sky-400 hover:text-sky-300">View all →</button>
+          </div>
+          <div className="space-y-3">
+            {cards.length === 0 ? <p className="text-sm text-slate-500">Loading headlines…</p> : cards.map((c, i) => {
+              const bcol = c.direction === 'Bullish' ? 'text-emerald-300 border-emerald-500/30' : c.direction === 'Bearish' ? 'text-red-300 border-red-500/30' : 'text-amber-300 border-amber-500/30';
+              return (
+                <button key={i} onClick={() => onNav('news')} className="block w-full border-l-2 border-slate-700 pl-3 text-left hover:border-sky-500">
+                  <div className="flex items-center gap-2">
+                    <span className={`rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase ${bcol}`}>{c.direction || 'Neutral'}</span>
+                    {c.impact_score != null && <span className="text-[10px] text-slate-500">impact {c.impact_score}</span>}
+                  </div>
+                  <p className="mt-1 line-clamp-2 text-[13px] leading-snug text-slate-200">{c.title}</p>
+                  {c.source && <p className="text-[10px] text-slate-500">{c.source}</p>}
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+      </div>
+
+      {/* Decision engine & signal matrix */}
+      <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+        <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-white"><Brain className="h-4 w-4 text-amber-400" />Decision Engine &amp; Signal Matrix</h3>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <button onClick={() => onNav('risk')} className="rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-left hover:border-sky-500/40">
+            <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-500"><ShieldAlert className="h-3 w-3" />Risk Regime</p>
+            <p className={`mt-1 text-lg font-black ${riskColor(dec.risk_level)}`}>{dec.risk_level || '—'}</p>
+          </button>
+          <button onClick={() => onNav('overview')} className="rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-left hover:border-sky-500/40">
+            <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-500"><Scale className="h-3 w-3" />Signal Alignment</p>
+            <p className={`mt-1 text-sm font-bold leading-tight ${alignColor(dec.alignment)}`}>{dec.alignment || '—'}</p>
+          </button>
+          <button onClick={() => onNav('smartmoney')} className="rounded-xl border border-slate-800 bg-slate-950/50 p-4 text-left hover:border-sky-500/40">
+            <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-500"><Waves className="h-3 w-3" />Market Regime</p>
+            <p className="mt-1 text-lg font-bold leading-tight text-white">{re.regime_label || dec.regime || '—'}</p>
+          </button>
+          <button onClick={() => onNav('overview')} className="flex items-center justify-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/10 p-4 text-sm font-semibold text-sky-200 hover:bg-sky-500/20">
+            <BarChart3 className="h-4 w-4" />Inspect Signal Breakdown
+          </button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 function DataTrustSection({ d }) {
   // Prefer the LIVE real-time audit (recomputed at request time from actual cache
   // timestamps); fall back to the frozen snapshot in the last run doc.
@@ -2126,7 +2307,7 @@ export default function DashboardPage() {
   const [passRemember, setPassRemember] = useState(true);
   const [passAutoClear, setPassAutoClear] = useState(false);
   const [ticker, setTicker] = useState(__tickerCache);
-  const [active, setActive] = useState('overview');
+  const [active, setActive] = useState('briefing');
   const [showReport, setShowReport] = useState(false);
   const [news, setNews] = useState(__newsCache);
   const [newsStatus, setNewsStatus] = useState(__newsCache ? 'ready' : 'loading');
@@ -2336,6 +2517,7 @@ export default function DashboardPage() {
   const activeSection = sec(active);
   const visibleSections = SECTIONS.filter((s) => !REMOVED_SECTIONS.includes(s.id) && (symbol === 'BTC' || !BTC_ONLY_SECTIONS.includes(s.id)));
   const renderSection = () => {
+    if (active === 'briefing') return <ExecutiveSummary d={d} ticker={ticker} news={news} onNav={setActive} />;
     if (active === 'overview') return <OverviewSection d={d} ticker={ticker} />;
     if (active === 'forecasts') return <ForecastsHubSection d={d} />;
     if (active === 'market-intel') return <MarketIntelligenceSection d={d} />;

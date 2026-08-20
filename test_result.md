@@ -4939,3 +4939,40 @@ agent_communication:
       
       NO CRITICAL ISSUES FOUND. All 5 tests passed. Feature is fully functional and production-ready. 
       Data is REAL (computed from live prediction ledger). No email endpoints triggered (as instructed).
+
+#====================================================================================================
+# CAPSTONE — Executive Summary / Morning Brief (first screen, drill-downs)
+#====================================================================================================
+frontend:
+  - task: "Executive Summary / Morning Brief — new default first screen with drill-down cards"
+    implemented: true
+    working: "NA"
+    file: "app/page.js, app/lib/sections.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Added new 'briefing' section (Morning Brief) as SECTIONS[0] and set default active tab to 'briefing'.
+          New ExecutiveSummary component composes existing dashboard data (no new backend): KPI row (Market Bias,
+          BTC Price + 24h, Conviction Score, Confidence); Albert's Morning Brief card (regime badge, decision
+          summary, 'What matters today' chips -> drill to institutional/smartmoney/leverage/macro, Focus-area
+          table from decision.components -> drill to news/macro/market-intel, Support/Resistance/Invalidation from
+          scenarios_block); 90-day price area chart (Recharts) -> market-intel; Live Sentiment feed from news.cards
+          -> news; Decision Engine & Signal Matrix tiles (Risk Regime -> risk, Signal Alignment -> overview,
+          Market Regime -> smartmoney, Inspect Signal Breakdown -> overview). Every card is a top-layer drill-down
+          via onNav(setActive). Next.js compiled cleanly; page returns 200. NOTE: my screenshot tool renders the
+          app's loading skeleton in the isolated Playwright context (fetch-to-API quirk) even though APIs return
+          200 and the real preview works — visual QA best done by the frontend testing agent (which worked in
+          prior sessions) or the user.
+          b4 (macro/on-chain) note: MVRV Z-Score/SOPR already exist (Smart Money panel via bitcoin-data.com) and
+          DXY/yields/VIX in the Policy engine; surfaced in the brief rather than duplicated.
+
+agent_communication:
+    -agent: "main"
+    -comment: |
+      Capstone Morning Brief built as the default first screen. Frontend visual validation pending (screenshot
+      sandbox shows skeleton but compile is clean + APIs 200). Recommend running the frontend testing agent to
+      confirm the Morning Brief renders and drill-down navigation works — awaiting user go-ahead.

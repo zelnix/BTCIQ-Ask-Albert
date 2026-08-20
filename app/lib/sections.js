@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 
 const SECTIONS = [
+  { id: 'briefing', label: 'Morning Brief', icon: Sparkles,
+    blurb: 'Your one-screen executive briefing: market bias, price, Albert’s read, the levels that matter, live sentiment and the decision engine — each card drills into the full analysis.' },
   { id: 'overview', label: 'Overview', icon: LayoutDashboard,
     blurb: 'Your 10-second snapshot of Bitcoin right now: the price, the market "mood", one simple score, the near-term odds, how risky things are and how sure the model is. Start here.' },
   { id: 'forecasts', label: 'Forecasts', icon: Target,
