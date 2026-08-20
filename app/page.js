@@ -269,6 +269,62 @@ function TechnicalBreakdownLink({ d, dec }) {
   );
 }
 
+const REGIME_META = {
+  bull_momentum: { label: 'Bull Momentum', color: '#34d399', ring: 'ring-emerald-500/30', bar: 'bg-emerald-400' },
+  bear_distribution: { label: 'Bear Distribution', color: '#f87171', ring: 'ring-red-500/30', bar: 'bg-red-400' },
+  consolidation: { label: 'Low-Vol Consolidation', color: '#94a3b8', ring: 'ring-slate-500/30', bar: 'bg-slate-400' },
+  high_vol_squeeze: { label: 'High-Vol Squeeze', color: '#fbbf24', ring: 'ring-amber-500/30', bar: 'bg-amber-400' },
+};
+
+function RegimeSwitchPanel({ re }) {
+  if (!re || !re.available) return null;
+  const meta = REGIME_META[re.current_regime] || REGIME_META.consolidation;
+  const probs = re.regime_probabilities || {};
+  const cone = re.confidence_24h || {};
+  const order = ['bull_momentum', 'consolidation', 'bear_distribution', 'high_vol_squeeze'];
+  return (
+    <div className={`mt-5 rounded-xl border border-slate-800 bg-slate-950/50 p-4 ring-1 ${meta.ring}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <Activity className="h-4 w-4" style={{ color: meta.color }} />
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Regime-Switching Engine</p>
+        <InfoTip text="A 4-state Gaussian HMM classifies the current market regime from daily returns and volatility, then blends a regime-specific weight matrix into the live signal weights above. The weights re-balance automatically as the regime shifts." />
+        <span className="ml-auto rounded-full border px-2 py-0.5 text-[11px] font-bold" style={{ borderColor: meta.color + '55', color: meta.color }}>
+          {meta.label} · {Math.round((probs[re.current_regime] || 0) * 100)}%
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {order.map((k) => {
+          const m = REGIME_META[k];
+          const p = Math.round((probs[k] || 0) * 100);
+          const active = k === re.current_regime;
+          return (
+            <div key={k} className={`rounded-lg border p-2 ${active ? 'border-slate-600 bg-slate-900/70' : 'border-slate-800 bg-slate-950/40'}`}>
+              <p className="truncate text-[10px] font-medium text-slate-400">{m.label}</p>
+              <p className="text-lg font-black" style={{ color: m.color }}>{p}%</p>
+              <div className="mt-1 h-1 w-full overflow-hidden rounded-full bg-slate-800">
+                <div className={`h-full rounded-full ${m.bar}`} style={{ width: `${p}%` }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {cone.expected_pct != null && (
+        <p className="mt-3 text-[11px] text-slate-400">
+          Regime-scaled 24h cone:
+          <span className="ml-1 font-mono text-red-400">{cone.lower_pct}%</span>
+          <span className="mx-1 text-slate-600">·</span>
+          <span className="font-mono text-slate-200">exp {cone.expected_pct}%</span>
+          <span className="mx-1 text-slate-600">·</span>
+          <span className="font-mono text-emerald-400">+{cone.upper_pct}%</span>
+          <span className="ml-2 text-slate-600">(σ {cone.sigma_daily_pct}%/day)</span>
+        </p>
+      )}
+    </div>
+  );
+}
+
 function DecisionEngineCard({ d }) {
   const dec = d.decision;
   if (!dec) return null;
@@ -306,11 +362,17 @@ function DecisionEngineCard({ d }) {
       </div>
 
       {/* component contributions */}
-      <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-4">
+      <div className="mt-4 flex items-center gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Signal Groups</p>
+        {dec.weights_mode === 'dynamic' && (
+          <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-violet-300">Dynamic weights</span>
+        )}
+      </div>
+      <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-4">
         {dec.components.map((c) => (
           <div key={c.name} className="rounded-lg border border-slate-800 bg-slate-950/40 p-3">
             <div className="flex items-center justify-between text-xs">
-              <span className="flex items-center gap-1 text-slate-400">{c.name}<InfoTip text={`${c.name} scores 0–100 and carries ${c.weight}% of the overall decision. Higher = more supportive of upside.`} /></span>
+              <span className="flex items-center gap-1 text-slate-400">{c.name}<InfoTip text={`${c.name} scores 0–100 and currently carries ${c.weight}% of the overall decision — this weight now shifts with the detected market regime. Higher score = more supportive of upside.`} /></span>
               <span className="font-mono font-bold" style={{ color: scoreColor(c.score) }}>{c.score}</span>
             </div>
             <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
@@ -320,6 +382,10 @@ function DecisionEngineCard({ d }) {
           </div>
         ))}
       </div>
+
+      {/* Dynamic Regime-Switching (Gaussian HMM) */}
+      <RegimeSwitchPanel re={dec.regime_engine} />
+
 
       {/* multi-horizon outlook 24H → 1Y */}
       <div className="mt-5">

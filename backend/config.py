@@ -75,6 +75,7 @@ etf_col = db['etf_flows']
 whale_col = db['whale_wallets']
 whale_hist_col = db['whale_history']
 whale_tx_col = db['whale_tx_feed']
+regime_col = db['regime_state']  # Dynamic Regime-Switching HMM: persisted model + latest analysis
 
 # Glassnode on-chain data (Smart Money panel). Advanced Light tier: 14d daily history, low call budget.
 GLASSNODE_API_KEY = os.environ.get('GLASSNODE_API_KEY')

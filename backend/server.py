@@ -50,9 +50,10 @@ from config import (
     GLASSNODE_API_KEY, ADMIN_PASSCODE, EMERGENT_LLM_KEY, GEMINI_MODEL, CHAT_MODEL,
     RESEND_API_KEY, RESEND_FROM, DIGEST_TZ, DIGEST_HOUR, DIGEST_MINUTE,
     email_recipients_col, email_log_col, email_settings_col,
-    PUBLIC_BASE_URL, UNSUB_SECRET, WEEKLY_HOUR, WEEKLY_MINUTE,
+    PUBLIC_BASE_URL, UNSUB_SECRET, WEEKLY_HOUR, WEEKLY_MINUTE, regime_col,
 )
 from email_service import send_email, resend_configured
+import regime_engine
 
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
 _forecast_trigger = {'reason': None}
@@ -1293,8 +1294,14 @@ OUTLOOK_LABELS = {'24H': 'Next 24 Hours', '7D': 'Next 7 Days', '30D': 'Next Mont
                   '3M': 'Next 3 Months', '6M': 'Next 6 Months', '1Y': 'Next Year'}
 
 
-def compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, dominance):
-    """Reconcile technicals, macro/policy, news and chart into one Bitcoin Market State."""
+def compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, dominance,
+                            weights=None, regime_info=None):
+    """Reconcile technicals, macro/policy, news and chart into one Bitcoin Market State.
+
+    Weights are now **dynamic** — supplied by the regime-switching engine
+    (regime_engine.analyze). If no weights are provided we fall back to the legacy
+    static allocation so the function keeps working standalone.
+    """
     tech = int(quant['quant_score'])
     pol = int(policy['score']) if policy else 50
     news_score = int(round(50 + (news_sig['signal'] * 30))) if news_sig else 50
@@ -1302,15 +1309,24 @@ def compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, 
     chart_bias = chart['structure_bias'] if chart else 'Neutral'
     chart_score = 70 if chart_bias == 'Bullish' else (30 if chart_bias == 'Bearish' else 50)
 
-    overall = int(round(tech * 0.45 + pol * 0.20 + news_score * 0.15 + chart_score * 0.20))
+    # Dynamic, regime-conditioned weights (fall back to the legacy static split).
+    w = weights or {'technicals': 0.45, 'macro_policy': 0.20, 'chart_structure': 0.20, 'news_flow': 0.15}
+    wt = float(w.get('technicals', 0.45))
+    wm = float(w.get('macro_policy', 0.20))
+    wc = float(w.get('chart_structure', 0.20))
+    wn = float(w.get('news_flow', 0.15))
+    _tot = (wt + wm + wc + wn) or 1.0
+    wt, wm, wc, wn = wt / _tot, wm / _tot, wc / _tot, wn / _tot
+
+    overall = int(round(tech * wt + pol * wm + news_score * wn + chart_score * wc))
     overall = max(0, min(100, overall))
     label = _quant_score_label(overall)
 
     comps = [
-        {'name': 'Technicals', 'score': tech, 'weight': 45},
-        {'name': 'Macro / Policy', 'score': pol, 'weight': 20},
-        {'name': 'Chart Structure', 'score': chart_score, 'weight': 20},
-        {'name': 'News Flow', 'score': news_score, 'weight': 15},
+        {'name': 'Technicals', 'score': tech, 'weight': int(round(wt * 100))},
+        {'name': 'Macro / Policy', 'score': pol, 'weight': int(round(wm * 100))},
+        {'name': 'Chart Structure', 'score': chart_score, 'weight': int(round(wc * 100))},
+        {'name': 'News Flow', 'score': news_score, 'weight': int(round(wn * 100))},
     ]
     bull = sum(1 for c in comps if c['score'] >= 55)
     bear = sum(1 for c in comps if c['score'] <= 45)
@@ -1389,6 +1405,8 @@ def compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, 
         'overall_score': overall, 'label': label, 'regime': regime,
         'regime_description': quant['regime']['description'],
         'alignment': alignment, 'components': comps,
+        'weights_mode': 'dynamic' if weights else 'static',
+        'regime_engine': regime_info,
         'risk_level': risk_level, 'risk_score': risk_score,
         'risk_drivers': {'volatility_percentile': round(vol_pct), 'event_risk': event_risk,
                          'news_risk': news_risk},
@@ -4087,8 +4105,29 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
     all_outlook = list(quant['forecasts']) + list(quant.get('long_outlook', []))
+
+    # --- Dynamic Regime-Switching engine (Gaussian HMM) -> dynamic signal weights ---
+    regime_analysis = None
     try:
-        decision = compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, dominance)
+        regime_analysis = regime_engine.analyze(df, regime_col=regime_col)
+    except Exception:  # noqa
+        traceback.print_exc()
+    dyn_weights = (regime_analysis or {}).get('active_weights') if regime_analysis else None
+
+    try:
+        decision = compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle,
+                                           dominance, weights=dyn_weights, regime_info=regime_analysis)
+        # Refresh the 24h confidence cone with the real composite score now that we have it.
+        if regime_analysis and regime_analysis.get('available') and decision:
+            try:
+                bands = regime_engine.recompute_confidence(
+                    regime_analysis['current_regime'], decision['overall_score'],
+                    regime_analysis.get('realized_vol_daily_pct', 2.0))
+                if bands:
+                    regime_analysis['confidence_24h'] = bands
+                    decision['regime_engine'] = regime_analysis
+            except Exception:  # noqa
+                traceback.print_exc()
     except Exception:  # noqa
         traceback.print_exc()
 
@@ -4177,6 +4216,7 @@ def compute():
         'long_outlook': quant.get('long_outlook', []),
         'factors': quant['factors'],
         'decision': decision,        'news_forecast_link': news_forecast_link,
+        'regime_analysis': regime_analysis,
         'data_health': data_health,
         'event_calendar': event_calendar,
         'risk': risk,
@@ -4442,6 +4482,81 @@ def scorecard():
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error'}
+
+
+@app.get('/api/v1/forecast/regime')
+def forecast_regime():
+    """Latest Dynamic Regime-Switching analysis: current regime, posterior state
+    probabilities, dynamic signal weights, and the regime-scaled 24h cone."""
+    try:
+        doc = regime_col.find_one({'_id': 'btc'})
+        latest = (doc or {}).get('latest')
+        if latest:
+            return {'status': 'ready', 'weight_matrix': regime_engine.REGIME_WEIGHT_MATRIX,
+                    'regime_labels': regime_engine.REGIME_LABELS, **latest}
+        # No snapshot yet — try to build one from the most recent run.
+        run = runs_col.find_one(sort=[('created_at', -1)])
+        ra = (run or {}).get('regime_analysis')
+        if ra:
+            return {'status': 'ready', 'weight_matrix': regime_engine.REGIME_WEIGHT_MATRIX,
+                    'regime_labels': regime_engine.REGIME_LABELS, **ra}
+        return {'status': 'computing'}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
+
+
+@app.post('/api/v1/forecast/reconcile-signals')
+def reconcile_signals(payload: dict = Body(default={})):
+    """Recompute the composite quant score under the CURRENT market regime.
+
+    Any signal score (0-100) left null is filled from the latest live decision
+    components, so the endpoint doubles as a "what-if" tool: pass a hypothetical
+    technicals/news score and see how the regime-weighted composite + 24h cone move.
+    """
+    try:
+        payload = payload or {}
+        doc = regime_col.find_one({'_id': 'btc'})
+        latest = (doc or {}).get('latest') or {}
+        weights = latest.get('active_weights') or regime_engine.STATIC_WEIGHTS
+        regime = latest.get('current_regime') or 'consolidation'
+        realized_vol = latest.get('realized_vol_daily_pct', 2.0)
+
+        # Defaults from the latest run's decision components.
+        run = runs_col.find_one(sort=[('created_at', -1)])
+        comp_map = {}
+        for c in ((run or {}).get('decision') or {}).get('components', []):
+            key = {'Technicals': 'technicals', 'Macro / Policy': 'macro_policy',
+                   'Chart Structure': 'chart_structure', 'News Flow': 'news_flow'}.get(c['name'])
+            if key:
+                comp_map[key] = float(c['score'])
+
+        supplied = {k: float(payload[k]) for k in regime_engine.SIGNALS
+                    if payload.get(k) is not None}
+        signals = {**{k: 50.0 for k in regime_engine.SIGNALS}, **comp_map, **supplied}
+        signals = {k: max(0.0, min(100.0, float(v))) for k, v in signals.items()}
+
+        wt = sum(weights.get(k, 0.0) for k in regime_engine.SIGNALS) or 1.0
+        composite = sum(signals[k] * weights.get(k, 0.0) for k in regime_engine.SIGNALS) / wt
+        composite = round(max(0.0, min(100.0, composite)), 2)
+        bands = regime_engine.recompute_confidence(regime, composite, realized_vol)
+
+        return {
+            'status': 'ready',
+            'current_regime': regime,
+            'regime_label': regime_engine.REGIME_LABELS.get(regime, regime),
+            'regime_probabilities': latest.get('regime_probabilities'),
+            'active_weights': {k: round(weights.get(k, 0.0), 4) for k in regime_engine.SIGNALS},
+            'signals_used': signals,
+            'signals_overridden': list(supplied.keys()),
+            'composite_quant_score': composite,
+            'composite_label': _quant_score_label(round(composite)),
+            'confidence_interval_24h': bands,
+        }
+    except Exception as e:  # noqa
+        traceback.print_exc()
+        return {'status': 'error', 'error': str(e)}
+
 
 
 @app.get('/api/v1/whales')

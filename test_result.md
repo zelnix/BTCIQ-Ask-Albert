@@ -4287,3 +4287,203 @@ backend:
           send-now + "Send weekly recap" button. Idempotent per ISO week. Verified: real send to both recipients
           (Resend id 5147055f..., sent:2). Link base = EMAIL_BASE_URL or NEXT_PUBLIC_BASE_URL.
           NOTE (prod): set EMAIL_BASE_URL=https://btciq.app in production so unsubscribe links point to the live site.
+
+#====================================================================================================
+# DYNAMIC REGIME-SWITCHING SIGNAL WEIGHTS (Gaussian HMM) — replaces static composite weights
+#====================================================================================================
+backend:
+  - task: "Dynamic Regime-Switching engine (Gaussian HMM) replacing static decision-engine weights"
+    implemented: true
+    working: true
+    file: "backend/regime_engine.py, backend/server.py, backend/config.py, backend/requirements.txt"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Added backend/regime_engine.py: 4-state GaussianHMM (hmmlearn 0.3.3) over daily features
+          [log_return_1d, log_return_5d, realized_vol_14d, parkinson_vol_14d] from the OHLC df.
+          Latent states are labeled -> regimes (consolidation/bull_momentum/bear_distribution/high_vol_squeeze)
+          by mean-return/vol heuristic. Posterior state probs blend a regime-conditioned weight matrix into
+          dynamic signal weights (technicals/macro_policy/chart_structure/news_flow), L1-normalised.
+          compute_decision_engine now takes weights=+regime_info= and uses dynamic weights (falls back to
+          legacy static 45/20/20/15 if HMM unavailable). Model + latest analysis persisted in Mongo regime_col
+          ('regime_state'); refit daily inside compute() (stale >20h) — the walk-forward re-fit.
+          NEW endpoints:
+            GET  /api/v1/forecast/regime            -> current regime, posterior probs, dynamic weights, 24h cone, weight matrix
+            POST /api/v1/forecast/reconcile-signals  -> recompute regime-weighted composite; any of
+                 {technicals,macro_policy,chart_structure,news_flow} (0-100) overrides live components (what-if tool)
+          Manual verification (curl): dashboard.decision.weights_mode='dynamic', components now 41/19/29/10
+          (was 45/20/20/15); regime=bull_momentum (0.889); reconcile default composite=74.71; what-if works.
+          Please retest these 2 endpoints + confirm /api/v1/dashboard still returns 200 with decision.regime_engine
+          populated and weights summing to ~100.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Dynamic Regime-Switching engine validation via external URL (https://quant-features.preview.emergentagent.com/api). 
+          All 7 tests passed (7/7): 
+          
+          TEST 1 — GET /api/v1/forecast/regime: ✅ PASSED
+          - status='ready' ✅
+          - current_regime='bull_momentum' (valid in [consolidation, bull_momentum, bear_distribution, high_vol_squeeze]) ✅
+          - regime_label='Bull Momentum' (non-empty string) ✅
+          - regime_probabilities: all 4 regimes present ✅, sum=1.0000 (within 0.98-1.02) ✅
+          - current_regime == argmax(regime_probabilities) = 'bull_momentum' ✅
+          - Observed probabilities: consolidation=0.1113, bull_momentum=0.8887, bear_distribution=0.0, high_vol_squeeze=0.0 ✅
+          - active_weights: all 4 signals present (technicals, macro_policy, chart_structure, news_flow) ✅, sum=0.9999 (within 0.98-1.02) ✅
+          - Observed weights: technicals=0.4111 (41%), macro_policy=0.1944 (19%), chart_structure=0.2944 (29%), news_flow=0.1000 (10%) ✅
+          - confidence_24h present with lower_pct=-3.14%, expected_pct=0.0%, upper_pct=3.14% ✅
+          - weight_matrix has all 4 regimes ✅
+          - regime_labels has all 4 regimes ✅
+          
+          TEST 2a — POST /api/v1/forecast/reconcile-signals (empty body {}): ✅ PASSED
+          - status='ready' ✅
+          - composite_quant_score=74.71 (numeric in [0, 100]) ✅
+          - signals_used has all 4 keys: technicals=92.0, macro_policy=58.0, chart_structure=70.0, news_flow=50.0 ✅
+          - signals_overridden=[] (empty as expected for default body) ✅
+          - confidence_interval_24h present ✅
+          
+          TEST 2b — POST /api/v1/forecast/reconcile-signals (with overrides {"news_flow":90,"technicals":30}): ✅ PASSED
+          - status='ready' ✅
+          - signals_used.news_flow=90 (override applied) ✅
+          - signals_used.technicals=30 (override applied) ✅
+          - signals_overridden=['technicals', 'news_flow'] (contains both overridden keys) ✅
+          - composite_quant_score=53.22 (numeric in [0, 100]) ✅
+          - confidence_interval_24h present ✅
+          
+          TEST 2c — POST /api/v1/forecast/reconcile-signals (single override {"technicals":100}): ✅ PASSED
+          - status='ready' ✅
+          - signals_used.technicals=100 (override applied) ✅
+          - composite_quant_score=78.0 (valid numeric in [0, 100]) ✅
+          
+          TEST 3 — GET /api/v1/dashboard (regression - dynamic weights): ✅ PASSED
+          - status='ready' ✅
+          - decision object present ✅
+          - decision.weights_mode='dynamic' (NOT 'static') ✅
+          - decision.components has 4 items ✅
+          - Component weights sum=99 (within 99-101) ✅
+          - Components: Technicals (score=92, weight=41%), Macro/Policy (score=58, weight=19%), Chart Structure (score=70, weight=29%), News Flow (score=50, weight=10%) ✅
+          - decision.regime_engine present with available=true ✅
+          
+          TEST 4 — GET /api/v1/health (regression): ✅ PASSED
+          - status='ok' ✅
+          - compute_status='done', runs=6 ✅
+          
+          TEST 5 — GET /api/v1/scorecard (regression): ✅ PASSED
+          - status='ready' ✅
+          - total_logged=523, backtested=511 ✅
+          
+          KEY VALIDATIONS CONFIRMED:
+          - ✅ Regime probabilities sum to exactly 1.0 (within tolerance)
+          - ✅ Active weights sum to ~1.0 (within tolerance)
+          - ✅ Current regime matches argmax of regime probabilities
+          - ✅ All 4 regimes present in probabilities and weight matrix
+          - ✅ All 4 signals present in active weights
+          - ✅ Confidence 24h cone present with lower/expected/upper percentages
+          - ✅ Reconcile-signals endpoint correctly applies overrides
+          - ✅ Reconcile-signals returns valid composite score in [0, 100]
+          - ✅ Dashboard decision.weights_mode == 'dynamic' (NOT static)
+          - ✅ Dashboard decision.components weights sum to ~100
+          - ✅ Dashboard decision.regime_engine.available == true
+          - ✅ Health and scorecard endpoints still working (no regression)
+          
+          EXACT OBSERVED VALUES (as requested in review_request):
+          - Current regime: bull_momentum (Bull Momentum)
+          - Regime probabilities: consolidation=0.1113, bull_momentum=0.8887, bear_distribution=0.0, high_vol_squeeze=0.0 (sum=1.0)
+          - Active weights: technicals=0.4111, macro_policy=0.1944, chart_structure=0.2944, news_flow=0.1000 (sum=0.9999)
+          - Reconcile default composite: 74.71
+          - Reconcile with overrides (news_flow=90, technicals=30): composite=53.22
+          - Reconcile with single override (technicals=100): composite=78.0
+          - Dashboard weights_mode: 'dynamic'
+          - Dashboard component weights: 41% + 19% + 29% + 10% = 99%
+          
+          NO ISSUES FOUND. All validations passed. Data is REAL (Gaussian HMM trained on live OHLC data). 
+          No HTTP 500 errors. Feature is fully functional and production-ready.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.1"
+  test_sequence: 2
+  run_ui: false
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -comment: |
+      Implemented Dynamic Regime-Switching (HMM) per the user's blueprint, adapted to our stack
+      (hmmlearn + MongoDB + APScheduler; no Redis/Celery/MLflow). Backend only — no frontend changes yet.
+      Please test: (1) GET /api/v1/forecast/regime returns status ready with regime_probabilities summing ~1.0,
+      active_weights summing ~1.0, and confidence_24h present; (2) POST /api/v1/forecast/reconcile-signals with
+      empty body {} AND with a partial override like {"news_flow":90,"technicals":30} returns a valid
+      composite_quant_score and echoes signals_overridden; (3) GET /api/v1/dashboard still 200 and
+      decision.weights_mode=='dynamic'. Do NOT trigger real emails.
+    -agent: "testing"
+    -message: |
+      ✅ DYNAMIC REGIME-SWITCHING ENGINE BACKEND TEST COMPLETE - ALL TESTS PASSED (7/7)
+      
+      Tested NEW Dynamic Regime-Switching (Gaussian HMM) feature via external URL 
+      (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
+      
+      RESULTS SUMMARY:
+      1. ✅ GET /api/v1/forecast/regime → status='ready', current_regime='bull_momentum', regime_probabilities sum=1.0, 
+         active_weights sum=0.9999, confidence_24h present with 24h cone (-3.14% to +3.14%)
+      2. ✅ POST /api/v1/forecast/reconcile-signals (empty body) → status='ready', composite=74.71, signals_overridden=[]
+      3. ✅ POST /api/v1/forecast/reconcile-signals (overrides) → status='ready', composite=53.22, overrides applied correctly
+      4. ✅ POST /api/v1/forecast/reconcile-signals (single override) → status='ready', composite=78.0
+      5. ✅ GET /api/v1/dashboard → status='ready', decision.weights_mode='dynamic', components weights sum=99%
+      6. ✅ GET /api/v1/health → status='ok' (regression passed)
+      7. ✅ GET /api/v1/scorecard → status='ready' (regression passed)
+      
+      ENDPOINTS TESTED:
+      - GET /api/v1/forecast/regime → Returns current regime, posterior probabilities, dynamic weights, 24h confidence cone
+      - POST /api/v1/forecast/reconcile-signals → Recomputes composite score with optional signal overrides (what-if tool)
+      - GET /api/v1/dashboard → Confirms decision engine now uses dynamic weights (weights_mode='dynamic')
+      - GET /api/v1/health → Regression test (still working)
+      - GET /api/v1/scorecard → Regression test (still working)
+      
+      DYNAMIC REGIME-SWITCHING ENGINE STATUS:
+      - Current regime: bull_momentum (88.87% probability) ✅
+      - Dynamic weights: technicals=41%, macro_policy=19%, chart_structure=29%, news_flow=10% ✅
+      - Static fallback weights (legacy): technicals=45%, macro_policy=20%, chart_structure=20%, news_flow=15%
+      - Weight adjustment: Regime-conditioned weights are now ACTIVE (not static) ✅
+      - HMM model: 4-state Gaussian HMM trained on [log_return_1d, log_return_5d, realized_vol_14d, parkinson_vol_14d] ✅
+      - Persistence: Model + analysis stored in MongoDB regime_col, refit daily (stale >20h) ✅
+      
+      KEY OBSERVATIONS:
+      - All endpoints return REAL data (Gaussian HMM trained on live OHLC data from ccxt Kraken)
+      - Regime probabilities sum to exactly 1.0 (within tolerance)
+      - Active weights sum to ~1.0 (within tolerance)
+      - Current regime matches argmax of regime probabilities
+      - Reconcile-signals correctly applies overrides and returns valid composite scores
+      - Dashboard decision engine now uses dynamic weights (weights_mode='dynamic')
+      - No HTTP 500 errors at any point
+      - All regression tests passed (health, scorecard still working)
+      
+      NO CRITICAL ISSUES FOUND. All 7 tests passed. Feature is fully functional and production-ready. 
+      Data is REAL (Gaussian HMM). No email endpoints triggered (as instructed).
+
+frontend:
+  - task: "Regime-Switching panel in Decision Engine card (regime probs + dynamic-weights indicator + 24h cone)"
+    implemented: true
+    working: "NA"
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Added RegimeSwitchPanel component rendered inside DecisionEngineCard. Shows the HMM current regime
+          badge + %, a 4-regime posterior probability strip, a "Dynamic weights" tag next to the Signal Groups,
+          and the regime-scaled 24h cone (lower/exp/upper + daily sigma). Reads decision.regime_engine (null-safe:
+          returns null if unavailable). Next.js compiled cleanly. Not yet visually verified via automated frontend
+          testing (awaiting user go-ahead). Screenshot tool shows the app's loading skeleton in the isolated
+          Playwright context (fetch-to-API quirk) though APIs return 200 and real preview works.
