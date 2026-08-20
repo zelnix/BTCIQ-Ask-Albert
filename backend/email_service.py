@@ -17,7 +17,7 @@ def resend_configured():
     return bool(RESEND_API_KEY)
 
 
-def send_email(to, subject, html, text=None, reply_to=None):
+def send_email(to, subject, html, text=None, reply_to=None, headers=None):
     """Send an email via Resend. `to` may be a str or a list of addresses.
 
     Returns {"ok": True, "id": <resend_id>} on success, or {"ok": False, "error": <msg>}.
@@ -36,6 +36,8 @@ def send_email(to, subject, html, text=None, reply_to=None):
         payload["text"] = text
     if reply_to:
         payload["reply_to"] = reply_to
+    if headers:
+        payload["headers"] = headers
 
     try:
         r = requests.post(

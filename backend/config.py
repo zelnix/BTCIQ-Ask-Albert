@@ -99,3 +99,12 @@ except Exception:  # noqa
     DIGEST_HOUR, DIGEST_MINUTE = 8, 0
 email_recipients_col = db['email_recipients']  # admin-managed digest recipient list
 email_log_col = db['email_log']  # sent-email audit + per-day digest idempotency guard
+email_settings_col = db['email_settings']  # instant-alert severity threshold, etc.
+# Base URL used in email links (unsubscribe). Falls back to the app's public URL.
+PUBLIC_BASE_URL = (os.environ.get('EMAIL_BASE_URL') or os.environ.get('NEXT_PUBLIC_BASE_URL') or '').rstrip('/')
+UNSUB_SECRET = os.environ.get('UNSUB_SECRET') or ADMIN_PASSCODE or 'btciq-unsub'
+try:
+    WEEKLY_HOUR = int(os.environ.get('WEEKLY_HOUR', '17'))
+    WEEKLY_MINUTE = int(os.environ.get('WEEKLY_MINUTE', '0'))
+except Exception:  # noqa
+    WEEKLY_HOUR, WEEKLY_MINUTE = 17, 0

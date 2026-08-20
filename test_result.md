@@ -4259,3 +4259,31 @@ backend:
           with a synthetic high alert (sent:1), then cleaned up. Live no-op returns {ok, sent:0} (no spam).
           Recipients added: roger.parenzee@gmail.com, zodiaccabinets@gmail.com. Settings UI adds a
           "Send high-priority alerts" button. admin/overview integrations now show Resend (Active) not SendGrid.
+
+#====================================================================================================
+# EMAIL v3 — Unsubscribe + configurable instant threshold + Sunday weekly recap
+#====================================================================================================
+backend:
+  - task: "Email v3 — one-click unsubscribe, configurable instant-alert severities, Sunday weekly recap"
+    implemented: true
+    working: true
+    file: "backend/server.py, backend/email_service.py, backend/config.py, app/components/EmailAlerts.js, .env"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          UNSUBSCRIBE: emails now send per-recipient (privacy) with a per-recipient footer link + RFC-8058
+          List-Unsubscribe / List-Unsubscribe-Post headers. GET|POST /api/v1/email/unsubscribe?e=&t= (HMAC token
+          of email via UNSUB_SECRET) removes the recipient and returns a branded HTML page. Verified: valid token
+          removes + 200 HTML, bad token shows invalid page, case-insensitive.
+          THRESHOLD: POST /api/v1/email/settings {passcode, instant_severities:[...]} stored in email_settings;
+          send_instant_alerts_bg uses it (default high+critical). recipients/list now returns instant_severities.
+          Settings UI shows Critical/High/Medium/Low toggle chips.
+          WEEKLY RECAP: build_weekly_recap (7-day change, week high/low, current signal, best/worst day, 7d alert
+          counts, price sparkline). Scheduled Sundays 17:00 Australia/Sydney; manual POST /api/v1/email/weekly/
+          send-now + "Send weekly recap" button. Idempotent per ISO week. Verified: real send to both recipients
+          (Resend id 5147055f..., sent:2). Link base = EMAIL_BASE_URL or NEXT_PUBLIC_BASE_URL.
+          NOTE (prod): set EMAIL_BASE_URL=https://btciq.app in production so unsubscribe links point to the live site.

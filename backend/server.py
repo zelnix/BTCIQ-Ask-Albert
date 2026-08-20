@@ -36,7 +36,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
 from fastapi import FastAPI, Body, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -49,7 +49,8 @@ from config import (
     onchain_col, lev_col, misc_col, usage_col, etf_col, whale_col, whale_hist_col, whale_tx_col,
     GLASSNODE_API_KEY, ADMIN_PASSCODE, EMERGENT_LLM_KEY, GEMINI_MODEL, CHAT_MODEL,
     RESEND_API_KEY, RESEND_FROM, DIGEST_TZ, DIGEST_HOUR, DIGEST_MINUTE,
-    email_recipients_col, email_log_col,
+    email_recipients_col, email_log_col, email_settings_col,
+    PUBLIC_BASE_URL, UNSUB_SECRET, WEEKLY_HOUR, WEEKLY_MINUTE,
 )
 from email_service import send_email, resend_configured
 
@@ -4261,6 +4262,16 @@ def _startup():
         # Instant high-severity alert emails — checked every 5 minutes (idempotent per alert).
         scheduler.add_job(send_instant_alerts_bg, 'interval', minutes=5, id='instant_alerts',
                           replace_existing=True, coalesce=True, max_instances=1)
+        # Weekly recap — Sundays.
+        try:
+            scheduler.add_job(send_weekly_recap_bg, 'cron', day_of_week='sun', hour=WEEKLY_HOUR,
+                              minute=WEEKLY_MINUTE, timezone=DIGEST_TZ, id='weekly_recap',
+                              replace_existing=True, coalesce=True, max_instances=1)
+        except Exception:  # noqa
+            traceback.print_exc()
+            scheduler.add_job(send_weekly_recap_bg, 'cron', day_of_week='sun', hour=WEEKLY_HOUR,
+                              minute=WEEKLY_MINUTE, id='weekly_recap', replace_existing=True,
+                              coalesce=True, max_instances=1)
         scheduler.start()
         _scheduler = scheduler
     except Exception:  # noqa
@@ -4983,6 +4994,52 @@ def _recipient_list():
         return []
 
 
+def _unsub_token(email):
+    import hmac
+    import hashlib
+    return hmac.new(UNSUB_SECRET.encode(), (email or '').lower().encode(),
+                    hashlib.sha256).hexdigest()[:32]
+
+
+def _unsub_url(email):
+    from urllib.parse import quote
+    if not PUBLIC_BASE_URL:
+        return ''
+    return f"{PUBLIC_BASE_URL}/api/v1/email/unsubscribe?e={quote(email)}&t={_unsub_token(email)}"
+
+
+_INSTANT_SEV_CHOICES = ('low', 'medium', 'high', 'critical')
+
+
+def _instant_severities():
+    doc = email_settings_col.find_one({'_id': 'instant'}) or {}
+    sev = doc.get('severities')
+    if not isinstance(sev, list):
+        return ['high', 'critical']
+    clean = [s for s in sev if s in _INSTANT_SEV_CHOICES]
+    return clean or ['high', 'critical']
+
+
+def _send_to_recipients(recips, subject, html, text):
+    """Send individually per recipient (privacy) with a per-recipient unsubscribe link + header."""
+    sent, last_id, err = 0, None, None
+    for email in recips:
+        url = _unsub_url(email)
+        h = html.replace('{{UNSUB}}', url or '#')
+        t = (text or '').replace('{{UNSUB}}', url or '')
+        headers = None
+        if url:
+            headers = {'List-Unsubscribe': f'<{url}>',
+                       'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'}
+        r = send_email(email, subject, h, t, headers=headers)
+        if r.get('ok'):
+            sent += 1
+            last_id = r.get('id')
+        else:
+            err = r.get('error')
+    return {'ok': sent > 0, 'sent': sent, 'id': last_id, 'error': err, 'recipients': len(recips)}
+
+
 def _digest_sparkline_html(closes, up):
     closes = [c for c in closes if isinstance(c, (int, float))][-30:]
     if len(closes) < 2:
@@ -5108,6 +5165,7 @@ def build_daily_digest():
         f'<table style="width:100%;border-collapse:collapse;">{rows}</table>'
         '<div style="padding:16px 24px;border-top:1px solid #1e293b;font-size:11px;color:#64748b;">'
         'You are receiving this because your address is on the BitMarkAI digest list. '
+        '<a href="{{UNSUB}}" style="color:#f59e0b;">Unsubscribe</a>. '
         'This is market information, not financial advice.'
         '</div></div></div>'
     )
@@ -5123,6 +5181,7 @@ def build_daily_digest():
                           f"{a.get('title') or a.get('category')}: {a.get('message') or ''}")
     if not alerts:
         text_lines.append('No new alerts in the last 24 hours.')
+    text_lines.append('\nUnsubscribe: {{UNSUB}}')
     subject = f'BitMarkAI Daily Brief — {signal} · {date_str}'
     return subject, html, '\n'.join(text_lines), len(alerts)
 
@@ -5147,7 +5206,7 @@ def send_daily_digest_bg(force=False):
                 print('[digest] already sent today; skipping', flush=True)
                 return {'ok': False, 'error': 'Digest already sent today.'}
         subject, html, text, count = build_daily_digest()
-        result = send_email(recips, subject, html, text)
+        result = _send_to_recipients(recips, subject, html, text)
         try:
             email_log_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
                                       'kind': 'digest_send', 'recipients': len(recips), 'alert_count': count,
@@ -5171,7 +5230,9 @@ def email_recipients_list_ep(payload: dict = Body(default={})):
         return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
     return {'status': 'ok', 'recipients': _recipient_list(), 'from': RESEND_FROM,
             'configured': resend_configured(),
-            'digest_time': f'{DIGEST_HOUR:02d}:{DIGEST_MINUTE:02d}', 'digest_tz': DIGEST_TZ}
+            'digest_time': f'{DIGEST_HOUR:02d}:{DIGEST_MINUTE:02d}', 'digest_tz': DIGEST_TZ,
+            'instant_severities': _instant_severities(),
+            'weekly_day': 'Sun', 'weekly_time': f'{WEEKLY_HOUR:02d}:{WEEKLY_MINUTE:02d}'}
 
 
 @app.post('/api/v1/email/recipients')
@@ -5271,12 +5332,13 @@ def build_instant_alert_email(alerts):
         '</div>'
         f'<table style="width:100%;border-collapse:collapse;">{rows}</table>'
         '<div style="padding:16px 24px;border-top:1px solid #1e293b;font-size:11px;color:#64748b;">'
-        'Sent immediately because these are high-severity alerts. Market information, not financial advice.'
+        'Sent immediately because these are high-severity alerts. '
+        '<a href="{{UNSUB}}" style="color:#f59e0b;">Unsubscribe</a>. Market information, not financial advice.'
         '</div></div></div>'
     )
     text = 'BitMarkAI Instant Alert\n\n' + '\n'.join(
         f"- [{(a.get('severity') or 'high').upper()}] {a.get('title') or a.get('category')}: {a.get('message') or ''}"
-        for a in alerts)
+        for a in alerts) + '\n\nUnsubscribe: {{UNSUB}}'
     return subject, html, text
 
 
@@ -5290,14 +5352,14 @@ def send_instant_alerts_bg():
             return {'ok': False, 'error': 'No recipients configured.'}
         window = (datetime.datetime.utcnow() - datetime.timedelta(minutes=45)).isoformat()
         candidates = list(smart_alerts_col.find(
-            {'symbol': 'BTC', 'severity': {'$in': ['high', 'critical']}, 'ts': {'$gte': window}}, {'_id': 0}
+            {'symbol': 'BTC', 'severity': {'$in': _instant_severities()}, 'ts': {'$gte': window}}, {'_id': 0}
         ).sort('ts', -1).limit(15))
         pending = [a for a in candidates
                    if a.get('id') and not email_log_col.find_one({'_id': f"instant_{a['id']}"})]
         if not pending:
             return {'ok': True, 'sent': 0}
         subject, html, text = build_instant_alert_email(pending)
-        result = send_email(recips, subject, html, text)
+        result = _send_to_recipients(recips, subject, html, text)
         if result.get('ok'):
             for a in pending:
                 email_log_col.update_one(
@@ -5330,6 +5392,170 @@ def email_instant_now_ep(payload: dict = Body(default={})):
                             if sent else 'No new high-priority alerts to send right now.'),
                 'sent': sent}
     return {'status': 'error', 'message': result.get('error') or 'Send failed.'}
+
+
+def build_weekly_recap():
+    now = datetime.datetime.utcnow()
+    run = runs_col.find_one(sort=[('created_at', -1)]) or {}
+    quant = run.get('quant') or {}
+    signal = run.get('signal') or quant.get('signal') or 'N/A'
+    score = run.get('quant_score')
+    if score is None:
+        score = quant.get('score')
+    score_txt = '—' if score is None else str(score)
+    ohlc = [c for c in ((run.get('chart') or {}).get('ohlc') or []) if isinstance(c, dict)]
+    last7 = ohlc[-8:] if len(ohlc) >= 8 else ohlc[:]
+    closes = [c.get('c') for c in last7 if isinstance(c.get('c'), (int, float))]
+
+    def _m(v):
+        return '—' if not isinstance(v, (int, float)) else f'${v:,.0f}'
+    week_chg = (closes[-1] - closes[0]) / closes[0] * 100 if len(closes) >= 2 and closes[0] else None
+    highs = [c.get('h') for c in last7 if isinstance(c.get('h'), (int, float))]
+    lows = [c.get('l') for c in last7 if isinstance(c.get('l'), (int, float))]
+    wk_high = max(highs) if highs else None
+    wk_low = min(lows) if lows else None
+    rets = []
+    for i in range(1, len(last7)):
+        p0, p1 = last7[i - 1].get('c'), last7[i].get('c')
+        if isinstance(p0, (int, float)) and isinstance(p1, (int, float)) and p0:
+            rets.append((last7[i].get('t'), (p1 - p0) / p0 * 100))
+    best = max(rets, key=lambda x: x[1]) if rets else None
+    worst = min(rets, key=lambda x: x[1]) if rets else None
+    cutoff = (now - datetime.timedelta(days=7)).isoformat()
+    wk_alerts = list(smart_alerts_col.find({'symbol': 'BTC', 'ts': {'$gte': cutoff}}, {'_id': 0}))
+    sev_counts = {}
+    for a in wk_alerts:
+        s = (a.get('severity') or 'info').lower()
+        sev_counts[s] = sev_counts.get(s, 0) + 1
+    sev_line = ' · '.join(f'{v} {k}' for k, v in sorted(sev_counts.items(), key=lambda x: -x[1])) or 'none'
+    date_str = now.strftime('%d %b %Y')
+    chg_col = '#34d399' if (isinstance(week_chg, (int, float)) and week_chg >= 0) else '#f87171'
+    chg_txt = '—' if not isinstance(week_chg, (int, float)) else f'{week_chg:+.2f}%'
+    spark = _digest_sparkline_html([c.get('c') for c in ohlc], isinstance(week_chg, (int, float)) and week_chg >= 0)
+
+    def card(label, value, sub='', col='#e2e8f0'):
+        return (f'<td width="25%" valign="top" style="padding:6px;">'
+                f'<div style="background:#0b1220;border:1px solid #1e293b;border-radius:10px;padding:12px;">'
+                f'<div style="font-size:11px;color:#64748b;text-transform:uppercase;">{label}</div>'
+                f'<div style="font-size:16px;font-weight:800;color:{col};margin-top:4px;">{value}</div>'
+                f'<div style="font-size:11px;color:#64748b;">{sub}</div></div></td>')
+    cards = (card('7-day change', chg_txt, 'BTC', chg_col) + card('Week high', _m(wk_high))
+             + card('Week low', _m(wk_low)) + card('Signal now', signal, f'score {score_txt}'))
+    moves = ''
+    if best:
+        moves += card('Best day', f'{best[1]:+.2f}%', str(best[0]), '#34d399')
+    if worst:
+        moves += card('Worst day', f'{worst[1]:+.2f}%', str(worst[0]), '#f87171')
+    moves += card('Alerts (7d)', str(len(wk_alerts)), sev_line)
+    html = (
+        '<div style="font-family:Arial,Helvetica,sans-serif;background:#0b1220;padding:24px;">'
+        '<div style="max-width:640px;margin:0 auto;background:#0f172a;border:1px solid #1e293b;border-radius:14px;overflow:hidden;">'
+        '<div style="padding:22px 24px;background:linear-gradient(135deg,#38bdf822,#1e293b);border-bottom:1px solid #1e293b;">'
+        '<div style="font-size:20px;font-weight:800;color:#38bdf8;">BitMarkAI · Week in Review</div>'
+        f'<div style="font-size:13px;color:#94a3b8;margin-top:6px;">Week ending {date_str}</div></div>'
+        f'<div style="padding:16px 18px 4px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>{cards}</tr></table></div>'
+        f'<div style="padding:4px 18px 8px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>{moves}</tr></table></div>'
+        f'<div style="padding:8px 24px 18px;">{spark}</div>'
+        '<div style="padding:16px 24px;border-top:1px solid #1e293b;font-size:11px;color:#64748b;">'
+        'Your weekly BitMarkAI recap. <a href="{{UNSUB}}" style="color:#f59e0b;">Unsubscribe</a>. '
+        'Market information, not financial advice.'
+        '</div></div></div>'
+    )
+    text = (f'BitMarkAI Week in Review — week ending {date_str}\n'
+            f'7-day change: {chg_txt} · Signal {signal} (score {score_txt})\n'
+            f'Week high {_m(wk_high)} · low {_m(wk_low)}\n'
+            + (f'Best day {best[1]:+.2f}% ({best[0]}) ' if best else '')
+            + (f'· Worst day {worst[1]:+.2f}% ({worst[0]})\n' if worst else '\n')
+            + f'Alerts (7d): {len(wk_alerts)} — {sev_line}\n\nUnsubscribe: {{{{UNSUB}}}}')
+    subject = f'BitMarkAI · Week in Review — {chg_txt} ({date_str})'
+    return subject, html, text
+
+
+def send_weekly_recap_bg(force=False):
+    try:
+        if not resend_configured():
+            return {'ok': False, 'error': 'RESEND_API_KEY is not configured on the server.'}
+        recips = [r.get('email') for r in _recipient_list() if r.get('email')]
+        if not recips:
+            return {'ok': False, 'error': 'No recipients configured.'}
+        iso = datetime.datetime.utcnow().isocalendar()
+        key = f'weekly_{iso[0]}_{iso[1]}'
+        if not force:
+            res = email_log_col.update_one({'_id': key},
+                {'$setOnInsert': {'_id': key, 'kind': 'weekly_guard',
+                                  'ts': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+            if res.upserted_id is None:
+                return {'ok': False, 'error': 'Weekly recap already sent this week.'}
+        subject, html, text = build_weekly_recap()
+        result = _send_to_recipients(recips, subject, html, text)
+        try:
+            email_log_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
+                                      'kind': 'weekly_send', 'recipients': len(recips), 'ok': result.get('ok'),
+                                      'resend_id': result.get('id'), 'error': result.get('error'),
+                                      'forced': bool(force)})
+        except Exception:  # noqa
+            pass
+        return result
+    except Exception as e:  # noqa
+        traceback.print_exc()
+        return {'ok': False, 'error': str(e)}
+
+
+@app.post('/api/v1/email/weekly/send-now')
+def email_weekly_now_ep(payload: dict = Body(default={})):
+    if not _email_admin_guard(payload):
+        return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
+    result = send_weekly_recap_bg(force=True)
+    if result.get('ok'):
+        return {'status': 'ok', 'message': f"Weekly recap sent to {result.get('recipients')} recipient(s)."}
+    return {'status': 'error', 'message': result.get('error') or 'Send failed.'}
+
+
+@app.post('/api/v1/email/settings')
+def email_settings_ep(payload: dict = Body(default={})):
+    if not _email_admin_guard(payload):
+        return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
+    sev = (payload or {}).get('instant_severities')
+    if isinstance(sev, list):
+        clean = [s for s in sev if s in _INSTANT_SEV_CHOICES]
+        email_settings_col.update_one({'_id': 'instant'},
+            {'$set': {'_id': 'instant', 'severities': clean or ['high', 'critical']}}, upsert=True)
+    return {'status': 'ok', 'instant_severities': _instant_severities()}
+
+
+def _unsub_page(msg, ok=True):
+    color = '#34d399' if ok else '#f87171'
+    return HTMLResponse(
+        f'<html><body style="font-family:Arial;background:#0b1220;color:#e2e8f0;display:flex;'
+        f'align-items:center;justify-content:center;height:100vh;margin:0;">'
+        f'<div style="text-align:center;max-width:440px;padding:32px;background:#0f172a;'
+        f'border:1px solid #1e293b;border-radius:14px;">'
+        f'<div style="font-size:22px;font-weight:800;color:{color};margin-bottom:10px;">BitMarkAI</div>'
+        f'<div style="font-size:15px;color:#cbd5e1;line-height:1.5;">{msg}</div></div></body></html>')
+
+
+def _do_unsubscribe(e, t):
+    import hmac
+    email = (e or '').strip().lower()
+    if not email or not t or not hmac.compare_digest(str(t), _unsub_token(email)):
+        return _unsub_page('This unsubscribe link is invalid or has expired.', ok=False)
+    email_recipients_col.delete_one({'_id': email})
+    try:
+        email_log_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
+                                  'kind': 'unsubscribe', 'email': email})
+    except Exception:  # noqa
+        pass
+    return _unsub_page(f'You have been unsubscribed. <b>{email}</b> will no longer receive BitMarkAI emails.')
+
+
+@app.get('/api/v1/email/unsubscribe')
+def email_unsub_get(e: str = '', t: str = ''):
+    return _do_unsubscribe(e, t)
+
+
+@app.post('/api/v1/email/unsubscribe')
+def email_unsub_post(e: str = '', t: str = ''):
+    return _do_unsubscribe(e, t)
 
 
 @app.get('/api/v1/replay')

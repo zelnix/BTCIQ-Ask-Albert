@@ -17,6 +17,7 @@ export default function EmailAlerts() {
   const [testTo, setTestTo] = React.useState('');
   const [msg, setMsg] = React.useState(null);
   const [busy, setBusy] = React.useState('');
+  const [sev, setSev] = React.useState([]);
 
   const post = async (path, body) => {
     const r = await fetch(`${API_BASE}${path}`, {
@@ -36,8 +37,9 @@ export default function EmailAlerts() {
       });
       const j = await r.json();
       if (j.status === 'ok') {
-        setCfg({ from: j.from, configured: j.configured, digest_time: j.digest_time, digest_tz: j.digest_tz });
+        setCfg({ from: j.from, configured: j.configured, digest_time: j.digest_time, digest_tz: j.digest_tz, weekly_day: j.weekly_day, weekly_time: j.weekly_time });
         setRecips(j.recipients || []);
+        setSev(j.instant_severities || []);
         setLoaded(true);
       } else {
         setLoaded(false);
@@ -94,6 +96,22 @@ export default function EmailAlerts() {
     setBusy('');
   };
 
+  const sendWeekly = async () => {
+    setBusy('weekly'); setMsg(null);
+    const j = await post('/v1/email/weekly/send-now', {});
+    setMsg({ type: j.status === 'ok' ? 'ok' : 'err', text: j.message || (j.status === 'ok' ? 'Weekly recap sent.' : 'Send failed.') });
+    setBusy('');
+  };
+
+  const toggleSev = async (s) => {
+    const next = sev.includes(s) ? sev.filter((x) => x !== s) : [...sev, s];
+    setSev(next); setBusy('sev'); setMsg(null);
+    const j = await post('/v1/email/settings', { instant_severities: next });
+    if (j.status === 'ok') { setSev(j.instant_severities || next); setMsg({ type: 'ok', text: 'Instant-alert threshold updated.' }); }
+    else setMsg({ type: 'err', text: j.message || 'Could not update threshold.' });
+    setBusy('');
+  };
+
   return (
     <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
       <h3 className="mb-1 flex items-center gap-2 font-semibold text-white">
@@ -132,6 +150,24 @@ export default function EmailAlerts() {
             <span className="text-slate-400">From <span className="text-slate-200">{cfg?.from}</span></span>
             <span className="text-slate-600">·</span>
             <span className="inline-flex items-center gap-1 text-slate-400"><Clock className="h-3.5 w-3.5" />{cfg?.digest_time} {cfg?.digest_tz}</span>
+          </div>
+
+          <div>
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Instant-alert threshold
+              <span className="font-normal normal-case text-slate-500">— email the moment these fire</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[['critical', 'Critical'], ['high', 'High'], ['medium', 'Medium'], ['low', 'Low']].map(([k, label]) => {
+                const on = sev.includes(k);
+                return (
+                  <button key={k} onClick={() => toggleSev(k)} disabled={busy === 'sev'}
+                    className={`min-h-[36px] rounded-full px-3 text-xs font-semibold ring-1 transition ${on ? 'bg-amber-500/20 text-amber-300 ring-amber-500/40' : 'bg-slate-950/40 text-slate-400 ring-slate-700 hover:text-slate-200'}`}>
+                    {on ? '\u2713 ' : ''}{label}
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           <div>
@@ -192,6 +228,9 @@ export default function EmailAlerts() {
             </Button>
             <Button onClick={sendInstant} disabled={busy === 'instant' || recips.length === 0} variant="outline" className="min-h-[40px] border-red-500/30 bg-red-500/5 text-red-300 hover:bg-red-500/10">
               {busy === 'instant' ? <Loader2 className="h-4 w-4 animate-spin" /> : <><AlertCircle className="mr-1 h-4 w-4" />Send high-priority alerts</>}
+            </Button>
+            <Button onClick={sendWeekly} disabled={busy === 'weekly' || recips.length === 0} variant="outline" className="min-h-[40px] border-sky-500/30 bg-sky-500/5 text-sky-300 hover:bg-sky-500/10">
+              {busy === 'weekly' ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Send className="mr-1 h-4 w-4" />Send weekly recap</>}
             </Button>
           </div>
         </div>
