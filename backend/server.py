@@ -1048,11 +1048,31 @@ def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light
     bullish_lean = higher >= lower
     invalidation = bear if bullish_lean else bull
     label = {1: '24H', 7: '7D', 30: '30D', 90: '3M', 180: '6M', 365: '1Y'}.get(h, f'{h}D')
+
+    # --- Probabilistic price cone (log-normal quantiles) + Expected-Value framing ---
+    # price_T = price * exp(drift + vol * Z), Z ~ N(0,1)  -> proper percentile bands
+    _NORM_Q = {'p10': -1.2816, 'p25': -0.6745, 'p50': 0.0, 'p75': 0.6745, 'p90': 1.2816}
+    quantiles = {k: round(price * math.exp(drift + vol * z), 0) for k, z in _NORM_Q.items()}
+    p_up_disp = higher / 100.0
+    avg_up = max(0.0, quantiles['p75'] / price - 1.0)     # representative upside (upper-half median)
+    avg_dn = max(0.0, 1.0 - quantiles['p25'] / price)     # representative downside (lower-half median)
+    ev = p_up_disp * avg_up - (1.0 - p_up_disp) * avg_dn  # expected return per unit
+    payoff = round(avg_up / avg_dn, 2) if avg_dn > 1e-9 else None
+    ev_block = {
+        'win_prob': round(p_up_disp * 100, 1),
+        'avg_up_pct': round(avg_up * 100, 2),
+        'avg_down_pct': round(avg_dn * 100, 2),
+        'payoff_ratio': payoff,
+        'ev_pct': round(ev * 100, 2),
+        'verdict': ('Positive edge' if ev > 0.0025 else 'Negative edge' if ev < -0.0025 else 'Flat / no edge'),
+    }
+
     return {
         'horizon': label, 'days': h,
         'higher': higher, 'lower': lower,
         'expected_low': round(exp_low, 0), 'expected_high': round(exp_high, 0),
         'bull': round(bull, 0), 'base': round(base, 0), 'bear': round(bear, 0),
+        'quantiles': quantiles, 'ev': ev_block,
         'confidence': conf_label, 'confidence_pct': round(conf_val * 100, 0),
         'accuracy': round(acc * 100, 1),
         'invalidation': round(invalidation, 0),

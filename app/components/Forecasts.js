@@ -68,6 +68,36 @@ function ForecastCard({ f }) {
         <div className="rounded-lg bg-slate-800/60 p-2"><p className="text-[10px] text-slate-400">Base</p><p className="text-sm font-bold text-slate-200">{fmtUsd(f.base)}</p></div>
         <div className="rounded-lg bg-red-500/10 p-2"><p className="text-[10px] text-slate-400">Bear</p><p className="text-sm font-bold text-red-400">{fmtUsd(f.bear)}</p></div>
       </div>
+      {f.quantiles && (
+        <div className="mt-4">
+          <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Price Cone (10–90%)<InfoTip text="A probabilistic price distribution, not a single guess. There's ~80% modelled chance price lands inside the p10–p90 band, with p50 the median. Wider = more uncertain." /></p>
+          <div className="relative h-6 w-full rounded-full bg-gradient-to-r from-red-500/25 via-slate-700/40 to-emerald-500/25">
+            <div className="absolute inset-y-0 rounded-full bg-sky-500/25" style={{ left: '25%', right: '25%' }} />
+            <div className="absolute inset-y-0 w-0.5 bg-white" style={{ left: '50%' }} title="median" />
+          </div>
+          <div className="mt-1 flex justify-between font-mono text-[10px] text-slate-500">
+            <span className="text-red-400">{fmtUsd(f.quantiles.p10)}</span>
+            <span>{fmtUsd(f.quantiles.p25)}</span>
+            <span className="text-slate-200">{fmtUsd(f.quantiles.p50)}</span>
+            <span>{fmtUsd(f.quantiles.p75)}</span>
+            <span className="text-emerald-400">{fmtUsd(f.quantiles.p90)}</span>
+          </div>
+        </div>
+      )}
+      {f.ev && (
+        <div className={`mt-3 rounded-lg border p-3 ${f.ev.ev_pct > 0 ? 'border-emerald-500/25 bg-emerald-500/[0.06]' : f.ev.ev_pct < 0 ? 'border-red-500/25 bg-red-500/[0.06]' : 'border-slate-800 bg-slate-950/40'}`}>
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Expected Value<InfoTip text="EV weighs win probability against payoff size. A sub-50% win-rate can still be profitable if the upside outweighs the downside (payoff > 1). EV = P(up)×avg-up − P(down)×avg-down." /></span>
+            <span className={`text-sm font-black ${f.ev.ev_pct > 0 ? 'text-emerald-400' : f.ev.ev_pct < 0 ? 'text-red-400' : 'text-slate-300'}`}>{f.ev.ev_pct > 0 ? '+' : ''}{f.ev.ev_pct}%</span>
+          </div>
+          <div className="mt-1.5 grid grid-cols-3 gap-2 text-center text-[11px]">
+            <div><p className="text-slate-500">Win prob</p><p className="font-mono font-semibold text-slate-200">{f.ev.win_prob}%</p></div>
+            <div><p className="text-slate-500">Payoff</p><p className="font-mono font-semibold text-slate-200">{f.ev.payoff_ratio != null ? f.ev.payoff_ratio + ':1' : '—'}</p></div>
+            <div><p className="text-slate-500">Verdict</p><p className={`font-semibold ${f.ev.ev_pct > 0 ? 'text-emerald-400' : f.ev.ev_pct < 0 ? 'text-red-400' : 'text-slate-300'}`}>{f.ev.verdict}</p></div>
+          </div>
+          <p className="mt-1 text-center text-[10px] text-slate-500">+{f.ev.avg_up_pct}% avg upside vs −{f.ev.avg_down_pct}% avg downside</p>
+        </div>
+      )}
       <div className="mt-4 space-y-1.5 text-xs">
         <div className="flex justify-between"><span className="flex items-center gap-1 text-slate-400">Expected range<InfoTip text="The likely high–low price band for this window based on recent volatility. Price can still move outside it." /></span><span className="font-mono text-slate-200">{fmtUsd(f.expected_low)} – {fmtUsd(f.expected_high)}</span></div>
         <div className="flex justify-between"><span className="flex items-center gap-1 text-slate-400">Confidence<InfoTip text="How strong the model's conviction is on this call, shown as a label and a 0–100%. Higher means the signal setup has been clearer historically." /></span><span className="font-semibold text-sky-400">{f.confidence} ({f.confidence_pct}%)</span></div>
