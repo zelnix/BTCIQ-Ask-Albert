@@ -33,6 +33,7 @@ try:
 except Exception:  # noqa
     _HAS_SHAP = False
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
 from fastapi import FastAPI, Body, Request
@@ -979,12 +980,31 @@ def _sig_word(s):
     return 'Neutral'
 
 
+def _horizon_features(h):
+    """Sub-Model Depth: horizon-appropriate feature subset.
+    Short horizons lean on fast microstructure (momentum/volatility/volume); long horizons
+    lean on slower trend/structure. All drawn from the existing engineered feature set."""
+    short = ['RSI', 'StochRSI', 'MACD_Hist_Norm', 'ATR_Pct', 'BB_Width_Pct', 'Volume_Z', 'Volume_Ratio']
+    longf = ['EMA_Ratio', 'MACD_Hist_Norm', 'RSI', 'ATR_Pct']
+    if h <= 7:
+        cols = short
+    elif h <= 90:
+        cols = FEATURE_COLS  # balanced across all categories
+    else:
+        cols = longf
+    return [c for c in cols if c in FEATURE_COLS] or list(FEATURE_COLS)
+
+
 def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light=False):
-    """Train a horizon-specific RandomForest and project bull/base/bear ranges.
+    """Train a horizon-specific model (per-horizon feature set) with out-of-fold ISOTONIC
+    calibration so the stated probability is honest, then project bull/base/bear ranges.
     light=True skips SHAP contributions (used for long-horizon outlooks to save compute)."""
     n = len(Xfull)
+    cols = _horizon_features(h)
+    Xf = Xfull[cols]
+    lx = live_X[cols]
     y_h = (close.shift(-h) > close).astype(int)
-    Xv = Xfull.iloc[:n - h]
+    Xv = Xf.iloc[:n - h]
     yv = y_h.iloc[:n - h]
     # backtest accuracy via time-series split
     accs = []
@@ -997,12 +1017,30 @@ def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light
     except Exception:  # noqa
         accs = [0.5]
     acc = float(np.mean(accs)) if accs else 0.5
-    # final model -> live probability
+    # final model -> live probability (raw RF; also used for SHAP)
     fm = RandomForestClassifier(n_estimators=150, max_depth=5, random_state=42, n_jobs=-1)
     fm.fit(Xv, yv)
     cl = list(fm.classes_)
-    pr = fm.predict_proba(live_X)[0]
+    pr = fm.predict_proba(lx)[0]
     p_up = float(pr[cl.index(1)]) if 1 in cl else 0.0
+
+    # --- Out-of-fold ISOTONIC calibration of the directional probability ---
+    # Guarantees the stated odds match realised frequencies; graceful fallback to raw
+    # when a horizon has too few samples / a rare class to calibrate reliably.
+    calibrated = False
+    try:
+        vc = yv.value_counts()
+        if len(Xv) >= 150 and yv.nunique() == 2 and int(vc.min()) >= 30:
+            base = RandomForestClassifier(n_estimators=120, max_depth=5, random_state=42, n_jobs=-1)
+            cal = CalibratedClassifierCV(base, method='isotonic', cv=3)
+            cal.fit(Xv, yv)
+            clc = list(cal.classes_)
+            pc = cal.predict_proba(lx)[0]
+            if 1 in clc:
+                p_up = float(pc[clc.index(1)])
+                calibrated = True
+    except Exception:  # noqa
+        calibrated = False
 
     # SHAP factor contributions for the live prediction (probability space, class = up)
     contributions = []
@@ -1073,6 +1111,7 @@ def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light
         'expected_low': round(exp_low, 0), 'expected_high': round(exp_high, 0),
         'bull': round(bull, 0), 'base': round(base, 0), 'bear': round(bear, 0),
         'quantiles': quantiles, 'ev': ev_block,
+        'calibrated': calibrated, 'features_used': cols,
         'confidence': conf_label, 'confidence_pct': round(conf_val * 100, 0),
         'accuracy': round(acc * 100, 1),
         'invalidation': round(invalidation, 0),

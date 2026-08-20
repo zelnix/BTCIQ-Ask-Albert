@@ -1325,7 +1325,88 @@ function ExecKpi({ label, children, sub, subColor, onClick }) {
   );
 }
 
+function normCdf(z) { return 0.5 * (1 + erf(z / Math.SQRT2)); }
+function erf(x) { const t = 1 / (1 + 0.3275911 * Math.abs(x)); const y = 1 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x); return x >= 0 ? y : -y; }
+
+function ScenarioSimulator({ d, onNav }) {
+  const [shock, setShock] = useState(0);
+  const [hz, setHz] = useState('7D');
+  const spot = d.last_close;
+  const forecasts = [...(d.forecasts || []), ...(d.long_outlook || [])];
+  const f = forecasts.find((x) => x.horizon === hz) || forecasts[0];
+  const sb = (d.decision || {}).scenarios_block || {};
+  const bull = (sb.scenarios || []).find((s) => s.type === 'bull');
+  const bear = (sb.scenarios || []).find((s) => s.type === 'bear');
+  if (!f || !f.quantiles || !spot) return null;
+  const hypo = spot * (1 + shock / 100);
+  // Map hypothetical price -> z via interpolation over the log-normal quantile grid, then -> percentile.
+  const q = f.quantiles;
+  const pts = [[q.p10, -1.2816], [q.p25, -0.6745], [q.p50, 0], [q.p75, 0.6745], [q.p90, 1.2816]];
+  let z;
+  if (hypo <= pts[0][0]) z = -2.2;
+  else if (hypo >= pts[4][0]) z = 2.2;
+  else { for (let i = 0; i < pts.length - 1; i++) { if (hypo >= pts[i][0] && hypo <= pts[i + 1][0]) { const r = (hypo - pts[i][0]) / (pts[i + 1][0] - pts[i][0] || 1); z = pts[i][1] + r * (pts[i + 1][1] - pts[i][1]); break; } } }
+  const pctile = Math.round(normCdf(z) * 100);
+  const crossed = [];
+  if (bull && hypo >= bull.trigger_level) crossed.push({ t: `Broke resistance $${bull.trigger_level.toLocaleString()}`, c: 'text-emerald-300' });
+  if (bear && hypo <= bear.trigger_level) crossed.push({ t: `Lost support $${bear.trigger_level.toLocaleString()}`, c: 'text-red-300' });
+  if (bear && hypo <= bear.target_level) crossed.push({ t: `Below invalidation $${bear.target_level.toLocaleString()}`, c: 'text-amber-300' });
+  return (
+    <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <SlidersHorizontal className="h-4 w-4 text-sky-400" />
+        <h3 className="text-sm font-semibold text-white">Scenario Simulator</h3>
+        <InfoTip text="Drag to apply a hypothetical price shock and see where it lands inside the calibrated forecast cone, plus which scenario levels it would cross. This maps a price to the model's distribution — it doesn't refit the model." />
+        <div className="ml-auto flex gap-1">
+          {['24H', '7D', '30D'].map((h) => (
+            <button key={h} onClick={() => setHz(h)} className={`rounded-md px-2 py-1 text-[11px] font-semibold ${hz === h ? 'bg-sky-500/20 text-sky-200 ring-1 ring-sky-500/40' : 'text-slate-400 hover:text-slate-200'}`}>{h}</button>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-center gap-3">
+        <span className="text-xs font-semibold text-red-400">−20%</span>
+        <input type="range" min={-20} max={20} step={0.5} value={shock} onChange={(e) => setShock(parseFloat(e.target.value))} className="h-2 flex-1 cursor-pointer appearance-none rounded-full bg-gradient-to-r from-red-500/40 via-slate-700 to-emerald-500/40 accent-sky-400" />
+        <span className="text-xs font-semibold text-emerald-400">+20%</span>
+      </div>
+      <div className="mt-4 grid grid-cols-3 gap-3 text-center">
+        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Shock</p><p className={`text-lg font-black ${shock >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{shock > 0 ? '+' : ''}{shock}%</p></div>
+        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Hypothetical price</p><p className="text-lg font-black text-white">{fmtUsd(Math.round(hypo))}</p></div>
+        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">{hz} cone percentile</p><p className="text-lg font-black text-sky-300">p{pctile}</p></div>
+      </div>
+      <p className="mt-3 text-[12px] text-slate-400">A {shock > 0 ? '+' : ''}{shock}% move to <span className="font-semibold text-slate-200">{fmtUsd(Math.round(hypo))}</span> sits at the <span className="font-semibold text-sky-300">{pctile}th percentile</span> of the {hz} forecast cone — {pctile <= 10 ? 'a rare downside tail' : pctile >= 90 ? 'a rare upside tail' : pctile < 40 ? 'below the median path' : pctile > 60 ? 'above the median path' : 'near the median path'}.</p>
+      {crossed.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {crossed.map((c, i) => <span key={i} className={`rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1 text-[11px] font-semibold ${c.c}`}>{c.t}</span>)}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function ExecutiveSummary({ d, ticker, news, onNav }) {
+  const [speaking, setSpeaking] = useState(false);
+  const speakBrief = () => {
+    try {
+      const synth = window.speechSynthesis;
+      if (!synth) return;
+      if (speaking) { synth.cancel(); setSpeaking(false); return; }
+      const dec0 = d.decision || {};
+      const re0 = dec0.regime_engine || {};
+      const parts = [
+        'Bitcoin morning brief.',
+        `Market bias ${biasMeta(dec0.overall_score).label}, conviction ${dec0.overall_score} out of 100.`,
+        re0.regime_label ? `Current regime: ${re0.regime_label}.` : '',
+        dec0.summary || '',
+      ].filter(Boolean).join(' ');
+      const u = new SpeechSynthesisUtterance(parts);
+      u.rate = 1.02; u.pitch = 1.0;
+      u.onend = () => setSpeaking(false);
+      u.onerror = () => setSpeaking(false);
+      synth.cancel();
+      synth.speak(u);
+      setSpeaking(true);
+    } catch (e) { setSpeaking(false); }
+  };
   const dec = d.decision || {};
   const bias = biasMeta(dec.overall_score);
   const price = ticker?.price ?? d.last_close;
@@ -1380,7 +1461,12 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
           <Sparkles className="h-5 w-5 text-amber-400" />
           <h3 className="text-lg font-bold text-white">Albert&apos;s Morning Brief</h3>
           {re.regime_label && <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[11px] font-bold text-violet-200">{re.regime_label}</span>}
-          <button onClick={() => onNav('ask')} className="ml-auto flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-sky-500/50 hover:text-sky-200"><MessageCircle className="h-4 w-4" />Ask Albert</button>
+          <div className="ml-auto flex items-center gap-2">
+            <button onClick={speakBrief} className={`flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${speaking ? 'border-amber-500/50 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:border-amber-500/50 hover:text-amber-200'}`}>
+              {speaking ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}{speaking ? 'Stop' : 'Listen'}
+            </button>
+            <button onClick={() => onNav('ask')} className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-sky-500/50 hover:text-sky-200"><MessageCircle className="h-4 w-4" />Ask Albert</button>
+          </div>
         </div>
         <div className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-2">
           <div>
@@ -1484,6 +1570,9 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
           </button>
         </div>
       </Card>
+
+      {/* Scenario simulator */}
+      <ScenarioSimulator d={d} onNav={onNav} />
     </div>
   );
 }
