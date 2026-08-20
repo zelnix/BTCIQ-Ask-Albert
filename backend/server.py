@@ -3122,11 +3122,28 @@ def _age_min(iso):
         return None
 
 
-def compute_data_health(source, crossmarket, policy, dominance, news_doc):
+def _feed_iso(col, _id):
+    """Return (iso_timestamp, exists) for a cache doc using its real fetched_at/fetched_ts."""
+    try:
+        d = col.find_one({'_id': _id}, {'fetched_ts': 1, 'fetched_at': 1})
+        if not d:
+            return None, False
+        if d.get('fetched_at'):
+            return d['fetched_at'], True
+        ts = d.get('fetched_ts')
+        if ts:
+            return datetime.datetime.utcfromtimestamp(float(ts)).isoformat(), True
+        return None, True
+    except Exception:  # noqa
+        return None, False
+
+
+def compute_data_health(source, crossmarket, policy, dominance, news_doc, core_iso=None):
     now_iso = datetime.datetime.utcnow().isoformat()
+    core_iso = core_iso or now_iso  # when the core feeds were actually refreshed (last run)
     feeds = []
 
-    def add(fid, label, provider, ok, updated_iso, fresh_min, methodology):
+    def add(fid, label, provider, ok, updated_iso, fresh_min, methodology, core=True):
         age = _age_min(updated_iso) if updated_iso else None
         if not ok:
             status, conf = 'down', 10
@@ -3140,37 +3157,61 @@ def compute_data_health(source, crossmarket, policy, dominance, news_doc):
             status, conf = 'stale', 42
         feeds.append({'id': fid, 'label': label, 'provider': provider, 'status': status,
                       'updated': updated_iso, 'age_min': round(age) if age is not None else None,
-                      'confidence': conf, 'methodology': methodology})
+                      'confidence': conf, 'methodology': methodology, 'core': core})
 
-    add('price', 'Spot & OHLCV Price', (source or 'kraken').title(), True, now_iso, 180,
+    add('price', 'Spot & OHLCV Price', (source or 'kraken').title(), True, core_iso, 1560,
         'Daily OHLCV via ccxt; live spot via exchange ticker (polled every ~10s).')
-    add('dominance', 'BTC Dominance & Market Cap', 'CoinGecko', dominance is not None, now_iso, 180,
+    add('dominance', 'BTC Dominance & Market Cap', 'CoinGecko', dominance is not None, core_iso, 1560,
         'Global market-cap share and total market cap from the CoinGecko public API.')
     add('crossmarket', 'Cross-Market (DXY, Yields, VIX, Gold, S&P)', 'Yahoo Finance',
-        crossmarket is not None, now_iso, 360, 'Daily closes for macro assets; rolling correlations vs BTC.')
-    add('policy', 'Macro & Policy', 'Curated + Yahoo Finance', policy is not None, now_iso, 360,
+        crossmarket is not None, core_iso, 1560, 'Daily closes for macro assets; rolling correlations vs BTC.')
+    add('policy', 'Macro & Policy', 'Curated + Yahoo Finance', policy is not None, core_iso, 1560,
         'Rate/liquidity proxies plus a curated policy & regulation calendar.')
     add('news', 'Bitcoin News & AI Impact', 'RSS + Gemini',
-        news_doc is not None, (news_doc or {}).get('created_at'), 120,
+        news_doc is not None, (news_doc or {}).get('created_at'), 180,
         'Keyless RSS feeds clustered and scored for impact/direction by Gemini.')
-    add('fx', 'USD → AUD FX', 'Yahoo Finance', True, now_iso, 1800,
+    add('fx', 'USD → AUD FX', 'Yahoo Finance', True, core_iso, 1800,
         'AUD=X spot rate used to convert USD prices into AUD.')
 
-    conf_vals = [f['confidence'] for f in feeds]
+    # --- Auxiliary feeds (real cache timestamps; informational, not part of odds-fade) ---
+    etf_iso, etf_ok = _feed_iso(etf_col, 'btc')
+    add('etf', 'US Spot ETF Net Flows', 'Farside (tftc.io / bitbo)', etf_ok and etf_iso is not None,
+        etf_iso, 4320,
+        'Daily US spot BTC ETF net flows. Publishes only on US market days — weekend/holiday gaps are expected.',
+        core=False)
+    oc_iso, oc_ok = _feed_iso(onchain_col, 'btc')
+    add('onchain', 'On-Chain (MVRV / SOPR / holder proxies)', 'Glassnode / keyless', oc_ok, oc_iso, 1440,
+        'On-chain cost-basis and holder-behaviour metrics; refreshed daily.', core=False)
+    lev_iso, lev_ok = _feed_iso(lev_col, 'BTC:4H')
+    add('leverage', 'Derivatives & Leverage (OI / funding)', 'OKX', lev_ok, lev_iso, 720,
+        'Open interest, funding and long/short positioning from OKX (4H).', core=False)
+    fg_iso, fg_ok = _feed_iso(misc_col, 'fear_greed')
+    add('sentiment', 'Fear & Greed Index', 'alternative.me', fg_ok, fg_iso, 1440,
+        'Crowd sentiment 0-100 from the alternative.me Fear & Greed index.', core=False)
+
+    # Odds-fade + headline score are driven by the CORE feeds only (unchanged behaviour).
+    core_feeds = [f for f in feeds if f.get('core')]
+    conf_vals = [f['confidence'] for f in core_feeds]
     score = int(round(sum(conf_vals) / len(conf_vals)))
-    live = sum(1 for f in feeds if f['status'] == 'live')
-    degraded = sum(1 for f in feeds if f['status'] == 'degraded')
-    stale = sum(1 for f in feeds if f['status'] in ('stale', 'down'))
+    live = sum(1 for f in core_feeds if f['status'] == 'live')
+    degraded = sum(1 for f in core_feeds if f['status'] == 'degraded')
+    stale = sum(1 for f in core_feeds if f['status'] in ('stale', 'down'))
+    # Auxiliary feed rollup (surfaced but non-fading).
+    aux_feeds = [f for f in feeds if not f.get('core')]
+    aux_issues = [f['label'] for f in aux_feeds if f['status'] in ('stale', 'down')]
     level = 'High' if score >= 90 else 'Good' if score >= 75 else 'Degraded' if score >= 55 else 'Low'
     faded = stale > 0 or score < 70
     if stale == 0 and degraded == 0:
-        note = 'All data feeds are live and fresh — full model confidence.'
+        note = 'All core data feeds are live and fresh — full model confidence.'
     elif faded:
-        note = f'{stale} feed(s) stale/down, {degraded} degraded — odds are faded and confidence reduced.'
+        note = f'{stale} core feed(s) stale/down, {degraded} degraded — odds are faded and confidence reduced.'
     else:
-        note = f'{degraded} feed(s) slightly delayed — minor confidence reduction.'
+        note = f'{degraded} core feed(s) slightly delayed — minor confidence reduction.'
+    if aux_issues:
+        note += f' Auxiliary data unavailable: {", ".join(aux_issues)}.'
     return {'feeds': feeds, 'score': score, 'level': level, 'live': live, 'degraded': degraded,
-            'stale': stale, 'faded': faded, 'note': note, 'checked_at': now_iso}
+            'stale': stale, 'faded': faded, 'note': note, 'checked_at': now_iso,
+            'aux_issues': aux_issues}
 
 
 def apply_data_fade(decision, health):
@@ -4482,6 +4523,30 @@ def scorecard():
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error'}
+
+
+@app.get('/api/v1/data-audit')
+def data_audit_live():
+    """Real-time feed-health audit. Recomputes freshness AT REQUEST TIME using the actual
+    cache timestamps (ETF/on-chain/leverage/sentiment) and the last daily-run time for the
+    core feeds — so the age shown is genuinely live, not frozen at the last compute()."""
+    try:
+        run = runs_col.find_one(sort=[('created_at', -1)])
+        news_doc = news_col.find_one(sort=[('created_at', -1)])
+        health = compute_data_health(
+            (run or {}).get('data_source'),
+            (run or {}).get('crossmarket'),
+            (run or {}).get('policy'),
+            (run or {}).get('dominance'),
+            news_doc,
+            core_iso=(run or {}).get('created_at'),
+        )
+        health['last_run'] = (run or {}).get('created_at')
+        return {'status': 'ready', **health}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
+
 
 
 @app.get('/api/v1/forecast/regime')

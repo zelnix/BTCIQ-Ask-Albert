@@ -1269,18 +1269,50 @@ const feedDot = (s) => ({ live: 'bg-emerald-400', degraded: 'bg-amber-400',
   stale: 'bg-orange-400', down: 'bg-red-400' }[s] || 'bg-slate-500');
 function ageTxt(m) { if (m == null) return 'live'; if (m < 60) return `${m}m ago`; const h = Math.floor(m / 60); return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`; }
 function DataTrustSection({ d }) {
-  const h = d.data_health;
+  // Prefer the LIVE real-time audit (recomputed at request time from actual cache
+  // timestamps); fall back to the frozen snapshot in the last run doc.
+  const [live, setLive] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => fetch(`${API_BASE}/v1/data-audit`, { cache: 'no-store' })
+      .then((r) => r.json()).then((j) => { if (alive && j && j.status === 'ready') setLive(j); })
+      .catch(() => {});
+    load();
+    const id = setInterval(load, 60000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  const h = live || d.data_health;
   if (!h) return <ComingSoonSection section={sec('trust')} />;
   const col = h.score >= 90 ? '#34d399' : h.score >= 75 ? '#a3e635' : h.score >= 55 ? '#fbbf24' : '#f87171';
+  const feeds = h.feeds || [];
+  const coreFeeds = feeds.filter((f) => f.core !== false);
+  const auxFeeds = feeds.filter((f) => f.core === false);
+  const FeedCard = (f) => (
+    <Card key={f.id} className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800">
+      <div className="flex items-center gap-2">
+        <span className={`h-2.5 w-2.5 rounded-full ${feedDot(f.status)} ${f.status === 'live' ? 'animate-pulse' : ''}`} />
+        <h3 className="font-semibold text-white">{f.label}</h3>
+        <span className={`ml-auto text-xs font-bold uppercase ${feedColor(f.status)}`}>{f.status}</span>
+      </div>
+      <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+        <div><p className="text-slate-500">Provider</p><p className="font-medium text-slate-300">{f.provider}</p></div>
+        <div><p className="text-slate-500">Freshness</p><p className="font-medium text-slate-300">{ageTxt(f.age_min)}</p></div>
+        <div><p className="text-slate-500">Confidence</p><p className="font-medium text-slate-300">{f.confidence}%</p></div>
+      </div>
+      <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full" style={{ width: `${f.confidence}%`, backgroundColor: f.confidence >= 90 ? '#34d399' : f.confidence >= 70 ? '#fbbf24' : '#f87171' }} /></div>
+      <p className="mt-2 text-[11px] leading-relaxed text-slate-500">{f.methodology}</p>
+    </Card>
+  );
   return (
     <div className="space-y-5">
       <SectionHead icon={ShieldCheck} title="Data Trust" blurb={sec('trust').blurb} />
       <Card className={`border-0 bg-gradient-to-br from-slate-900 to-slate-950 p-6 ring-1 ${h.faded ? 'ring-orange-500/40' : 'ring-emerald-500/25'}`}>
         <div className="flex flex-wrap items-center gap-6">
           <div>
-            <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400">Overall Data Trust<InfoTip below text="A 0–100 score for how fresh and reliable the underlying data feeds are. When trust drops, the model automatically tones down its odds." /></p>
+            <p className="flex items-center gap-1 text-[11px] uppercase tracking-wider text-slate-400">Overall Data Trust<InfoTip below text="A 0–100 score for how fresh and reliable the underlying CORE data feeds are. When trust drops, the model automatically tones down its odds. Auxiliary feeds are shown for transparency but don't fade the odds." /></p>
             <p className="text-5xl font-black" style={{ color: col }}>{h.score}</p>
             <p className="text-sm font-semibold" style={{ color: col }}>{h.level}</p>
+            {live && <p className="mt-1 text-[10px] text-emerald-400/80">● live · re-checked every 60s</p>}
           </div>
           <div className="flex gap-3">
             <div className="rounded-lg border border-slate-800 bg-slate-950/50 px-4 py-2 text-center"><p className="text-xl font-bold text-emerald-400">{h.live}</p><p className="text-[10px] text-slate-500">live</p></div>
@@ -1292,24 +1324,16 @@ function DataTrustSection({ d }) {
           </div>
         </div>
       </Card>
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        {h.feeds.map((f) => (
-          <Card key={f.id} className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800">
-            <div className="flex items-center gap-2">
-              <span className={`h-2.5 w-2.5 rounded-full ${feedDot(f.status)} ${f.status === 'live' ? 'animate-pulse' : ''}`} />
-              <h3 className="font-semibold text-white">{f.label}</h3>
-              <span className={`ml-auto text-xs font-bold uppercase ${feedColor(f.status)}`}>{f.status}</span>
-            </div>
-            <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-              <div><p className="text-slate-500">Provider</p><p className="font-medium text-slate-300">{f.provider}</p></div>
-              <div><p className="text-slate-500">Freshness</p><p className="font-medium text-slate-300">{ageTxt(f.age_min)}</p></div>
-              <div><p className="text-slate-500">Confidence</p><p className="font-medium text-slate-300">{f.confidence}%</p></div>
-            </div>
-            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800"><div className="h-full rounded-full" style={{ width: `${f.confidence}%`, backgroundColor: f.confidence >= 90 ? '#34d399' : f.confidence >= 70 ? '#fbbf24' : '#f87171' }} /></div>
-            <p className="mt-2 text-[11px] leading-relaxed text-slate-500">{f.methodology}</p>
-          </Card>
-        ))}
+      <div>
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Core signals · drive the odds</p>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">{coreFeeds.map(FeedCard)}</div>
       </div>
+      {auxFeeds.length > 0 && (
+        <div>
+          <p className="mb-2 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Auxiliary data · monitored, non-fading<InfoTip text="Supplementary feeds (ETF flows, on-chain, derivatives, sentiment). They're health-checked in real time and shown here, but a gap in these won't fade the directional odds." /></p>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">{auxFeeds.map(FeedCard)}</div>
+        </div>
+      )}
     </div>
   );
 }

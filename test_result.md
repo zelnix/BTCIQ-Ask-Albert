@@ -4487,3 +4487,176 @@ frontend:
           returns null if unavailable). Next.js compiled cleanly. Not yet visually verified via automated frontend
           testing (awaiting user go-ahead). Screenshot tool shows the app's loading skeleton in the isolated
           Playwright context (fetch-to-API quirk) though APIs return 200 and real preview works.
+
+#====================================================================================================
+# DATA FRESHNESS (b1) — real-time feed-health audit + ETF/on-chain/leverage/sentiment tracking
+#====================================================================================================
+backend:
+  - task: "Real-time Data Audit: /api/v1/data-audit + ETF/on-chain/leverage/sentiment feeds with real timestamps"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          compute_data_health() enhanced: (1) now tracks 4 previously-untracked AUXILIARY feeds using REAL cache
+          timestamps — ETF flows (etf_col), on-chain (onchain_col), leverage (lev_col 'BTC:4H'), Fear&Greed
+          (misc_col 'fear_greed') via new _feed_iso() helper; (2) aux feeds are marked core=false and EXCLUDED
+          from the odds-fade math so existing fade behaviour is unchanged (still driven by the 6 core feeds);
+          (3) added core_iso param so freshness reflects the real last-run time (core feeds refresh together daily,
+          fresh window 26h) instead of a fake now_iso; (4) note now appends any aux feed that is stale/down.
+          NEW endpoint GET /api/v1/data-audit recomputes health AT REQUEST TIME (real-time) using live cache
+          timestamps + last run time. Verified via curl: 10 feeds returned, aux feeds (etf/onchain/leverage/
+          sentiment) all 'live' with genuine ages; core 'news' correctly flagged stale in dev DB (~10d old cache).
+          Please retest: GET /api/v1/data-audit (status ready, feeds includes etf/onchain/leverage/sentiment with
+          core=false, score/level present, faded boolean), and GET /api/v1/dashboard still 200.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Real-time Data Audit validation via external URL (https://quant-features.preview.emergentagent.com/api). 
+          All 3 tests passed (3/3): 
+          
+          TEST 1 — GET /api/v1/data-audit: ✅ PASSED (13/13 validations)
+          - HTTP 200 ✅
+          - status='ready' ✅
+          - All required fields present: feeds, score, level, live, degraded, stale, faded, note, checked_at ✅
+          - score=88 (int 0-100) ✅
+          - level='Good' (valid in [High, Good, Degraded, Low]) ✅
+          - Counts: live=5, degraded=0, stale=1 (all valid ints >= 0) ✅
+          - faded=True (bool) ✅
+          - note='1 core feed(s) stale/down, 0 degraded — odds are faded and c...' (string) ✅
+          - checked_at='2026-08-20T17:41:38.576848' (ISO format string) ✅
+          - feeds: 10 items (non-empty list) ✅
+          - All 6 CORE feeds present with core=true: price, dominance, crossmarket, policy, news, fx ✅
+          - All 4 AUXILIARY feeds present with core=false: etf, onchain, leverage, sentiment ✅
+          - All feeds validated with required fields (id, label, provider, status, confidence, methodology, core) ✅
+          
+          FEED DETAILS (status + age_min + core flag):
+          CORE FEEDS (core=true):
+          - price: status=live, age_min=24, confidence=97 ✅
+          - dominance: status=live, age_min=24, confidence=97 ✅
+          - crossmarket: status=live, age_min=24, confidence=97 ✅
+          - policy: status=live, age_min=24, confidence=97 ✅
+          - news: status=stale, age_min=15050, confidence=42 ✅
+          - fx: status=live, age_min=24, confidence=97 ✅
+          
+          AUXILIARY FEEDS (core=false):
+          - etf: status=live, age_min=24, confidence=97 ✅
+          - onchain: status=live, age_min=24, confidence=97 ✅
+          - leverage: status=live, age_min=479, confidence=97 ✅
+          - sentiment: status=live, age_min=479, confidence=97 ✅
+          
+          SCORE COMPUTATION VALIDATION (CORE feeds only):
+          - Core feeds: live=5, degraded=0, stale=1 ✅
+          - Headline counts: live=5, degraded=0, stale=1 ✅
+          - ✅ CRITICAL VALIDATION PASSED: Headline counts match core feed counts exactly (aux feeds NOT included in score computation)
+          - This confirms that score is computed from CORE feeds only, as required ✅
+          
+          TEST 2 — GET /api/v1/dashboard (Regression): ✅ PASSED
+          - HTTP 200 ✅
+          - status='ready' ✅
+          - decision object present ✅
+          - decision.weights_mode='dynamic' (as expected from previous feature) ✅
+          
+          TEST 3 — GET /api/v1/forecast/regime (Regression): ✅ PASSED
+          - HTTP 200 ✅
+          - status='ready' ✅
+          
+          KEY VALIDATIONS CONFIRMED:
+          - ✅ All 10 feeds present (6 core + 4 auxiliary)
+          - ✅ Core feeds correctly marked with core=true
+          - ✅ Auxiliary feeds correctly marked with core=false
+          - ✅ All feeds have required fields (id, label, provider, status, confidence, methodology, core)
+          - ✅ All feed statuses valid (live/degraded/stale/down)
+          - ✅ All feed confidence values in range [0, 100]
+          - ✅ Score computed from CORE feeds only (headline counts match core feed counts)
+          - ✅ Auxiliary feed statuses do NOT affect headline live/degraded/stale counts
+          - ✅ Real timestamps present (age_min values reflect actual cache ages)
+          - ✅ Dashboard regression passed (status='ready', weights_mode='dynamic')
+          - ✅ Forecast regime regression passed (status='ready')
+          - ✅ No HTTP 500 errors at any point
+          
+          EXACT OBSERVED VALUES (as requested in review_request):
+          - Total feeds: 10 (6 core + 4 auxiliary)
+          - Score: 88 (computed from 5 live + 1 stale core feeds)
+          - Level: 'Good'
+          - Headline counts: live=5, degraded=0, stale=1 (matches core feed counts exactly)
+          - faded: True (because 1 core feed is stale)
+          - Core feed 'news' is stale (age_min=15050, ~10 days old)
+          - All auxiliary feeds are live (etf, onchain, leverage, sentiment)
+          
+          NO ISSUES FOUND. All validations passed. Data is REAL (live cache timestamps). 
+          Feature is fully functional and production-ready.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.2"
+  test_sequence: 3
+  run_ui: false
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -comment: |
+      b1 Data Freshness done (backend + frontend Data Trust section now pulls the live audit and splits
+      Core vs Auxiliary feeds). Please test the new /api/v1/data-audit endpoint and confirm /api/v1/dashboard
+      still returns 200. Do NOT trigger email endpoints.
+    -agent: "testing"
+    -message: |
+      ✅ REAL-TIME DATA AUDIT BACKEND TEST COMPLETE - ALL TESTS PASSED (3/3)
+      
+      Tested NEW Real-time Data Audit endpoint via external URL (https://quant-features.preview.emergentagent.com/api) 
+      using comprehensive test suite (backend_test.py).
+      
+      RESULTS SUMMARY:
+      1. ✅ GET /api/v1/data-audit → status='ready', 10 feeds (6 core + 4 auxiliary), score=88, level='Good', 
+         faded=True, headline counts (live=5, degraded=0, stale=1) match core feed counts exactly
+      2. ✅ GET /api/v1/dashboard → status='ready', decision.weights_mode='dynamic' (regression passed)
+      3. ✅ GET /api/v1/forecast/regime → status='ready' (regression passed)
+      
+      ENDPOINTS TESTED:
+      - GET /api/v1/data-audit → Returns real-time feed health with 10 feeds (6 core + 4 auxiliary)
+      - GET /api/v1/dashboard → Confirms no breaking changes (status='ready', weights_mode='dynamic')
+      - GET /api/v1/forecast/regime → Confirms no breaking changes (status='ready')
+      
+      CRITICAL VALIDATION PASSED:
+      - Score computed from CORE feeds only (headline counts match core feed counts exactly) ✅
+      - Auxiliary feeds (etf, onchain, leverage, sentiment) do NOT affect headline live/degraded/stale counts ✅
+      - All 6 core feeds present with core=true: price, dominance, crossmarket, policy, news, fx ✅
+      - All 4 auxiliary feeds present with core=false: etf, onchain, leverage, sentiment ✅
+      
+      FEED STATUS OBSERVED:
+      CORE FEEDS (core=true):
+      - price: live (age 24 min)
+      - dominance: live (age 24 min)
+      - crossmarket: live (age 24 min)
+      - policy: live (age 24 min)
+      - news: stale (age 15050 min, ~10 days old)
+      - fx: live (age 24 min)
+      
+      AUXILIARY FEEDS (core=false):
+      - etf: live (age 24 min)
+      - onchain: live (age 24 min)
+      - leverage: live (age 479 min)
+      - sentiment: live (age 479 min)
+      
+      KEY OBSERVATIONS:
+      - All endpoints return REAL data (live cache timestamps)
+      - All 10 feeds have required fields (id, label, provider, status, confidence, methodology, core)
+      - All feed statuses valid (live/degraded/stale/down)
+      - All feed confidence values in range [0, 100]
+      - Real timestamps present (age_min values reflect actual cache ages)
+      - No HTTP 500 errors at any point
+      - All regression tests passed (dashboard, forecast regime still working)
+      
+      NO CRITICAL ISSUES FOUND. All 3 tests passed. Feature is fully functional and production-ready. 
+      Data is REAL (live cache timestamps). No email endpoints triggered (as instructed).
