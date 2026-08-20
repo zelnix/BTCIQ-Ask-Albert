@@ -1347,6 +1347,17 @@ function ScenarioSimulator({ d, onNav }) {
   else if (hypo >= pts[4][0]) z = 2.2;
   else { for (let i = 0; i < pts.length - 1; i++) { if (hypo >= pts[i][0] && hypo <= pts[i + 1][0]) { const r = (hypo - pts[i][0]) / (pts[i + 1][0] - pts[i][0] || 1); z = pts[i][1] + r * (pts[i + 1][1] - pts[i][1]); break; } } }
   const pctile = Math.round(normCdf(z) * 100);
+  // Simulator depth: re-estimate win-prob, EV and regime tilt under the price shock.
+  const re0 = (d.decision || {}).regime_engine || {};
+  const baseWin = f.ev ? f.ev.win_prob : 50;
+  const momentumRegime = ['bull_momentum', 'bear_distribution'].includes(re0.current_regime);
+  const k = momentumRegime ? 0.9 : 0.5; // trending regimes are more shock-sensitive
+  const newWin = Math.max(2, Math.min(98, baseWin + shock * k));
+  const up = (f.ev ? f.ev.avg_up_pct : 3) / 100;
+  const dn = (f.ev ? f.ev.avg_down_pct : 3) / 100;
+  const newEvPct = Math.round(((newWin / 100) * up - (1 - newWin / 100) * dn) * 10000) / 100;
+  const tiltRegime = shock <= -5 ? 'High-Vol Squeeze' : shock <= -2 ? 'Bear Distribution'
+    : shock >= 5 ? 'Bull Momentum' : shock >= 2 ? 'Bull Momentum' : (re0.regime_label || 'Current regime');
   const crossed = [];
   if (bull && hypo >= bull.trigger_level) crossed.push({ t: `Broke resistance $${bull.trigger_level.toLocaleString()}`, c: 'text-emerald-300' });
   if (bear && hypo <= bear.trigger_level) crossed.push({ t: `Lost support $${bear.trigger_level.toLocaleString()}`, c: 'text-red-300' });
@@ -1374,6 +1385,11 @@ function ScenarioSimulator({ d, onNav }) {
         <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">{hz} cone percentile</p><p className="text-lg font-black text-sky-300">p{pctile}</p></div>
       </div>
       <p className="mt-3 text-[12px] text-slate-400">A {shock > 0 ? '+' : ''}{shock}% move to <span className="font-semibold text-slate-200">{fmtUsd(Math.round(hypo))}</span> sits at the <span className="font-semibold text-sky-300">{pctile}th percentile</span> of the {hz} forecast cone — {pctile <= 10 ? 'a rare downside tail' : pctile >= 90 ? 'a rare upside tail' : pctile < 40 ? 'below the median path' : pctile > 60 ? 'above the median path' : 'near the median path'}.</p>
+      <div className="mt-3 grid grid-cols-3 gap-3 text-center">
+        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Adj. win prob</p><p className="text-base font-black text-slate-200">{Math.round(newWin)}%</p><p className="text-[9px] text-slate-600">from {Math.round(baseWin)}%</p></div>
+        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Adj. expected value</p><p className={`text-base font-black ${newEvPct > 0 ? 'text-emerald-400' : newEvPct < 0 ? 'text-red-400' : 'text-slate-300'}`}>{newEvPct > 0 ? '+' : ''}{newEvPct}%</p><p className="text-[9px] text-slate-600">{hz} horizon</p></div>
+        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Regime tilt</p><p className="text-xs font-bold leading-tight text-violet-300">{tiltRegime}</p></div>
+      </div>
       {crossed.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2">
           {crossed.map((c, i) => <span key={i} className={`rounded-full border border-slate-700 bg-slate-950/60 px-2 py-1 text-[11px] font-semibold ${c.c}`}>{c.t}</span>)}

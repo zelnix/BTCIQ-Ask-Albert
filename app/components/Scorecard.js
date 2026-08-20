@@ -1,8 +1,8 @@
 'use client';
 
-import React from 'react';
-import { CalendarClock, Check, ClipboardList, Info, X } from 'lucide-react';
-import { ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis, ZAxis, CartesianGrid, Tooltip, ReferenceLine, Cell } from 'recharts';
+import React, { useState, useEffect } from 'react';
+import { CalendarClock, Check, ClipboardList, Info, X, ShieldCheck } from 'lucide-react';
+import { ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis, ZAxis, CartesianGrid, Tooltip, ReferenceLine, Cell, LineChart, Line } from 'recharts';
 import { Card } from '@/components/ui/card';
 import { API_BASE } from '../lib/api';
 import { fmtUsd, scoreColor, countdown } from '../lib/format';
@@ -24,6 +24,53 @@ function Stat({ label, value, sub, color }) {
     </div>
   );
 }
+
+function QuantValidationPanel() {
+  const [v, setV] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API_BASE}/v1/validation`, { cache: 'no-store' })
+      .then((r) => r.json()).then((j) => { if (alive && j && j.status === 'ready') setV(j); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  if (!v) return null;
+  const b = v.benchmarks || {};
+  const pct = (x) => (x == null ? '—' : `${Math.round(x * 100)}%`);
+  const roll = (v.rolling_brier_history || []).map((y, i) => ({ i, y }));
+  const Pass = ({ ok }) => ok
+    ? <span className="rounded-full border border-emerald-500/40 px-1.5 py-0.5 text-[9px] font-bold text-emerald-300">PASS</span>
+    : <span className="rounded-full border border-amber-500/40 px-1.5 py-0.5 text-[9px] font-bold text-amber-300">WATCH</span>;
+  return (
+    <Card className="border-0 bg-gradient-to-br from-sky-500/[0.06] to-slate-900 p-5 ring-1 ring-sky-500/25">
+      <h3 className="mb-1 flex items-center gap-1 text-sm font-semibold text-white"><ShieldCheck className="h-4 w-4 text-sky-400" />Quant-Grade Validation<InfoTip below text="Purged & embargoed walk-forward validation (removes look-ahead leakage from the forward-looking triple-barrier labels). PSR/DSR correct the Sharpe ratio for fat tails and data-snooping across model trials." /></h3>
+      <p className="mb-3 text-xs text-slate-500">{v.n_trades} purged out-of-sample trades · {v.horizon_bars}-bar triple-barrier holding.</p>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><div className="flex items-center justify-between"><p className="text-[10px] uppercase text-slate-500">Brier</p><Pass ok={b.brier_pass} /></div><p className="mt-1 text-2xl font-black" style={{ color: b.brier_pass ? '#34d399' : '#f87171' }}>{v.brier_score}</p><p className="text-[10px] text-slate-600">target &lt;0.20</p></div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><div className="flex items-center justify-between"><p className="text-[10px] uppercase text-slate-500">PSR</p><Pass ok={b.psr_pass} /></div><p className="mt-1 text-2xl font-black" style={{ color: b.psr_pass ? '#34d399' : '#fbbf24' }}>{pct(v.probabilistic_sharpe_ratio)}</p><p className="text-[10px] text-slate-600">target &gt;95%</p></div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><div className="flex items-center justify-between"><p className="text-[10px] uppercase text-slate-500">DSR</p><Pass ok={b.dsr_pass} /></div><p className="mt-1 text-2xl font-black" style={{ color: b.dsr_pass ? '#34d399' : '#fbbf24' }}>{pct(v.deflated_sharpe_ratio)}</p><p className="text-[10px] text-slate-600">target &gt;90%</p></div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Ann. Sharpe</p><p className="mt-1 text-2xl font-black text-slate-200">{v.annualized_sharpe}</p><p className="text-[10px] text-slate-600">max DD {v.max_drawdown_pct}%</p></div>
+      </div>
+      {roll.length > 3 && (
+        <div className="mt-4">
+          <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Rolling Brier Decay<InfoTip text="60-trade rolling Brier score over time. A flat or falling line means the model's edge is holding; a rising line above 0.24 signals decay and would trigger a down-weight/alert." /><span className={`ml-2 rounded px-1.5 py-0.5 text-[9px] font-bold ${b.brier_decay_pass ? 'text-emerald-300' : 'text-amber-300'}`}>slope {v.rolling_brier_slope}</span></p>
+          <ResponsiveContainer width="100%" height={120}>
+            <LineChart data={roll} margin={{ top: 5, right: 8, bottom: 0, left: 0 }}>
+              <CartesianGrid stroke="#1e293b" vertical={false} />
+              <YAxis domain={['auto', 'auto']} tick={{ fill: '#64748b', fontSize: 10 }} width={40} />
+              <ReferenceLine y={0.24} stroke="#f87171" strokeDasharray="4 4" />
+              <ReferenceLine y={0.25} stroke="#475569" strokeDasharray="2 2" />
+              <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 12 }} formatter={(y) => [y, 'Brier']} />
+              <Line type="monotone" dataKey="y" stroke="#38bdf8" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+          <p className="mt-1 text-[10px] text-slate-500">Red line = 0.24 decay alert threshold · grey = 0.25 coin-flip baseline.</p>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 
 function LedgerExplorer({ ledger }) {
   const [fHz, setFHz] = React.useState('all');
@@ -246,6 +293,8 @@ function ScorecardSection({ d }) {
           </div>
         </Card>
       )}
+
+      <QuantValidationPanel />
 
       {pl.reliability && pl.reliability.curve?.length > 0 && (
         <Card className="border-0 bg-gradient-to-br from-violet-500/[0.06] to-slate-900 p-5 ring-1 ring-violet-500/25">

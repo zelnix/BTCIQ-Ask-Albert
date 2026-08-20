@@ -33,6 +33,7 @@ try:
 except Exception:  # noqa
     _HAS_SHAP = False
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
@@ -55,6 +56,7 @@ from config import (
 )
 from email_service import send_email, resend_configured
 import regime_engine
+import quant_validation
 
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
 _forecast_trigger = {'reason': None}
@@ -980,6 +982,92 @@ def _sig_word(s):
     return 'Neutral'
 
 
+def _triple_barrier_target(close, high, low, h, atr_frac, pt_mult=1.5, sl_mult=1.0):
+    """ATR-scaled Triple-Barrier labels (López de Prado), mapped to a binary directional
+    target: 1 = take-profit hit first OR time-stop closed up; 0 = stop-loss hit first OR
+    time-stop closed down. Barriers scale with per-bar ATR so labels track volatility."""
+    n = len(close)
+    c = np.asarray(close, dtype=float)
+    hi = np.asarray(high, dtype=float)
+    lo = np.asarray(low, dtype=float)
+    a = np.asarray(atr_frac, dtype=float)
+    out = np.full(n, np.nan)
+    for i in range(n):
+        if not np.isfinite(a[i]) or a[i] <= 0:
+            continue
+        entry = c[i]
+        up_b = entry * (1 + pt_mult * a[i])
+        dn_b = entry * (1 - sl_mult * a[i])
+        end = min(i + h, n - 1)
+        lab = None
+        for j in range(i + 1, end + 1):
+            uh = hi[j] >= up_b
+            lh = lo[j] <= dn_b
+            if uh and lh:
+                lab = 0  # conservative: assume stop hit first within the bar
+                break
+            if uh:
+                lab = 1
+                break
+            if lh:
+                lab = 0
+                break
+        if lab is None:  # vertical (time) barrier -> sign of realised return
+            lab = 1 if c[end] > entry else 0
+        out[i] = lab
+    return pd.Series(out, index=close.index)
+
+
+def _conformal_corridor(Xf, close, lx, h, price, alpha=0.10):
+    """Conformalized Quantile Regression (CQR): distribution-free price corridor with a
+    (1-alpha) coverage guarantee. Trains GBR quantile models on future h-day RETURNS, then
+    corrects the raw quantiles by the conformal non-conformity factor q_hat on an unseen
+    calibration split. Returns lower/upper prices, width, empirical coverage and q_hat."""
+    try:
+        n = len(Xf)
+        y = (close.shift(-h) / close - 1.0)  # future h-day return (stationary target)
+        Xv = Xf.iloc[:n - h].reset_index(drop=True)
+        yv = y.iloc[:n - h].reset_index(drop=True)
+        m = len(Xv)
+        if m < 120:
+            return None
+        cut = int(m * 0.7)
+        Xtr, ytr = Xv.iloc[:cut], yv.iloc[:cut]
+        Xcal, ycal = Xv.iloc[cut:], yv.iloc[cut:]
+        if len(Xcal) < 20:
+            return None
+        q_lo, q_hi = alpha / 2.0, 1.0 - alpha / 2.0
+        gl = GradientBoostingRegressor(loss='quantile', alpha=q_lo, n_estimators=60,
+                                       max_depth=3, learning_rate=0.05, random_state=42)
+        gh = GradientBoostingRegressor(loss='quantile', alpha=q_hi, n_estimators=60,
+                                       max_depth=3, learning_rate=0.05, random_state=42)
+        gl.fit(Xtr, ytr)
+        gh.fit(Xtr, ytr)
+        cal_lo = gl.predict(Xcal)
+        cal_hi = gh.predict(Xcal)
+        scores = np.maximum(cal_lo - ycal.values, ycal.values - cal_hi)
+        k = int(np.ceil((len(scores) + 1) * (1 - alpha)))
+        k = min(max(k, 1), len(scores))
+        q_hat = float(np.sort(scores)[k - 1])
+        # empirical coverage on the calibration set after conformal correction
+        covered = ((ycal.values >= cal_lo - q_hat) & (ycal.values <= cal_hi + q_hat)).mean()
+        raw_lo = float(gl.predict(lx)[0])
+        raw_hi = float(gh.predict(lx)[0])
+        lo_ret, hi_ret = raw_lo - q_hat, raw_hi + q_hat
+        return {
+            'lower': round(price * (1 + lo_ret), 0),
+            'upper': round(price * (1 + hi_ret), 0),
+            'width_pct': round((hi_ret - lo_ret) * 100, 2),
+            'coverage': round(float(covered) * 100, 1),
+            'target_coverage': int(round((1 - alpha) * 100)),
+            'q_hat_pct': round(q_hat * 100, 2),
+            'n_calib': int(len(Xcal)),
+        }
+    except Exception:  # noqa
+        traceback.print_exc()
+        return None
+
+
 def _horizon_features(h):
     """Sub-Model Depth: horizon-appropriate feature subset.
     Short horizons lean on fast microstructure (momentum/volatility/volume); long horizons
@@ -995,17 +1083,34 @@ def _horizon_features(h):
     return [c for c in cols if c in FEATURE_COLS] or list(FEATURE_COLS)
 
 
-def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light=False):
+def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light=False,
+                      highs=None, lows=None):
     """Train a horizon-specific model (per-horizon feature set) with out-of-fold ISOTONIC
     calibration so the stated probability is honest, then project bull/base/bear ranges.
+    Uses ATR-scaled Triple-Barrier labels (path-dependent, tradable) when highs/lows are
+    supplied, else falls back to the raw up/down label.
     light=True skips SHAP contributions (used for long-horizon outlooks to save compute)."""
     n = len(Xfull)
     cols = _horizon_features(h)
     Xf = Xfull[cols]
     lx = live_X[cols]
-    y_h = (close.shift(-h) > close).astype(int)
+    tb_used = False
+    try:
+        if highs is not None and lows is not None and 'ATR_Pct' in Xfull.columns:
+            y_h = _triple_barrier_target(close, highs, lows, h, Xfull['ATR_Pct'],
+                                         pt_mult=1.5, sl_mult=1.0)
+            tb_used = True
+        else:
+            y_h = (close.shift(-h) > close).astype(float)
+    except Exception:  # noqa
+        y_h = (close.shift(-h) > close).astype(float)
+        tb_used = False
     Xv = Xf.iloc[:n - h]
     yv = y_h.iloc[:n - h]
+    # drop warm-up / unlabeled rows (Triple-Barrier leaves NaN where ATR is undefined)
+    _mask = yv.notna()
+    Xv = Xv[_mask]
+    yv = yv[_mask].astype(int)
     # backtest accuracy via time-series split
     accs = []
     try:
@@ -1042,19 +1147,24 @@ def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light
     except Exception:  # noqa
         calibrated = False
 
+    # --- Conformalized Quantile Regression corridor (distribution-free 90% coverage) ---
+    conformal = None
+    if not light:
+        conformal = _conformal_corridor(Xf, close, lx, h, price, alpha=0.10)
+
     # SHAP factor contributions for the live prediction (probability space, class = up)
     contributions = []
     if _HAS_SHAP and not light:
         try:
             expl = shap.TreeExplainer(fm)
-            sv = expl.shap_values(live_X)
+            sv = expl.shap_values(lx)
             arr = None
             if isinstance(sv, list):
                 arr = np.array(sv[1][0]) if len(sv) > 1 else np.array(sv[0][0])
             else:
                 a = np.array(sv)
                 arr = a[0, :, 1] if (a.ndim == 3 and a.shape[2] > 1) else (a[0, :, 0] if a.ndim == 3 else a[0])
-            for f, val in zip(FEATURE_COLS, arr):
+            for f, val in zip(cols, arr):
                 contributions.append({'feature': f, 'label': FEATURE_META[f]['label'],
                                       'category': FEATURE_META[f]['category'],
                                       'contribution': round(float(val) * 100, 2)})
@@ -1111,7 +1221,8 @@ def _horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light
         'expected_low': round(exp_low, 0), 'expected_high': round(exp_high, 0),
         'bull': round(bull, 0), 'base': round(base, 0), 'bear': round(bear, 0),
         'quantiles': quantiles, 'ev': ev_block,
-        'calibrated': calibrated, 'features_used': cols,
+        'calibrated': calibrated, 'features_used': cols, 'conformal': conformal,
+        'label_method': 'triple_barrier' if tb_used else 'directional',
         'confidence': conf_label, 'confidence_pct': round(conf_val * 100, 0),
         'accuracy': round(acc * 100, 1),
         'invalidation': round(invalidation, 0),
@@ -1228,14 +1339,16 @@ def compute_quant_analysis(df, feats, price, as_of_ts):
     forecasts = []
     for h in [1, 7, 30]:
         try:
-            forecasts.append(_horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts))
+            forecasts.append(_horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts,
+                                                highs=df['high'], lows=df['low']))
         except Exception:  # noqa
             traceback.print_exc()
     # --- Long-horizon outlooks (1M/3M/6M/1Y) — lighter (no SHAP) for the Decision Engine ---
     long_outlook = []
     for h in [90, 180, 365]:
         try:
-            long_outlook.append(_horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts, light=True))
+            long_outlook.append(_horizon_forecast(Xfull, close, live_X, h, price, mu, sigma, as_of_ts,
+                                                   light=True, highs=df['high'], lows=df['low']))
         except Exception:  # noqa
             traceback.print_exc()
 
@@ -4379,6 +4492,13 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
 
+    # --- Quant-grade validation (purged walk-forward + PSR/DSR/rolling Brier) ---
+    quant_val = None
+    try:
+        quant_val = quant_validation.run_validation(df, FEATURE_COLS, horizon=5, n_splits=5)
+    except Exception:  # noqa
+        traceback.print_exc()
+
     # --- Event Intelligence Calendar ---
     event_calendar = None
     try:
@@ -4457,6 +4577,7 @@ def compute():
         'factors': quant['factors'],
         'decision': decision,        'news_forecast_link': news_forecast_link,
         'regime_analysis': regime_analysis,
+        'quant_validation': quant_val,
         'data_health': data_health,
         'event_calendar': event_calendar,
         'risk': risk,
@@ -4742,6 +4863,21 @@ def data_audit_live():
         )
         health['last_run'] = (run or {}).get('created_at')
         return {'status': 'ready', **health}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
+
+
+
+@app.get('/api/v1/validation')
+def quant_validation_endpoint():
+    """Latest quant-grade validation: purged walk-forward OOF Brier + PSR/DSR + rolling Brier decay."""
+    try:
+        run = runs_col.find_one(sort=[('created_at', -1)])
+        qv = (run or {}).get('quant_validation')
+        if qv:
+            return {'status': 'ready', **qv}
+        return {'status': 'computing'}
     except Exception:  # noqa
         traceback.print_exc()
         return {'status': 'error'}

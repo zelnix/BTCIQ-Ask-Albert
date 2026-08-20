@@ -85,6 +85,21 @@ function ForecastCard({ f }) {
           </div>
         </div>
       )}
+      {f.conformal && (
+        <div className="mt-3 rounded-lg border border-sky-500/25 bg-sky-500/[0.06] p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Conformal {f.conformal.target_coverage}% Corridor<InfoTip text="A distribution-free price band with a mathematical coverage guarantee (Conformalized Quantile Regression). Unlike the modelled cone, it's calibrated so the true price lands inside it about this % of the time — verified below." /></span>
+            <span className={`ml-auto rounded-full border px-2 py-0.5 text-[10px] font-bold ${Math.abs(f.conformal.coverage - f.conformal.target_coverage) <= 4 ? 'border-emerald-500/40 text-emerald-300' : 'border-amber-500/40 text-amber-300'}`}>
+              caught {f.conformal.coverage}% of moves
+            </span>
+          </div>
+          <div className="mt-1.5 flex items-center justify-between font-mono text-sm">
+            <span className="font-bold text-red-300">{fmtUsd(f.conformal.lower)}</span>
+            <span className="text-[10px] text-slate-500">± band · {f.conformal.width_pct}% wide</span>
+            <span className="font-bold text-emerald-300">{fmtUsd(f.conformal.upper)}</span>
+          </div>
+        </div>
+      )}
       {f.ev && (
         <div className={`mt-3 rounded-lg border p-3 ${f.ev.ev_pct > 0 ? 'border-emerald-500/25 bg-emerald-500/[0.06]' : f.ev.ev_pct < 0 ? 'border-red-500/25 bg-red-500/[0.06]' : 'border-slate-800 bg-slate-950/40'}`}>
           <div className="flex items-center justify-between">
