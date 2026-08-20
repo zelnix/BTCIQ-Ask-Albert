@@ -4660,3 +4660,282 @@ agent_communication:
       
       NO CRITICAL ISSUES FOUND. All 3 tests passed. Feature is fully functional and production-ready. 
       Data is REAL (live cache timestamps). No email endpoints triggered (as instructed).
+
+#====================================================================================================
+# ALBERT If-Then SCENARIOS (b2) — actionable triggers + regime-aware contradiction resolution
+#====================================================================================================
+backend:
+  - task: "Albert If-Then scenario playbook + contradiction resolution (decision.scenarios_block)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          New compute_scenarios(chart, decision, last_close, feats, regime_analysis) attached to
+          decision['scenarios_block'] in compute(). Produces: (1) Primary Bull Scenario — trigger = break/close
+          above nearest resistance on >1.2x volume, target = next resistance (or ATR projection), probability =
+          historical 20d-high breakout base rate * regime tilt; (2) Bearish Invalidation — trigger = loss of
+          nearest support, target = next support (liquidity sweep), probability = breakdown base rate * inverse
+          regime tilt; each with trigger_level, target_level, move_pct, rationale. (3) contradiction resolver:
+          when signal groups disagree (some >=55, some <=45) it computes bull vs bear "force" = weight*|score-50|
+          using the LIVE regime weights and declares which side prevails and why (ties directly to the HMM regime).
+          Fixed a bug: feats is a pandas Series (ATR_Pct accessed via feats['ATR_Pct'], not .get).
+          Verified via curl: price 72741, Bull p=55% trig 74888 -> $77,334 (+6.3%); Bear p=34% trig 70754 ->
+          $66,061 (-9.2%); contradiction currently 'aligned'. Please retest GET /api/v1/dashboard: decision.
+          scenarios_block present with scenarios[2] (bull+bear, each has trigger_level/target_level/probability/
+          move_pct/rationale) and contradiction {present:bool, winner, summary}. Dashboard still 200.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Albert If-Then Scenario Playbook + Contradiction Resolution validation via external URL (https://quant-features.preview.emergentagent.com/api). All 4 tests passed (4/4): (1) GET /api/v1/dashboard returns HTTP 200, status='ready' ✅, decision.scenarios_block present and NOT null ✅, scenarios_block contains all required fields: price=$72,741 (number) ✅, regime='bull_momentum' (string) ✅, regime_label='Bull Momentum' (string) ✅, scenarios (list of 2) ✅, contradiction (dict) ✅. SCENARIOS VALIDATED: scenarios[0].type='bull' ✅, scenarios[1].type='bear' ✅. BULL SCENARIO: label='Primary Bull Scenario' ✅, trigger='Break & 4h/daily close above $74,888 on >1.2x average volume' (non-empty string) ✅, trigger_level=74888.0 (number) ✅, target='$77,334' (non-empty string) ✅, target_level=77334.0 (number) ✅, probability=55 (int 15-85) ✅, move_pct=6.3 (number) ✅, rationale='48% of comparable 20-day-high breakouts closed hig...' (non-empty string) ✅, trigger_level (74888.0) > price (72741.0) ✅, target_level (77334.0) >= trigger_level (74888.0) ✅. BEAR SCENARIO: label='Bearish Invalidation' ✅, trigger='Loss of $70,754 support on rising volume' (non-empty string) ✅, trigger_level=70754.0 (number) ✅, target='$66,061 (liquidity sweep)' (non-empty string) ✅, target_level=66061.0 (number) ✅, probability=34 (int 15-85) ✅, move_pct=-9.2 (number) ✅, rationale='Failing to hold structure has historically resolve...' (non-empty string) ✅, trigger_level (70754.0) < price (72741.0) ✅, target_level (66061.0) <= trigger_level (70754.0) ✅. CONTRADICTION OBJECT: present=False (bool) ✅, winner='None' (valid: bullish/bearish/null) ✅, summary='Signal groups are broadly aligned — no material co...' (non-empty string) ✅. (2) REGRESSION: GET /api/v1/dashboard decision.weights_mode='dynamic' ✅. (3) REGRESSION: GET /api/v1/forecast/regime returns HTTP 200, status='ready' ✅. (4) REGRESSION: GET /api/v1/data-audit returns HTTP 200, status='ready', feeds count=10 (expected 10) ✅. All validations passed. Data is REAL. No HTTP 500 errors. Feature is fully functional and production-ready.
+
+metadata:
+  created_by: "main_agent"
+  version: "1.3"
+  test_sequence: 4
+  run_ui: false
+
+test_plan:
+  current_focus: []
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+    -agent: "main"
+    -comment: |
+      b2 done (backend + frontend Scenario Playbook card in the Decision Engine). Please retest the
+      scenarios_block shape in /api/v1/dashboard and confirm dashboard + /forecast/regime + /data-audit still 200.
+      Do NOT trigger email endpoints.
+    -agent: "testing"
+    -message: |
+      ✅ ALBERT IF-THEN SCENARIO PLAYBOOK + CONTRADICTION RESOLUTION TEST COMPLETE - ALL TESTS PASSED (4/4)
+      
+      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (scenarios_test.py).
+      
+      TEST 1 — SCENARIOS_BLOCK VALIDATION (GET /api/v1/dashboard):
+      ✅ HTTP 200, status='ready'
+      ✅ decision.scenarios_block present and NOT null
+      ✅ All required fields present: price, regime, regime_label, scenarios, contradiction
+      ✅ price=$72,741 (valid number > 0)
+      ✅ regime='bull_momentum', regime_label='Bull Momentum'
+      ✅ scenarios: list of 2 items (bull + bear)
+      
+      BULL SCENARIO (scenarios[0]):
+      ✅ type='bull'
+      ✅ label='Primary Bull Scenario'
+      ✅ trigger='Break & 4h/daily close above $74,888 on >1.2x average volume'
+      ✅ trigger_level=74888.0 (number, > price as expected)
+      ✅ target='$77,334'
+      ✅ target_level=77334.0 (number, >= trigger_level as expected)
+      ✅ probability=55 (int 15-85)
+      ✅ move_pct=6.3 (number)
+      ✅ rationale='48% of comparable 20-day-high breakouts closed hig...' (non-empty string)
+      ✅ Logic validated: trigger_level (74888.0) > price (72741.0) ✅
+      ✅ Logic validated: target_level (77334.0) >= trigger_level (74888.0) ✅
+      
+      BEAR SCENARIO (scenarios[1]):
+      ✅ type='bear'
+      ✅ label='Bearish Invalidation'
+      ✅ trigger='Loss of $70,754 support on rising volume'
+      ✅ trigger_level=70754.0 (number, < price as expected)
+      ✅ target='$66,061 (liquidity sweep)'
+      ✅ target_level=66061.0 (number, <= trigger_level as expected)
+      ✅ probability=34 (int 15-85)
+      ✅ move_pct=-9.2 (number)
+      ✅ rationale='Failing to hold structure has historically resolve...' (non-empty string)
+      ✅ Logic validated: trigger_level (70754.0) < price (72741.0) ✅
+      ✅ Logic validated: target_level (66061.0) <= trigger_level (70754.0) ✅
+      
+      CONTRADICTION OBJECT:
+      ✅ present=False (bool)
+      ✅ winner='None' (valid: bullish/bearish/null)
+      ✅ summary='Signal groups are broadly aligned — no material co...' (non-empty string)
+      
+      TEST 2 — REGRESSION (decision.weights_mode):
+      ✅ GET /api/v1/dashboard decision.weights_mode='dynamic'
+      
+      TEST 3 — REGRESSION (forecast/regime):
+      ✅ GET /api/v1/forecast/regime returns HTTP 200, status='ready'
+      
+      TEST 4 — REGRESSION (data-audit):
+      ✅ GET /api/v1/data-audit returns HTTP 200, status='ready'
+      ✅ feeds count=10 (expected 10)
+      ✅ Feed names: Spot & OHLCV Price, BTC Dominance & Market Cap, Cross-Market, Macro & Policy, 
+         Bitcoin News & AI Impact, USD → AUD FX, US Spot ETF Net Flows, On-Chain, Derivatives & Leverage, 
+         Fear & Greed Index
+      
+      EXACT OBSERVED VALUES (as requested):
+      - price: $72,741
+      - regime: 'bull_momentum'
+      - regime_label: 'Bull Momentum'
+      - Bull scenario: trigger_level=74888.0, target_level=77334.0, probability=55, move_pct=6.3
+      - Bear scenario: trigger_level=70754.0, target_level=66061.0, probability=34, move_pct=-9.2
+      - contradiction: present=False, winner='None'
+      - weights_mode: 'dynamic'
+      - data-audit feeds: 10
+      
+      KEY VALIDATIONS CONFIRMED:
+      - ✅ scenarios_block is present and NOT null
+      - ✅ All required fields present in scenarios_block (price, regime, regime_label, scenarios, contradiction)
+      - ✅ scenarios is a list of exactly 2 items (bull + bear)
+      - ✅ Each scenario has all required fields (label, trigger, trigger_level, target, target_level, probability, move_pct, rationale)
+      - ✅ Bull scenario: trigger_level > price (or very close), target_level >= trigger_level
+      - ✅ Bear scenario: trigger_level < price, target_level <= trigger_level
+      - ✅ Probabilities are integers in range 15-85
+      - ✅ contradiction object has all required fields (present, winner, summary)
+      - ✅ All regression tests passed (weights_mode, forecast/regime, data-audit)
+      - ✅ No HTTP 500 errors at any point
+      
+      NO CRITICAL ISSUES FOUND. All validations passed. Data is REAL. Feature is fully functional and production-ready.
+
+#====================================================================================================
+# MODEL RELIABILITY (b3) — Brier skill + ECE + fine-grained calibration curve
+#====================================================================================================
+backend:
+  - task: "Model Reliability block in /api/v1/scorecard (brier_skill, ece, calibration curve)"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/components/Scorecard.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          compute_scorecard() now returns a 'reliability' block: n, brier, brier_baseline (0.25),
+          brier_skill (1 - brier/0.25), ece (expected calibration error in pct points, weighted over 10% bins),
+          curve (10%-wide calibration bins with >=3 samples: bin, avg_pred, realised_up, n), and grade
+          (Well/Fairly/Poorly calibrated). Verified via curl: n=513, brier 0.263, skill -0.052, ece 8.8,
+          'Fairly calibrated', 6 curve bins (honestly shows the model is currently near/under coin-flip —
+          useful input for the core-model redesign gate). Frontend Scorecard.js adds a 'Model Reliability'
+          summary card (Brier/Skill/ECE/Verdict) + renamed 'Calibration Curve' chart using the finer bins.
+          Please retest GET /api/v1/scorecard returns reliability with curve list + numeric brier_skill/ece.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Model Reliability block validation via external URL (https://quant-features.preview.emergentagent.com/api). 
+          All 5 tests passed (5/5): 
+          
+          TEST 1 — GET /api/v1/scorecard (Model Reliability block): ✅ PASSED (14/14 validations)
+          - HTTP 200 ✅
+          - status='ready' ✅
+          - 'reliability' object exists ✅
+          - n=513 (int > 0) ✅
+          - brier=0.2630 (float) ✅
+          - brier_baseline=0.25 (== 0.25) ✅
+          - brier_skill=-0.0520 (float) ✅
+          - ece=8.80 (float) ✅
+          - grade='Fairly calibrated' (non-empty string) ✅
+          - curve: 6 bins (non-empty list) ✅
+          - curve[0].bin='20-30' (str like 'X-Y') ✅
+          - curve[0].avg_pred=24.80 (float 0-100) ✅
+          - curve[0].realised_up=50.00 (float 0-100) ✅
+          - curve[0].n=6 (int >= 3) ✅
+          
+          TEST 2 — REGRESSION: GET /api/v1/dashboard: ✅ PASSED (6/6 validations)
+          - HTTP 200 ✅
+          - status='ready' ✅
+          - decision.weights_mode='dynamic' ✅
+          - decision.scenarios_block present ✅
+          - decision.scenarios_block.scenarios: 2 scenarios ✅
+          - decision.scenarios_block.contradiction present ✅
+          
+          TEST 3 — REGRESSION: GET /api/v1/forecast/regime: ✅ PASSED (2/2 validations)
+          - HTTP 200 ✅
+          - status='ready' ✅
+          
+          TEST 4 — REGRESSION: GET /api/v1/data-audit: ✅ PASSED (3/3 validations)
+          - HTTP 200 ✅
+          - status='ready' ✅
+          - feeds: 10 items (6 core + 4 aux) ✅
+          
+          TEST 5 — REGRESSION: GET /api/v1/health: ✅ PASSED (2/2 validations)
+          - HTTP 200 ✅
+          - status='ok' ✅
+          
+          EXACT OBSERVED VALUES (as requested in review_request):
+          - n: 513 (total resolved predictions)
+          - brier: 0.2630 (Brier score)
+          - brier_skill: -0.0520 (Brier skill score, negative indicates below baseline)
+          - ece: 8.80 (Expected Calibration Error in percentage points)
+          - grade: 'Fairly calibrated'
+          - curve bins: 6 (calibration curve has 6 bins with >=3 samples each)
+          - Curve bin example: bin='20-30', avg_pred=24.80, realised_up=50.00, n=6
+          
+          KEY VALIDATIONS CONFIRMED:
+          - ✅ reliability object exists at top level of /api/v1/scorecard response
+          - ✅ All required fields present: n, brier, brier_baseline, brier_skill, ece, grade, curve
+          - ✅ n is int > 0 (513 resolved predictions)
+          - ✅ brier is float (0.2630)
+          - ✅ brier_baseline == 0.25 (baseline for binary predictions)
+          - ✅ brier_skill is float (-0.0520, calculated as 1 - brier/0.25)
+          - ✅ ece is float (8.80 percentage points)
+          - ✅ grade is non-empty string ('Fairly calibrated')
+          - ✅ curve is non-empty list (6 bins)
+          - ✅ Each curve item has: bin (str like "20-30"), avg_pred (float 0-100), realised_up (float 0-100), n (int >=3)
+          - ✅ All regression tests passed (dashboard, forecast/regime, data-audit, health)
+          - ✅ No HTTP 500 errors at any point
+          
+          NO CRITICAL ISSUES FOUND. All validations passed. Data is REAL (computed from 513 resolved predictions). 
+          Feature is fully functional and production-ready. No email endpoints triggered (as instructed).
+
+agent_communication:
+    -agent: "main"
+    -comment: |
+      b3 done (backend + frontend). Please verify /api/v1/scorecard has a 'reliability' object and confirm
+      regressions: /api/v1/dashboard 200 (decision.weights_mode dynamic, scenarios_block present),
+      /api/v1/forecast/regime 200, /api/v1/data-audit 200. Do NOT trigger email endpoints.
+    -agent: "testing"
+    -message: |
+      ✅ MODEL RELIABILITY BLOCK BACKEND TEST COMPLETE - ALL TESTS PASSED (5/5)
+      
+      Tested NEW Model Reliability block in /api/v1/scorecard via external URL 
+      (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (backend_test.py).
+      
+      RESULTS SUMMARY:
+      1. ✅ GET /api/v1/scorecard → status='ready', reliability object present with all required fields
+         - n=513, brier=0.2630, brier_skill=-0.0520, ece=8.80, grade='Fairly calibrated', curve: 6 bins
+      2. ✅ GET /api/v1/dashboard → status='ready', decision.weights_mode='dynamic', scenarios_block present with 2 scenarios + contradiction
+      3. ✅ GET /api/v1/forecast/regime → status='ready'
+      4. ✅ GET /api/v1/data-audit → status='ready', 10 feeds (6 core + 4 aux)
+      5. ✅ GET /api/v1/health → status='ok'
+      
+      ENDPOINTS TESTED:
+      - GET /api/v1/scorecard → Returns reliability block with Brier skill, ECE, calibration curve
+      - GET /api/v1/dashboard → Confirms no breaking changes (weights_mode='dynamic', scenarios_block present)
+      - GET /api/v1/forecast/regime → Confirms no breaking changes (status='ready')
+      - GET /api/v1/data-audit → Confirms no breaking changes (10 feeds)
+      - GET /api/v1/health → Confirms no breaking changes (status='ok')
+      
+      MODEL RELIABILITY METRICS OBSERVED:
+      - n: 513 (total resolved predictions used for reliability calculation)
+      - brier: 0.2630 (Brier score - lower is better, 0.25 is baseline for binary predictions)
+      - brier_skill: -0.0520 (Brier skill score - negative indicates model is currently below baseline)
+      - ece: 8.80 (Expected Calibration Error in percentage points - measures calibration quality)
+      - grade: 'Fairly calibrated' (qualitative assessment)
+      - curve: 6 bins (fine-grained calibration curve with 10%-wide bins, each with >=3 samples)
+      
+      CALIBRATION CURVE STRUCTURE VALIDATED:
+      - Each bin has: bin (str like "20-30"), avg_pred (float 0-100), realised_up (float 0-100), n (int >=3)
+      - Example bin: bin='20-30', avg_pred=24.80, realised_up=50.00, n=6
+      - All bins meet minimum sample requirement (n >= 3)
+      
+      KEY OBSERVATIONS:
+      - All endpoints return REAL data (computed from 513 resolved predictions)
+      - reliability object is at top level of /api/v1/scorecard response
+      - All required fields present and valid (n, brier, brier_baseline, brier_skill, ece, grade, curve)
+      - brier_baseline correctly set to 0.25 (baseline for binary predictions)
+      - brier_skill correctly calculated as 1 - brier/0.25 = 1 - 0.2630/0.25 = -0.0520
+      - Calibration curve uses 10%-wide bins (e.g., 20-30, 30-40, etc.)
+      - All regression tests passed (dashboard, forecast/regime, data-audit, health)
+      - No HTTP 500 errors at any point
+      
+      NO CRITICAL ISSUES FOUND. All 5 tests passed. Feature is fully functional and production-ready. 
+      Data is REAL (computed from live prediction ledger). No email endpoints triggered (as instructed).

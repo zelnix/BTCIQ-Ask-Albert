@@ -247,9 +247,22 @@ function ScorecardSection({ d }) {
         </Card>
       )}
 
-      {pl.calibration?.length > 0 && (
+      {pl.reliability && pl.reliability.curve?.length > 0 && (
+        <Card className="border-0 bg-gradient-to-br from-violet-500/[0.06] to-slate-900 p-5 ring-1 ring-violet-500/25">
+          <h3 className="mb-1 flex items-center gap-1 text-sm font-semibold text-white">Model Reliability<InfoTip below text="How trustworthy the stated probabilities are. Brier skill compares the model to a random 50/50 coin flip (above 0 = better than a coin flip). ECE is the average gap between what the model predicted and what actually happened, in percentage points (lower = better calibrated)." /></h3>
+          <p className="mb-3 text-xs text-slate-500">Graded on {pl.reliability.n} resolved forecasts.</p>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Stat label="Brier Score" value={pl.reliability.brier ?? '—'} sub="0 = perfect · 0.25 = coin flip" color={pl.reliability.brier != null && pl.reliability.brier <= 0.25 ? '#34d399' : '#f87171'} />
+            <Stat label="Brier Skill" value={pl.reliability.brier_skill == null ? '—' : (pl.reliability.brier_skill > 0 ? '+' : '') + pl.reliability.brier_skill} sub="vs a 50/50 coin flip" color={pl.reliability.brier_skill != null && pl.reliability.brier_skill > 0 ? '#34d399' : '#f87171'} />
+            <Stat label="Calibration Error" value={pl.reliability.ece == null ? '—' : pl.reliability.ece + 'pt'} sub="mean pred vs actual gap" color={pl.reliability.ece != null && pl.reliability.ece < 6 ? '#34d399' : pl.reliability.ece < 12 ? '#fbbf24' : '#f87171'} />
+            <Stat label="Verdict" value={pl.reliability.grade || '—'} sub="overall calibration" color={pl.reliability.grade === 'Well calibrated' ? '#34d399' : pl.reliability.grade === 'Fairly calibrated' ? '#fbbf24' : '#f87171'} />
+          </div>
+        </Card>
+      )}
+
+      {(pl.reliability?.curve?.length > 0 || pl.calibration?.length > 0) && (
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <h3 className="mb-1 flex items-center gap-1 text-sm font-semibold text-white">Probability Calibration<InfoTip below text="Checks whether the model's stated odds match reality — e.g. of all the times it said '70% up', did BTC actually rise about 70% of the time?" /></h3>
+          <h3 className="mb-1 flex items-center gap-1 text-sm font-semibold text-white">Calibration Curve<InfoTip below text="Checks whether the model's stated odds match reality — e.g. of all the times it said '70% up', did BTC actually rise about 70% of the time?" /></h3>
           <p className="mb-3 text-xs text-slate-500">Each dot is a bucket of forecasts: X = what the model predicted, Y = how often price actually rose. The closer to the dashed line, the better calibrated. Bubble size = number of forecasts.</p>
           <ResponsiveContainer width="100%" height={300}>
             <ScatterChart margin={{ top: 10, right: 20, bottom: 24, left: 0 }}>
@@ -259,8 +272,8 @@ function ScorecardSection({ d }) {
               <ZAxis type="number" dataKey="n" range={[80, 500]} name="samples" />
               <ReferenceLine segment={[{ x: 0, y: 0 }, { x: 100, y: 100 }]} stroke="#64748b" strokeDasharray="5 5" ifOverflow="extendDomain" />
               <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [`${v}${n === 'samples' ? '' : '%'}`, n]} />
-              <Scatter data={pl.calibration}>
-                {pl.calibration.map((c, i) => {
+              <Scatter data={pl.reliability?.curve?.length > 0 ? pl.reliability.curve : pl.calibration}>
+                {(pl.reliability?.curve?.length > 0 ? pl.reliability.curve : pl.calibration).map((c, i) => {
                   const err = Math.abs(c.avg_pred - c.realised_up);
                   return <Cell key={i} fill={err < 10 ? '#34d399' : err < 20 ? '#fbbf24' : '#f87171'} />;
                 })}

@@ -13,7 +13,7 @@ import {
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
   Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet, Plus, Clock,
-  ChevronDown, Coins, Fish,
+  ChevronDown, Coins, Fish, Zap,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -325,6 +325,42 @@ function RegimeSwitchPanel({ re }) {
   );
 }
 
+function ScenarioPlaybook({ sb }) {
+  if (!sb || !sb.scenarios) return null;
+  const bull = sb.scenarios.find((s) => s.type === 'bull');
+  const bear = sb.scenarios.find((s) => s.type === 'bear');
+  const c = sb.contradiction || {};
+  const Card2 = (s, accent) => (
+    <div className={`rounded-xl border bg-slate-950/50 p-4 ${accent === 'bull' ? 'border-emerald-500/25' : 'border-red-500/25'}`}>
+      <div className="flex items-center gap-2">
+        {accent === 'bull' ? <ArrowUpRight className="h-4 w-4 text-emerald-400" /> : <ArrowDownRight className="h-4 w-4 text-red-400" />}
+        <p className={`text-sm font-bold ${accent === 'bull' ? 'text-emerald-300' : 'text-red-300'}`}>{s.label}</p>
+        <span className="ml-auto rounded-full border border-slate-700 px-2 py-0.5 text-[11px] font-bold text-slate-200">{s.probability}%</span>
+      </div>
+      <p className="mt-2 text-[13px] leading-snug text-slate-200"><span className="text-slate-500">IF </span>{s.trigger}</p>
+      <p className="mt-1 text-[13px] leading-snug text-slate-200"><span className="text-slate-500">THEN </span>target <span className={`font-bold ${accent === 'bull' ? 'text-emerald-300' : 'text-red-300'}`}>{s.target}</span> <span className="text-slate-500">({s.move_pct > 0 ? '+' : ''}{s.move_pct}%)</span></p>
+      <p className="mt-2 text-[11px] leading-relaxed text-slate-500">{s.rationale}</p>
+    </div>
+  );
+  return (
+    <div className="mt-5 rounded-xl border border-slate-800 bg-slate-950/40 p-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Zap className="h-4 w-4 text-amber-400" />
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Albert's Scenario Playbook</p>
+        <InfoTip text="Actionable If-Then triggers with concrete price levels, targets and data-derived probabilities. Levels come from the chart's support/resistance; probabilities blend historical breakout/breakdown base rates with the current regime." />
+        <span className="ml-auto text-[11px] text-slate-500">spot ${sb.price?.toLocaleString?.() || sb.price}</span>
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+        {bull && Card2(bull, 'bull')}
+        {bear && Card2(bear, 'bear')}
+      </div>
+      <div className={`mt-3 rounded-lg border p-3 text-[12px] leading-relaxed ${c.present ? (c.winner === 'bullish' ? 'border-emerald-500/25 bg-emerald-500/[0.06] text-emerald-100' : 'border-red-500/25 bg-red-500/[0.06] text-red-100') : 'border-slate-800 bg-slate-900/40 text-slate-300'}`}>
+        <span className="font-semibold uppercase tracking-wider text-slate-400">{c.present ? 'Conflict resolution · ' : 'Alignment · '}</span>{c.summary}
+      </div>
+    </div>
+  );
+}
+
 function DecisionEngineCard({ d }) {
   const dec = d.decision;
   if (!dec) return null;
@@ -385,6 +421,9 @@ function DecisionEngineCard({ d }) {
 
       {/* Dynamic Regime-Switching (Gaussian HMM) */}
       <RegimeSwitchPanel re={dec.regime_engine} />
+
+      {/* Albert's If-Then scenario playbook + contradiction resolution */}
+      <ScenarioPlaybook sb={dec.scenarios_block} />
 
 
       {/* multi-horizon outlook 24H → 1Y */}

@@ -1417,6 +1417,105 @@ def compute_decision_engine(quant, all_outlook, policy, news_sig, chart, cycle, 
 
 
 # ---------------------------- Risk Engine ----------------------------
+def _scoreside(score):
+    return 'bullish' if score >= 55 else ('bearish' if score <= 45 else 'neutral')
+
+
+def compute_scenarios(chart, decision, last_close, feats, regime_analysis):
+    """Albert's actionable If-Then playbook: concrete bull/bear triggers with levels,
+    targets and data-derived probabilities, plus a regime-aware resolution of any
+    contradiction between the signal groups.
+    """
+    if not chart or not decision or not last_close:
+        return None
+    try:
+        price = float(last_close)
+        try:
+            atr = float(feats['ATR_Pct'])
+        except Exception:  # noqa
+            atr = 0.03
+        if not atr or atr != atr:  # guard NaN/0
+            atr = 0.03
+        sr = chart.get('sr_levels', []) or []
+        res = sorted([l for l in sr if l.get('type') == 'resistance' and l['price'] > price],
+                     key=lambda z: z['price'])
+        sup = sorted([l for l in sr if l.get('type') == 'support' and l['price'] < price],
+                     key=lambda z: -z['price'])
+        pred = chart.get('predictive', {}) or {}
+        bo_up = float(pred.get('breakout_up', 50) or 50)
+        bo_dn = float(pred.get('breakdown', 50) or 50)
+        regime = (regime_analysis or {}).get('current_regime')
+        regime_label = (regime_analysis or {}).get('regime_label', regime or 'current')
+        # Regime tilts the base rates: momentum favours continuation, distribution/squeeze fade it.
+        bull_tilt = {'bull_momentum': 1.15, 'consolidation': 1.0,
+                     'bear_distribution': 0.82, 'high_vol_squeeze': 0.9}.get(regime, 1.0)
+
+        # ---- Bull scenario ----
+        trig_res = round(res[0]['price'] if res else price * (1 + max(0.01, atr)), 0)
+        tgt_bull = round(res[1]['price'] if len(res) > 1 else trig_res * (1 + max(0.015, atr * 1.5)), 0)
+        p_bull = int(round(min(85, max(15, bo_up * bull_tilt))))
+        # ---- Bear scenario ----
+        trig_sup = round(sup[0]['price'] if sup else price * (1 - max(0.01, atr)), 0)
+        tgt_bear = round(sup[1]['price'] if len(sup) > 1 else trig_sup * (1 - max(0.015, atr * 1.5)), 0)
+        p_bear = int(round(min(85, max(15, bo_dn * (2 - bull_tilt)))))
+
+        scenarios = [
+            {
+                'type': 'bull', 'label': 'Primary Bull Scenario',
+                'trigger': f"Break & 4h/daily close above ${trig_res:,.0f} on >1.2x average volume",
+                'trigger_level': trig_res, 'target_level': tgt_bull,
+                'target': f"${tgt_bull:,.0f}", 'probability': p_bull,
+                'move_pct': round((tgt_bull - price) / price * 100, 1),
+                'rationale': (f"{round(bo_up)}% of comparable 20-day-high breakouts closed higher within 5 days; "
+                              f"the {regime_label} regime {'supports' if bull_tilt >= 1 else 'tempers'} continuation."),
+            },
+            {
+                'type': 'bear', 'label': 'Bearish Invalidation',
+                'trigger': f"Loss of ${trig_sup:,.0f} support on rising volume",
+                'trigger_level': trig_sup, 'target_level': tgt_bear,
+                'target': f"${tgt_bear:,.0f} (liquidity sweep)", 'probability': p_bear,
+                'move_pct': round((tgt_bear - price) / price * 100, 1),
+                'rationale': (f"Failing to hold structure has historically resolved lower ~{round(bo_dn)}% of the time; "
+                              f"a high-volume sweep toward the next support becomes the base case."),
+            },
+        ]
+
+        # ---- Contradiction resolution (uses the LIVE regime weights) ----
+        comps = decision.get('components', []) or []
+        bulls = [c for c in comps if c['score'] >= 55]
+        bears = [c for c in comps if c['score'] <= 45]
+
+        def force(c):
+            return c.get('weight', 0) * abs(c['score'] - 50)
+
+        if bulls and bears:
+            bull_force = sum(force(c) for c in bulls)
+            bear_force = sum(force(c) for c in bears)
+            winner = 'bullish' if bull_force >= bear_force else 'bearish'
+            winners = bulls if winner == 'bullish' else bears
+            losers = bears if winner == 'bullish' else bulls
+            top_w = max(winners, key=force)
+            top_l = max(losers, key=force)
+            contradiction = {
+                'present': True, 'winner': winner,
+                'bull_force': round(bull_force), 'bear_force': round(bear_force),
+                'summary': (f"{top_l['name']} is {_scoreside(top_l['score'])} ({top_l['score']}/100) while "
+                            f"{top_w['name']} is {_scoreside(top_w['score'])} ({top_w['score']}/100). Under the "
+                            f"current {regime_label} regime, {top_w['name']} carries the greater weight "
+                            f"({top_w['weight']}%), so the engine leans {winner} until that flips."),
+            }
+        else:
+            contradiction = {'present': False, 'winner': None,
+                             'summary': 'Signal groups are broadly aligned — no material contradiction to resolve.'}
+
+        return {'scenarios': scenarios, 'contradiction': contradiction,
+                'price': round(price, 0), 'regime': regime, 'regime_label': regime_label}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return None
+
+
+
 def _risk_state(score):
     return ('Extreme' if score >= 80 else 'High' if score >= 60
             else 'Elevated' if score >= 45 else 'Normal' if score >= 25 else 'Low')
@@ -3429,8 +3528,41 @@ def compute_scorecard():
                          key=lambda z: z.get('as_of', ''), reverse=True)[:150]
     ledger = [_norm(p) for p in pending] + [_norm(x) for x in resolved_live] + [_norm(x) for x in resolved_bt]
 
+    # --- Model Reliability: fine-grained calibration curve + Brier skill + ECE ---
+    reliability = None
+    try:
+        graded = [x for x in resolved if x.get('prob_higher') is not None
+                  and x.get('actual_direction') in ('UP', 'DOWN')]
+        if graded:
+            total = len(graded)
+            bins, ece = [], 0.0
+            for lo in range(0, 100, 10):
+                hi = lo + 10
+                upper = hi if hi < 100 else 100.01
+                b = [x for x in graded if lo <= x['prob_higher'] < upper]
+                if len(b) >= 3:
+                    avg_pred = sum(x['prob_higher'] for x in b) / len(b)
+                    realised = sum(1 for x in b if x['actual_direction'] == 'UP') / len(b) * 100
+                    bins.append({'bin': f'{lo}-{hi}', 'avg_pred': round(avg_pred, 1),
+                                 'realised_up': round(realised, 1), 'n': len(b)})
+                    ece += (len(b) / total) * abs(avg_pred - realised)
+            br = overall.get('brier')
+            reliability = {
+                'n': total,
+                'brier': br,
+                'brier_baseline': 0.25,   # a random 50/50 coin flip
+                'brier_skill': round(1 - br / 0.25, 3) if br is not None else None,
+                'ece': round(ece, 2),     # expected calibration error (percentage points)
+                'curve': bins,
+                'grade': ('Well calibrated' if ece < 6 else 'Fairly calibrated' if ece < 12
+                          else 'Poorly calibrated') if bins else None,
+            }
+    except Exception:  # noqa
+        traceback.print_exc()
+
     return {
         'overall': overall, 'by_horizon': by_h, 'by_regime': by_regime, 'calibration': calib,
+        'reliability': reliability,
         'pending': pending[:24], 'recent': recent, 'ledger': ledger,
         'total_logged': predictions_col.count_documents({}),
         'live_logged': predictions_col.count_documents({'trigger': {'$ne': 'backtest'}}),
@@ -4177,6 +4309,14 @@ def compute():
     try:
         data_health = compute_data_health(source, crossmarket, policy, dominance, news_doc)
         apply_data_fade(decision, data_health)
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    # --- Albert If-Then scenarios + contradiction resolution (regime-aware) ---
+    try:
+        if decision is not None:
+            decision['scenarios_block'] = compute_scenarios(
+                chart, decision, last_close, feats, regime_analysis)
     except Exception:  # noqa
         traceback.print_exc()
 
