@@ -4065,6 +4065,31 @@ def _score_band(s):
     return 'Bearish'
 
 
+# Email alerts are DISABLED — alerts are delivered via in-app bell + browser
+# notifications instead. Flip to True to restore Resend email dispatch.
+EMAIL_ALERTS_ENABLED = False
+
+
+def push_alert(category, severity, title, message, sig):
+    """Create an in-app notification (surfaced by the bell + browser push) for
+    events that used to be emailed (drift breaker, model decay, live cascade).
+    Idempotent per (day, category, sig)."""
+    try:
+        day = datetime.datetime.utcnow().strftime('%Y-%m-%d-%H')
+        key = f"notif_{day}_{category}_{sig}"
+        res = smart_alerts_col.update_one(
+            {'_id': key},
+            {'$setOnInsert': {
+                '_id': key, 'id': key, 'ts': datetime.datetime.utcnow().isoformat(),
+                'as_of': day, 'symbol': 'BTC', 'category': category, 'severity': severity,
+                'title': title, 'message': message, 'seen': False,
+            }}, upsert=True)
+        return res.upserted_id is not None
+    except Exception:  # noqa
+        traceback.print_exc()
+        return False
+
+
 def compute_smart_alerts(doc, prev_doc):
     """Compare the new run against the previous run and log meaningful state changes."""
     as_of = doc.get('as_of')
@@ -5994,6 +6019,9 @@ def _instant_severities():
 
 def _send_to_recipients(recips, subject, html, text):
     """Send individually per recipient (privacy) with a per-recipient unsubscribe link + header."""
+    if not EMAIL_ALERTS_ENABLED:
+        # Email delivery is disabled — alerts are delivered via in-app + browser notifications.
+        return {'ok': False, 'disabled': True, 'sent': 0, 'error': 'email alerts disabled'}
     sent, last_id, err = 0, None, None
     for email in recips:
         url = _unsub_url(email)
@@ -6407,8 +6435,14 @@ def check_drift_circuit_alert(drift):
             return {'ok': True, 'sent': 0, 'active': active}
         if not cooldown_ok:
             return {'ok': True, 'sent': 0, 'active': active, 'reason': 'cooldown (24h)'}
+        push_alert('Model', 'high', 'Circuit breaker tripped',
+                   'Feature-drift circuit breaker tripped — model reverted to a conservative rule-based '
+                   'trend model and confidence downgraded to Low. Auto-recovers when inputs normalise.',
+                   'drift_breaker')
+        misc_col.update_one({'_id': 'drift_alert_state'},
+                            {'$set': {'last_sent_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
         if not resend_configured():
-            return {'ok': False, 'error': 'resend not configured'}
+            return {'ok': True, 'sent': 1, 'notified': True}
         recips = [r.get('email') for r in _recipient_list() if r.get('email')]
         if not recips:
             return {'ok': False, 'error': 'no recipients'}
@@ -6470,8 +6504,17 @@ def check_liq_cascade_alert():
                                       'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
         if not (active and not was_active and cooldown_ok):
             return {'ok': True, 'sent': 0, 'active': active}
+        _lu = liq.get('long_usd_1m') or 0
+        _su = liq.get('short_usd_1m') or 0
+        _dom = 'long' if _lu >= _su else 'short'
+        push_alert('Liquidation Risk', 'critical', 'Liquidation cascade detected',
+                   f"Rapid cascade: >${round((liq.get('cascade_10s_usd') or 0) / 1e6, 2)}M force-liquidated "
+                   f"in ~10s, dominated by {_dom}. Expect elevated volatility and slippage.",
+                   f"cascade_{int(datetime.datetime.utcnow().timestamp() // 600)}")
+        misc_col.update_one({'_id': 'liq_cascade_state'},
+                            {'$set': {'last_sent_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
         if not resend_configured():
-            return {'ok': False, 'error': 'resend not configured'}
+            return {'ok': True, 'sent': 1, 'notified': True, 'active': active}
         recips = [r.get('email') for r in _recipient_list() if r.get('email')]
         if not recips:
             return {'ok': False, 'error': 'no recipients'}

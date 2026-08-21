@@ -38,7 +38,6 @@ import TimeMachineSection from './components/TimeMachine';
 import NewsSection from './components/News';
 import ForecastsHubSection from './components/Forecasts';
 import MarketIntelligenceSection from './components/MarketIntel';
-import EmailAlerts from './components/EmailAlerts';
 
 /* ------------------------------ helpers ------------------------------ */
 
@@ -490,6 +489,99 @@ function ModelConfidenceChip({ fallback }) {
     return <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 font-semibold text-emerald-300">Model: Healthy</span>;
   }
   return null;
+}
+
+function NotificationBell({ alertsData, onAck, onViewAll }) {
+  const [open, setOpen] = React.useState(false);
+  const [perm, setPerm] = React.useState(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
+  const notified = React.useRef(new Set());
+  const first = React.useRef(true);
+  const alerts = (alertsData && alertsData.alerts) || [];
+  const unseen = (alertsData && alertsData.unseen) || 0;
+
+  React.useEffect(() => {
+    // Browser push: fire an OS notification for new, meaningful alerts.
+    if (typeof Notification === 'undefined') return;
+    const note = ['high', 'critical', 'warning'];
+    const fresh = alerts.filter((a) => a.id && !notified.current.has(a.id));
+    fresh.forEach((a) => notified.current.add(a.id));
+    if (first.current) { first.current = false; return; } // skip backlog on load
+    if (Notification.permission !== 'granted') return;
+    fresh.filter((a) => note.includes(a.severity)).slice(0, 3).forEach((a) => {
+      try { new Notification(`BTCIQ · ${a.title}`, { body: a.message, icon: '/btciq-logo.png', tag: a.id }); } catch (e) { /* noop */ }
+    });
+  }, [alerts]);
+
+  const askPerm = async () => {
+    try { const p = await Notification.requestPermission(); setPerm(p); } catch (e) { /* noop */ }
+  };
+  const sevColor = (s) => (s === 'critical' || s === 'high' ? '#f87171' : s === 'warning' || s === 'medium' ? '#fbbf24' : s === 'success' ? '#34d399' : '#38bdf8');
+  const rel = (ts) => {
+    try { const m = Math.max(0, (Date.now() - new Date(ts + 'Z').getTime()) / 60000); return m < 60 ? `${Math.round(m)}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; } catch (e) { return ''; }
+  };
+
+  return (
+    <div className="relative ml-auto">
+      <button onClick={() => setOpen((o) => !o)} title="Notifications"
+        className="relative rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200">
+        <Bell className="h-5 w-5" />
+        {unseen > 0 && (
+          <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">{unseen > 9 ? '9+' : unseen}</span>
+        )}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-50 mt-2 w-80 max-w-[92vw] overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/50">
+            <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
+              <span className="text-sm font-semibold text-white">Notifications</span>
+              {unseen > 0 && <button onClick={() => onAck()} className="text-[11px] font-semibold text-sky-400 hover:text-sky-300">Mark all read</button>}
+            </div>
+            {perm !== 'granted' && perm !== 'unsupported' && (
+              <button onClick={askPerm} className="flex w-full items-center gap-2 border-b border-slate-800 bg-sky-500/10 px-3 py-2 text-left text-[11px] font-semibold text-sky-300 hover:bg-sky-500/20">
+                <Bell className="h-3.5 w-3.5" />Enable browser alerts (pop-ups even when the tab is in the background)
+              </button>
+            )}
+            <div className="max-h-80 overflow-y-auto">
+              {alerts.length === 0 ? (
+                <p className="px-3 py-6 text-center text-xs text-slate-500">No notifications yet.</p>
+              ) : alerts.slice(0, 10).map((a) => (
+                <div key={a.id} className={`flex gap-2 border-b border-slate-800/60 px-3 py-2 ${a.seen ? 'opacity-60' : ''}`}>
+                  <span className="mt-1 h-2 w-2 shrink-0 rounded-full" style={{ background: sevColor(a.severity) }} />
+                  <div className="min-w-0 flex-1">
+                    <p className="flex items-center justify-between gap-2 text-[12px] font-semibold text-slate-200"><span className="truncate">{a.title}</span><span className="shrink-0 text-[10px] font-normal text-slate-500">{rel(a.ts)}</span></p>
+                    <p className="line-clamp-2 text-[11px] text-slate-400">{a.message}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button onClick={() => { setOpen(false); onViewAll(); }} className="w-full border-t border-slate-800 px-3 py-2 text-center text-[12px] font-semibold text-sky-400 hover:bg-slate-800/50">View all alerts →</button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function NotificationSettings() {
+  const [perm, setPerm] = React.useState(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
+  const ask = async () => { try { setPerm(await Notification.requestPermission()); } catch (e) { /* noop */ } };
+  return (
+    <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+      <h3 className="mb-1 flex items-center gap-2 font-semibold text-white"><Bell className="h-4 w-4 text-sky-400" />Notifications</h3>
+      <p className="mb-3 text-xs text-slate-500">Alerts (regime flips, liquidation cascades, basis reclaims, whale moves, model circuit-breaker) are delivered <span className="font-semibold text-slate-300">in-app</span> via the bell in the top bar and as <span className="font-semibold text-slate-300">browser pop-ups</span>. Email delivery has been turned off.</p>
+      <div className="flex flex-wrap items-center gap-3">
+        {perm === 'unsupported' ? (
+          <span className="text-xs text-slate-500">Browser notifications aren’t supported here.</span>
+        ) : perm === 'granted' ? (
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-emerald-400"><Check className="h-4 w-4" />Browser notifications enabled</span>
+        ) : (
+          <button onClick={ask} className="rounded-lg bg-gradient-to-r from-sky-500 to-violet-600 px-3 py-1.5 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 hover:from-sky-400 hover:to-violet-500">Enable browser notifications</button>
+        )}
+        {perm === 'denied' && <span className="text-[11px] text-amber-400">Blocked in your browser settings — re-allow notifications for this site to receive pop-ups.</span>}
+      </div>
+    </Card>
+  );
 }
 
 function WallAlertToaster() {
@@ -2232,7 +2324,7 @@ function SettingsSection({ onManualRun }) {
         </div>
       </Card>
       <BreakerDemoCard passcode={pass} />
-      <EmailAlerts />
+      <NotificationSettings />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
         <p className="text-xs leading-relaxed text-slate-400">BTCIQ — Bitcoin Market Analysis, powered by BitCentAI, our Bitcoin-Centred Intelligence Engine. BitMarkAI measures the market and produces probability-based forecasts. Albert is BTCIQ’s HuCentAI Quant Analyst.</p>
@@ -2832,13 +2924,7 @@ export default function DashboardPage() {
               {ticker?.price_aud && <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/20">≈ {fmtAud(ticker.price_aud)}</span>}
               <span className={`text-sm font-semibold ${(ticker?.change24h ?? d.day_change_pct) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ticker?.change24h ?? d.day_change_pct}%</span>
             </div>
-            <button onClick={() => setActive('alerts')} title="Smart Alerts"
-              className="relative ml-auto rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200">
-              <Bell className="h-5 w-5" />
-              {alertsData?.unseen > 0 && (
-                <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white">{alertsData.unseen > 9 ? '9+' : alertsData.unseen}</span>
-              )}
-            </button>
+            <NotificationBell alertsData={alertsData} onAck={ackAlerts} onViewAll={() => setActive('alerts')} />
             <Button onClick={() => setShowReport(true)} size="sm" variant="outline" title="Shareable daily report"
               className="gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800">
               <ClipboardList className="h-4 w-4" /><span className="hidden sm:inline">Report</span>
