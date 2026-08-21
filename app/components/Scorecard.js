@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { CalendarClock, Check, ClipboardList, Info, X, ShieldCheck } from 'lucide-react';
+import { CalendarClock, Check, ClipboardList, Info, X, ShieldCheck, Activity, AlertTriangle } from 'lucide-react';
 import { ResponsiveContainer, ScatterChart, Scatter, XAxis, YAxis, ZAxis, CartesianGrid, Tooltip, ReferenceLine, Cell, LineChart, Line } from 'recharts';
 import { Card } from '@/components/ui/card';
 import { API_BASE } from '../lib/api';
@@ -108,6 +108,99 @@ function QuantValidationPanel() {
     </Card>
   );
 }
+
+
+function DriftMonitorPanel() {
+  const [v, setV] = React.useState(null);
+  React.useEffect(() => {
+    fetch(`${API_BASE}/v1/drift`, { cache: 'no-store' })
+      .then((r) => r.json()).then(setV).catch(() => {});
+  }, []);
+  if (!v || v.status !== 'ready') return null;
+
+  const breaker = !!v.circuit_breaker;
+  const level = v.confidence_level || 'Normal';
+  const levelStyle = breaker
+    ? 'text-red-300 border-red-500/30 bg-red-500/10'
+    : level === 'Guarded'
+      ? 'text-amber-300 border-amber-500/30 bg-amber-500/10'
+      : 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10';
+  const ood = v.ood || {};
+  const feats = v.per_feature || [];
+  const statusColor = (s) => (s === 'drift' ? '#f87171' : s === 'watch' ? '#fbbf24' : '#34d399');
+
+  return (
+    <Card className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800">
+      <h3 className="mb-1 flex flex-wrap items-center gap-2 text-sm font-semibold text-white">
+        <Activity className="h-4 w-4 text-sky-400" />Feature-Drift Circuit Breaker
+        <InfoTip below text="Watches whether today's live inputs sit outside the distribution the model trained on (robust z-scores + a multivariate Mahalanobis gate) and whether the core data feeds are complete. If inputs are out-of-distribution or feeds drop below 95%, it downgrades model confidence to Low and falls back to a conservative rule-based trend model. PSI & KS per-feature are shown as diagnostics." />
+        <span className={`ml-auto rounded-full border px-2 py-0.5 text-[10px] font-bold ${levelStyle}`}>
+          {breaker ? 'BREAKER TRIPPED' : `Confidence: ${level}`}
+        </span>
+      </h3>
+
+      {breaker && (
+        <div className="mb-3 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] leading-snug text-red-200">
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            <span className="font-semibold">Model reverted to rule-based trend following.</span>{' '}
+            {(v.reasons || []).join(' ')} Fallback call: <span className="font-semibold">{v.fallback_signal?.signal}</span> ({v.fallback_signal?.confidence}%).
+          </span>
+        </div>
+      )}
+
+      <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+          <p className="text-[10px] uppercase text-slate-500">Model mode</p>
+          <p className="mt-1 text-lg font-black" style={{ color: breaker ? '#f87171' : '#34d399' }}>{v.model_mode === 'rule_based' ? 'Rule-based' : 'ML'}</p>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+          <p className="text-[10px] uppercase text-slate-500">Data completeness</p>
+          <p className="mt-1 text-lg font-black" style={{ color: (v.data_completeness_pct ?? 100) < (v.completeness_min || 95) ? '#f87171' : '#34d399' }}>{v.data_completeness_pct}%</p>
+          <p className="text-[10px] text-slate-600">min {v.completeness_min}%</p>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+          <p className="text-[10px] uppercase text-slate-500">Anomaly (Mahalanobis)</p>
+          <p className="mt-1 text-lg font-black" style={{ color: ood.mahalanobis != null && ood.maha_threshold != null && ood.mahalanobis > ood.maha_threshold ? '#f87171' : '#34d399' }}>{ood.mahalanobis ?? '—'}</p>
+          <p className="text-[10px] text-slate-600">gate {ood.maha_threshold ?? '—'}</p>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3">
+          <p className="text-[10px] uppercase text-slate-500">Effective signal</p>
+          <p className="mt-1 text-lg font-black text-slate-100">{v.effective_signal || '—'}</p>
+          <p className="text-[10px] text-slate-600">ML said {v.ml_signal || '—'}</p>
+        </div>
+      </div>
+
+      <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Per-feature drift (recent {v.recent_window}d vs prior {v.reference_window}d)</p>
+      <div className="overflow-hidden rounded-lg border border-slate-800">
+        <table className="w-full text-left text-[11px]">
+          <thead className="bg-slate-950/60 text-slate-500">
+            <tr>
+              <th className="px-2 py-1 font-medium">Feature</th>
+              <th className="px-2 py-1 font-medium">PSI</th>
+              <th className="px-2 py-1 font-medium">KS</th>
+              <th className="px-2 py-1 font-medium">Live z</th>
+              <th className="px-2 py-1 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {feats.map((f) => (
+              <tr key={f.feature} className="border-t border-slate-800/70 text-slate-300">
+                <td className="px-2 py-1">{f.label}</td>
+                <td className="px-2 py-1 tabular-nums">{f.psi}</td>
+                <td className="px-2 py-1 tabular-nums">{f.ks_stat}{f.ks_significant ? '*' : ''}</td>
+                <td className="px-2 py-1 tabular-nums">{ood.robust_z?.[f.feature] ?? '—'}</td>
+                <td className="px-2 py-1"><span className="rounded px-1.5 py-0.5 text-[10px] font-bold" style={{ color: statusColor(f.status) }}>{f.status}</span></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2 text-[10px] text-slate-600">PSI &gt; 0.25 with a significant KS test (*) marks a shifted distribution. The breaker itself trips only when the live vector is out-of-distribution (extreme z / Mahalanobis) or feeds fall below {v.completeness_min}% — so normal market evolution won't needlessly disable the model.</p>
+    </Card>
+  );
+}
+
 
 
 function LedgerExplorer({ ledger }) {
@@ -333,6 +426,8 @@ function ScorecardSection({ d }) {
       )}
 
       <QuantValidationPanel />
+
+      <DriftMonitorPanel />
 
       {pl.reliability && pl.reliability.curve?.length > 0 && (
         <Card className="border-0 bg-gradient-to-br from-violet-500/[0.06] to-slate-900 p-5 ring-1 ring-violet-500/25">

@@ -43,8 +43,8 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
   const rateSecondsLeft = rateUntil ? Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)) : 0;
 
   const suggestions = isOverview
-    ? ['Give me the 10-second read on Bitcoin right now.', 'What is the biggest risk today?', "What's moving the market?"]
-    : [`Give me a quick read on this ${scopeLabel} screen.`, `What should I watch on ${scopeLabel}?`, `What's the key signal here?`];
+    ? ['Give me the candid read on Bitcoin right now.', 'Current cycle distribution / top signals?', 'How are ETF flows & the Fed shaping BTC?', 'Critique my strategy in one line.']
+    : [`Give me a candid read on this ${scopeLabel} screen.`, `What should I watch on ${scopeLabel}?`, `What's the key signal here?`];
 
   const send = async (text) => {
     const msg = (text ?? input).trim();
@@ -109,7 +109,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
                 <img src="/albert.png" alt="Albert" className="h-14 w-14 rounded-full object-cover ring-2 ring-sky-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                 <p className="text-sm font-semibold text-slate-200">{isOverview ? "Hi, I'm Albert — ask me anything about Bitcoin" : `Ask me about the ${scopeLabel} screen`}</p>
-                <p className="max-w-[16rem] text-[11px] text-slate-500">I only use the live dashboard numbers — I won't invent data.</p>
+                <p className="max-w-[16rem] text-[11px] text-slate-500">Market mentor & sounding board — live dashboard + web. I won’t invent dashboard numbers.</p>
                 <div className="flex flex-col gap-1.5">
                   {suggestions.map((s, i) => (
                     <button key={i} onClick={() => send(s)} className="rounded-full border border-slate-700 bg-slate-800/60 px-3 py-1.5 text-[11px] text-slate-300 hover:border-sky-500/40 hover:text-sky-300">{s}</button>

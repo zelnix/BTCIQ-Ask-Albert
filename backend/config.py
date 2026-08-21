@@ -87,6 +87,9 @@ EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
 GEMINI_MODEL = 'gemini-2.5-flash'
 # Ask Quant conversational model (Gemini 3 Flash via Emergent gateway, verified available)
 CHAT_MODEL = os.environ.get('CHAT_MODEL', 'gemini-3-flash-preview')
+# Interactive "Ask Albert" mentor model — deeper reasoning + native Google Search
+# grounding (live web) via the Emergent gateway. Verified available 2026.
+ALBERT_CHAT_MODEL = os.environ.get('ALBERT_CHAT_MODEL', 'gemini-3.1-pro-preview')
 
 # ---- Resend transactional email (daily Alert Digest) ----
 # Key/from live in /app/.env; never exposed to the browser (all sending is backend-side).

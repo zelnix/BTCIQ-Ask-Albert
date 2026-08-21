@@ -557,6 +557,13 @@ function MarketStateHero({ d, ticker }) {
         <span className={`rounded-full px-2 py-0.5 font-semibold ${RISK_TXT[riskLevel] || 'text-slate-300'} bg-slate-800/60`}>Risk: {riskLevel}</span>
         {dec.label && <span className="rounded-full bg-slate-800/60 px-2 py-0.5 font-semibold text-slate-300">Decision: {dec.label} ({dec.overall_score}/100)</span>}
         <span className="rounded-full bg-slate-800/60 px-2 py-0.5">Alignment: {dec.alignment || '—'}</span>
+        {dec.circuit_breaker?.active ? (
+          <span title={(dec.circuit_breaker.reasons || []).join(' ')} className="rounded-full bg-red-500/15 px-2 py-0.5 font-semibold text-red-300 ring-1 ring-red-500/30">⚠ Circuit breaker · rule-based fallback</span>
+        ) : dec.confidence_level && dec.confidence_level !== 'Normal' ? (
+          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-300 ring-1 ring-amber-500/30">Model: {dec.confidence_level}</span>
+        ) : dec.confidence_level ? (
+          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 font-semibold text-emerald-300">Model: Healthy</span>
+        ) : null}
         <span className="ml-auto italic">Probability, not certainty — not financial advice.</span>
       </div>
     </Card>
@@ -570,9 +577,9 @@ function AlbertIntroCard() {
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-base font-bold text-white">Albert</h3>
-          <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-300">BTCIQ’s HuCentAI Quant Analyst</span>
+          <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-300">Quant Analyst · Market Mentor</span>
         </div>
-        <p className="mt-1 text-sm text-slate-300">Albert interprets BitMarkAI’s numbers, explains the probabilities in plain language, and helps you understand what may move the market next. “Let us examine the evidence — probability is not certainty.”</p>
+        <p className="mt-1 text-sm text-slate-300">Albert blends BitMarkAI’s live numbers with 100+ years of market wisdom — macro, cycles, on-chain and strategy — and live web search, to be your candid trading companion and sounding board. “Let us examine the evidence — probability is not certainty, and capital preservation comes first.”</p>
         <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Albert is an original fictional BTCIQ HuCentAI Quant character inspired by the spirit of scientific curiosity. He is not Albert Einstein and does not represent Einstein’s real opinions.</p>
       </div>
     </Card>
@@ -1756,14 +1763,14 @@ function AskQuantSection({ d }) {
   const rateSecondsLeft = rateUntil ? Math.max(0, Math.ceil((rateUntil - Date.now()) / 1000)) : 0;
 
   const suggestions = [
-    `Summarise the current ${symbol} market state in plain English.`,
-    'Why did the forecast change?',
-    `What is currently moving ${symbol}?`,
-    'Which signal carries the greatest risk?',
-    'What evidence contradicts the current forecast?',
-    'What would invalidate the bullish outlook?',
-    'Why is the model confidence only moderate?',
-    'What is the difference between model confidence and data confidence?',
+    'Critique my strategy: I DCA weekly with no stop — poke holes in it.',
+    'What are the current cycle distribution / top signals?',
+    'How are Fed policy & spot ETF flows shaping BTC right now?',
+    'How should I set stop-loss and invalidation levels here?',
+    'Healthy pullback to add, or structural breakdown to cut?',
+    `Give me the candid 10-second read on ${symbol} right now.`,
+    'How does BTC compare to gold, DXY and the S&P this month?',
+    'Compare this setup to a past halving-cycle analog.',
   ];
 
   const send = async (text) => {
@@ -1809,7 +1816,7 @@ function AskQuantSection({ d }) {
       <Card className="flex h-[560px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
         <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3">
           <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
-          <div><p className="text-sm font-semibold text-white">Albert · BTCIQ HuCentAI Quant</p><p className="text-[10px] text-slate-500">Grounded in live dashboard data · Gemini 3 Flash</p></div>
+          <div><p className="text-sm font-semibold text-white">Albert · BTCIQ HuCentAI Quant</p><p className="text-[10px] text-slate-500">Market mentor & sounding board · live dashboard + web · Gemini 3.1 Pro</p></div>
           <span className="ml-auto flex items-center gap-1 text-[10px] font-bold text-emerald-400"><span className="h-2 w-2 rounded-full bg-emerald-400" />LIVE</span>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
@@ -1817,8 +1824,8 @@ function AskQuantSection({ d }) {
             <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
               <img src="/albert.png" alt="Albert" className="h-20 w-20 rounded-full object-cover ring-2 ring-sky-500/40" />
               <div>
-                <p className="font-semibold text-slate-200">Hi, I’m Albert — ask me anything about the market</p>
-                <p className="mt-1 max-w-sm text-xs text-slate-500">I only use the live numbers on this dashboard — score, regime, forecasts, news, policy and cycle. I won’t invent data.</p>
+                <p className="font-semibold text-slate-200">Hi, I’m Albert — your market mentor & sounding board</p>
+                <p className="mt-1 max-w-sm text-xs text-slate-500">I blend the live dashboard (score, regime, forecasts, flows) with 100+ years of market wisdom and live web search for macro, cycles and strategy. I’ll give you the candid read — never invent dashboard numbers.</p>
               </div>
               <div className="flex max-w-lg flex-wrap justify-center gap-2">
                 {suggestions.map((s, i) => (
@@ -1870,7 +1877,7 @@ function AskQuantSection({ d }) {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
               rows={1}
-              placeholder="Ask Albert about the score, forecasts, news impact, risks…"
+              placeholder="Ask Albert about strategy, macro drivers, cycle history, entries/exits, risk…"
               className="max-h-32 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-sky-500/50 focus:outline-none"
             />
             <Button onClick={() => send()} disabled={loading || !input.trim() || rateSecondsLeft > 0} className="gap-1.5 bg-sky-500 hover:bg-sky-400"><Send className="h-4 w-4" />Send</Button>

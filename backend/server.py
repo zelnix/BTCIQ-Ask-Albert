@@ -49,7 +49,7 @@ from config import (
     bitmark_col, smart_alerts_col, audit_col, insights_col, compare_col, coin_dash_col,
     coin_news_col, coin_dom_col, markets_col, analogs_col, glassnode_col,
     onchain_col, lev_col, misc_col, usage_col, etf_col, whale_col, whale_hist_col, whale_tx_col,
-    GLASSNODE_API_KEY, ADMIN_PASSCODE, EMERGENT_LLM_KEY, GEMINI_MODEL, CHAT_MODEL,
+    GLASSNODE_API_KEY, ADMIN_PASSCODE, EMERGENT_LLM_KEY, GEMINI_MODEL, CHAT_MODEL, ALBERT_CHAT_MODEL,
     RESEND_API_KEY, RESEND_FROM, DIGEST_TZ, DIGEST_HOUR, DIGEST_MINUTE,
     email_recipients_col, email_log_col, email_settings_col,
     PUBLIC_BASE_URL, UNSUB_SECRET, WEEKLY_HOUR, WEEKLY_MINUTE, regime_col,
@@ -57,6 +57,7 @@ from config import (
 from email_service import send_email, resend_configured
 import regime_engine
 import quant_validation
+import drift_monitor
 
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
 _forecast_trigger = {'reason': None}
@@ -3322,16 +3323,46 @@ def get_whale_tx_feed(refresh=False):
 
 
 CHAT_SYSTEM = (
-    "You are 'Albert', the friendly HuCentAI Quant analyst built into the BTCIQ Bitcoin dashboard "
-    "(powered by BitCentAI, a Bitcoin-Centred Intelligence Engine). You have a warm, witty, "
-    "professor-like personality — think a sharp, approachable Einstein of Bitcoin markets — but you "
-    "stay rigorous and never over-promise. If someone asks who you are, say you are Albert, the BTCIQ "
-    "HuCentAI Quant. Answer the user's question using ONLY the LIVE DASHBOARD DATA provided below. If any "
-    "data source is unavailable or marked 'no data'/'inactive', explicitly say 'no [X] data available' "
-    "(e.g. 'no ETF data available', 'no liquidation data available') rather than guessing — never invent, "
-    "infer or estimate numbers, prices or events for anything shown as unavailable. Speak in clear, plain English and be concise (usually under 130 words). "
-    "Always frame predictions as probabilities/odds, not certainties, and never give definitive buy/sell "
-    "financial advice. You may explain what the numbers mean and why the engine leans a certain way.\n\n"
+    "You are 'Albert', an elite Quant Analyst and Senior Market Strategist built into the BTCIQ "
+    "dashboard (powered by BitCentAI, a Bitcoin-Centred Intelligence Engine). You embody over a "
+    "century of aggregated market wisdom — from classic tape reading and commodities to equities, "
+    "macro credit cycles and digital assets. You are a warm, witty, professor-like companion (think a "
+    "sharp, approachable Einstein of markets) AND an honest, battle-tested trading mentor, risk manager "
+    "and sounding board. If someone asks who you are, say you are Albert, the BTCIQ HuCentAI Quant.\n\n"
+    "### PRIMARY DIRECTIVES\n"
+    "1. CANDID SOUNDING BOARD: Give unvarnished, data-driven critiques of trading ideas. Constructively "
+    "challenge hype, FOMO, over-leverage and confirmation bias — never feed euphoria or panic.\n"
+    "2. HOLISTIC MARKET SCOPE: You are free to discuss macroeconomics (Fed liquidity, DXY, bond yields, "
+    "CPI/rates), institutional flows (spot ETF inflows/outflows), crypto market structure and "
+    "microstructure, on-chain structure, historical cycles & power-law/halving models, cross-asset "
+    "correlations (S&P 500, gold, DXY, yields), other tickers (ETH, SOL, total market cap) and general "
+    "trading/technical-analysis theory — alongside the BTCIQ dashboard scores.\n"
+    "3. STRATEGY MENTORSHIP: Coach on BOTH structural investing (systematic DCA, multi-year halving-cycle "
+    "timing, MVRV Z-Score / Mayer Multiple / 200-week SMA / Realized Price, portfolio rebalancing) and "
+    "tactical swing trading (market-structure breaks, support/resistance flips, liquidity sweeps, "
+    "Volume Profile, RSI/MACD divergence, funding-rate flushes).\n\n"
+    "### EXECUTION & SIGNALS FRAMEWORK\n"
+    "- Accumulation / Buy signals: confluence of high-timeframe structural support, deep-value cycle "
+    "metrics (MVRV Z-Score, Mayer Multiple, Realized Price bottoms), spot-volume absorption, and flushed "
+    "or deeply negative funding.\n"
+    "- Distribution / Sell signals: parabolic blow-off volume, multi-timeframe bearish divergence "
+    "(RSI/MACD lower highs vs. price higher highs), overextended RSI (>80), extreme positive perpetual "
+    "funding, retail euphoria, and heavy institutional net outflows.\n"
+    "- Risk first, returns second: always emphasise capital preservation, predefined invalidation levels, "
+    "position sizing (~1-2% account risk per tactical setup) and asymmetric risk-reward (aim >= 1:2.5).\n\n"
+    "### GROUNDING & TOOLS\n"
+    "- The LIVE DASHBOARD DATA below is your primary source. When it contains a number, cite THAT exact "
+    "number and never fabricate, infer or estimate dashboard values shown as 'no data'/'inactive' — say "
+    "'no [X] data available' instead.\n"
+    "- You have a LIVE WEB SEARCH tool. Use it for anything current or external to the dashboard — latest "
+    "macro prints (CPI, FOMC), breaking crypto news, ETF flow headlines, prices of other assets, "
+    "historical context. Cite the source and date for time-sensitive external facts, and cross-check "
+    "market-moving claims against primary sources (central banks, exchanges, filings).\n\n"
+    "### STYLE\n"
+    "- Candid, measured, analytical and grounded. Cut through marketing hype. Speak in odds, invalidation "
+    "thresholds and risk-reward ratios rather than guarantees. Always frame views as probabilities/"
+    "scenarios, not certainties. Educate, but never give personalised buy/sell financial advice. Keep "
+    "answers focused and conversational (usually under ~180 words unless the user asks for depth).\n\n"
     "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
 )
 
@@ -3392,7 +3423,70 @@ def build_chat_context(symbol='BTC'):
         L.append(f"News briefing: bias {b.get('bias')}, {b.get('total')} stories, {b.get('major_stories')} high-impact. Top tailwind: {b.get('top_tailwind')}. Top risk: {b.get('top_risk')}.")
         for c in sorted(news.get('cards', []), key=lambda z: -z.get('impact', 0))[:3]:
             L.append(f"News [impact {c.get('impact')}]: {c.get('title')} — {(c.get('ai') or {}).get('direction')}.")
+    if sym == 'BTC':
+        feeds = _global_market_feeds()
+        if feeds:
+            L.append(feeds)
     return "\n".join(L)
+
+
+def _global_market_feeds():
+    """Compact block of ALWAYS-ON live feeds (ETF flows, derivatives, on-chain,
+    cross-asset, sentiment) so Albert has this context on every screen and stops
+    saying 'no data' when the data actually exists. Every branch is guarded."""
+    L = ['GLOBAL MARKET FEEDS (live, cite exact numbers when present):']
+    # --- Spot ETF net flows ---
+    try:
+        ef = get_etf_flows() or {}
+        daily = ef.get('daily') or []
+        totals = [x.get('total') for x in daily if x.get('total') is not None]
+        if totals:
+            L.append(f"- US spot BTC ETF net flow: 1d ${round(totals[0])}M, 7d ${round(sum(totals[:7]))}M, cumulative since launch ${round((ef.get('cum_total') or 0))}M.")
+    except Exception:  # noqa
+        pass
+    # --- Derivatives: funding / OI / positioning ---
+    try:
+        d = get_leverage('4H') or {}
+        oi = d.get('open_interest') or {}
+        fu = d.get('funding') or {}
+        sm = d.get('summary') or {}
+        parts = []
+        if fu:
+            parts.append(f"funding {fu.get('rate')}% ({fu.get('direction')}, bias {fu.get('bias')})")
+        if oi:
+            parts.append(f"open interest {_fmt_usd(oi.get('value_usd'))} ({oi.get('state')}, {oi.get('change_tf_pct')}% this TF)")
+        if sm:
+            parts.append(f"leverage pressure {sm.get('pressure')} ({sm.get('pressure_score')}/100)")
+        if parts:
+            L.append('- Derivatives (OKX 4H): ' + ', '.join(parts) + '.')
+    except Exception:  # noqa
+        pass
+    # --- On-chain structure (institutional + smart-money panels) ---
+    try:
+        panels = get_onchain_panels('BTC') or {}
+        for key, tag in (('smart_money', 'Smart money'), ('institutional', 'Institutional')):
+            panel = panels.get(key) or {}
+            mets = panel.get('metrics') or []
+            picked = [m for m in mets if m.get('value') not in (None, 'n/a', '')][:4]
+            if picked:
+                L.append(f"- {tag} on-chain: " + '; '.join(f"{m.get('name')} {m.get('value')} [{m.get('signal')}]" for m in picked) + '.')
+    except Exception:  # noqa
+        pass
+    # --- Cross-asset context ---
+    try:
+        xa = _misc_get('cross_asset', 15 * 60, _compute_cross_asset) or {}
+        if xa.get('btc_dominance'):
+            L.append(f"- Cross-asset: BTC dominance {xa.get('btc_dominance')}%, ETH/BTC {xa.get('eth_btc')}, total mcap ${round((xa.get('total_market_cap_usd') or 0)/1e9)}B, regime {xa.get('regime')}.")
+    except Exception:  # noqa
+        pass
+    # --- Sentiment ---
+    try:
+        fg = _misc_get('fear_greed', 30 * 60, compute_fear_greed) or {}
+        if fg.get('value') is not None:
+            L.append(f"- Fear & Greed: {fg.get('value')} ({fg.get('label')}); 1w ago {fg.get('week_ago')}, 1m ago {fg.get('month_ago')}.")
+    except Exception:  # noqa
+        pass
+    return ('\n'.join(L)) if len(L) > 1 else ''
 
 
 # =====================================================================
@@ -4599,6 +4693,45 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
 
+    # --- Pillar 2: Feature Drift Monitoring & Model-Failover Circuit Breaker ---
+    drift = None
+    try:
+        live_feats_map = {c: float(feats[c]) for c in FEATURE_COLS if c in feats}
+        drift = drift_monitor.assess(
+            X, FEATURE_COLS, feature_meta=FEATURE_META,
+            data_health=data_health, live_feats=live_feats_map,
+            ml_signal=('UP' if pred == 1 else 'DOWN'), ml_confidence=confidence)
+        if drift and drift.get('circuit_breaker') and decision is not None:
+            # Downgrade conviction toward neutral and switch to the conservative
+            # rule-based trend model as the effective directional call.
+            ov = decision.get('overall_score')
+            if ov is not None:
+                decision['overall_score_pre_breaker'] = ov
+                decision['overall_score'] = max(0, min(100, int(round(50 + (ov - 50) * 0.5))))
+                decision['label'] = _quant_score_label(decision['overall_score'])
+            decision['circuit_breaker'] = {
+                'active': True,
+                'model_mode': 'rule_based',
+                'confidence_level': 'Low',
+                'reasons': drift.get('reasons'),
+                'fallback_signal': drift.get('fallback_signal'),
+                'max_psi': drift.get('max_psi'),
+                'data_completeness_pct': drift.get('data_completeness_pct'),
+            }
+            decision['confidence_level'] = 'Low'
+        elif decision is not None:
+            decision['confidence_level'] = (drift or {}).get('confidence_level', 'Normal')
+            decision['circuit_breaker'] = {'active': False,
+                                           'model_mode': 'ml',
+                                           'confidence_level': (drift or {}).get('confidence_level', 'Normal')}
+        # Edge-triggered admin email (reuses the Resend recipient pipeline, 24h cooldown).
+        try:
+            check_drift_circuit_alert(drift)
+        except Exception:  # noqa
+            traceback.print_exc()
+    except Exception:  # noqa
+        traceback.print_exc()
+
     # --- BitMarkAI prediction core (1W–5Y, per-horizon weighting, triggers) ---
     bitmark = None
     try:
@@ -4645,6 +4778,7 @@ def compute():
         'factors': quant['factors'],
         'decision': decision,        'news_forecast_link': news_forecast_link,
         'regime_analysis': regime_analysis,
+        'drift': drift,
         'quant_validation': quant_val,
         'data_health': data_health,
         'event_calendar': event_calendar,
@@ -4950,6 +5084,21 @@ def quant_validation_endpoint():
         traceback.print_exc()
         return {'status': 'error'}
 
+
+
+@app.get('/api/v1/drift')
+def drift_endpoint():
+    """Latest Feature-Drift Circuit Breaker assessment: PSI/KS per feature, data
+    completeness, breaker status, and the rule-based fallback signal."""
+    try:
+        run = runs_col.find_one(sort=[('created_at', -1)])
+        d = (run or {}).get('drift')
+        if d:
+            return {'status': 'ready', **d}
+        return {'status': 'computing'}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
 
 
 @app.get('/api/v1/forecast/regime')
@@ -5991,6 +6140,72 @@ def check_model_decay_alert(quant_val):
         return {'ok': False, 'error': str(e)}
 
 
+def check_drift_circuit_alert(drift):
+    """Edge-triggered admin email when the Feature-Drift Circuit Breaker trips
+    (stable/watch -> breaker transition). 24h cooldown so a flapping regime can't
+    spam. Reuses the Resend recipient pipeline. Never raises."""
+    try:
+        if not drift:
+            return {'ok': False, 'reason': 'no drift assessment'}
+        active = bool(drift.get('circuit_breaker'))
+        prev = misc_col.find_one({'_id': 'drift_alert_state'}) or {}
+        was_active = bool(prev.get('active'))
+        last_sent = prev.get('last_sent_at')
+        cooldown_ok = True
+        if last_sent:
+            try:
+                elapsed = (datetime.datetime.utcnow()
+                           - datetime.datetime.fromisoformat(last_sent)).total_seconds()
+                cooldown_ok = elapsed >= 24 * 3600
+            except Exception:  # noqa
+                cooldown_ok = True
+        misc_col.update_one({'_id': 'drift_alert_state'},
+                            {'$set': {'active': active, 'max_psi': drift.get('max_psi'),
+                                      'completeness': drift.get('data_completeness_pct'),
+                                      'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+        if not (active and not was_active):
+            return {'ok': True, 'sent': 0, 'active': active}
+        if not cooldown_ok:
+            return {'ok': True, 'sent': 0, 'active': active, 'reason': 'cooldown (24h)'}
+        if not resend_configured():
+            return {'ok': False, 'error': 'resend not configured'}
+        recips = [r.get('email') for r in _recipient_list() if r.get('email')]
+        if not recips:
+            return {'ok': False, 'error': 'no recipients'}
+        reasons = '<br>'.join('• ' + r for r in (drift.get('reasons') or [])) or 'Distribution shift / feed gap.'
+        fb = drift.get('fallback_signal') or {}
+        subject = '🛑 BTCIQ circuit breaker tripped — model reverted to rule-based'
+        html = (f"<div style='font-family:system-ui,sans-serif;color:#0f172a'>"
+                f"<h2 style='margin:0 0 8px'>Feature-drift circuit breaker</h2>"
+                f"<p>The ML model tripped its safety breaker and BTCIQ has fallen back to a "
+                f"<b>conservative rule-based trend model</b>. Model confidence is downgraded to "
+                f"<b>Low</b> on the dashboard.</p>"
+                f"<p><b>Why:</b><br>{reasons}</p>"
+                f"<p><b>Fallback call:</b> {fb.get('signal')} ({fb.get('confidence')}% — {fb.get('basis')})</p>"
+                f"<p style='color:#64748b;font-size:12px'>Sent automatically by BTCIQ. Auto-recovers when "
+                f"feature distributions normalise (PSI &lt; 0.25) and feeds are healthy.</p></div>")
+        text = (f"BTCIQ circuit breaker tripped. Reverted to rule-based trend model; confidence downgraded to Low. "
+                f"Reasons: {' | '.join(drift.get('reasons') or [])}. Fallback: {fb.get('signal')} ({fb.get('confidence')}%).")
+        result = _send_to_recipients(recips, subject, html, text)
+        if result.get('ok'):
+            misc_col.update_one({'_id': 'drift_alert_state'},
+                                {'$set': {'last_sent_at': datetime.datetime.utcnow().isoformat()}},
+                                upsert=True)
+        try:
+            email_log_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
+                                      'kind': 'drift_circuit_breaker', 'recipients': len(recips),
+                                      'max_psi': drift.get('max_psi'),
+                                      'completeness': drift.get('data_completeness_pct'),
+                                      'ok': result.get('ok'), 'resend_id': result.get('id'),
+                                      'error': result.get('error')})
+        except Exception:  # noqa
+            pass
+        return {**result, 'sent': 1 if result.get('ok') else 0}
+    except Exception as e:  # noqa
+        traceback.print_exc()
+        return {'ok': False, 'error': str(e)}
+
+
 def send_instant_alerts_bg():
     """Email brand-new high/critical alerts (last 45 min) once each. Idempotent per alert id."""
     try:
@@ -6449,14 +6664,31 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
                      + f"Question: {message}")
         chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'askquant-{session_id}',
                         system_message=CHAT_SYSTEM.format(ctx=ctx))
-                .with_model('gemini', CHAT_MODEL)
-                .with_params(temperature=0.2, max_tokens=6000))
-        reply = asyncio.run(chat.send_message(UserMessage(text=user_text)))
-        text = (getattr(reply, 'text', None) or str(reply)).strip()
+                .with_model('gemini', ALBERT_CHAT_MODEL)
+                .with_params(temperature=0.35, max_tokens=6000))
+        used_model = ALBERT_CHAT_MODEL
+        text = ''
+        try:
+            # Primary path: mentor model + native Google Search grounding (live web).
+            reply = asyncio.run(chat.with_tools([{'googleSearch': {}}])
+                                .send_message_with_tools(UserMessage(text=user_text)))
+            text = (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '').strip()
+        except Exception as tool_ex:  # noqa
+            traceback.print_exc()
+            text = ''
+        if not text:
+            # Fallback: plain completion (no web tool) so chat never hard-fails.
+            chat2 = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'askquant-{session_id}',
+                             system_message=CHAT_SYSTEM.format(ctx=ctx))
+                     .with_model('gemini', CHAT_MODEL)
+                     .with_params(temperature=0.35, max_tokens=6000))
+            reply2 = asyncio.run(chat2.send_message(UserMessage(text=user_text)))
+            text = (getattr(reply2, 'text', None) or str(reply2)).strip()
+            used_model = CHAT_MODEL
         chat_col.insert_one({'_id': str(uuid.uuid4()), 'session_id': session_id,
-                             'user': message, 'assistant': text, 'model': CHAT_MODEL,
+                             'user': message, 'assistant': text, 'model': used_model,
                              'created_at': datetime.datetime.utcnow().isoformat()})
-        return {'session_id': session_id, 'text': text, 'model': CHAT_MODEL}
+        return {'session_id': session_id, 'text': text, 'model': used_model}
     except Exception as ex:  # noqa
         traceback.print_exc()
         return {'error': 'chat_failed',
