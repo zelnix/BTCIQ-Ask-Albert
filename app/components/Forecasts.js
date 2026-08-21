@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Check, Newspaper, Target, TrendingDown, TrendingUp, X, RefreshCw, Sparkles } from 'lucide-react';
+import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -142,6 +143,91 @@ function ForecastCard({ f }) {
   );
 }
 
+function ProjectionChart({ d }) {
+  const [showCone, setShowCone] = React.useState(true);
+  const [showPivots, setShowPivots] = React.useState(true);
+  const [showBasis, setShowBasis] = React.useState(true);
+
+  const last = d.last_close;
+  const hist = (d.performance || []).slice(-60).map((p, i, arr) => ({ x: i - (arr.length - 1), price: p.btcPrice, label: p.date }));
+  if (hist.length) hist[hist.length - 1] = { ...hist[hist.length - 1], cone: [last, last], base: last };
+  const fcs = (d.forecasts || []).slice().sort((a, b) => (a.days || 0) - (b.days || 0));
+  const fc = fcs.map((f) => {
+    const lo = f.conformal?.lower ?? f.bear;
+    const hi = f.conformal?.upper ?? f.bull;
+    return { x: f.days || 1, base: f.base, cone: showCone ? [lo, hi] : undefined, label: f.horizon };
+  });
+  const data = [...hist, ...fc];
+  const cb = d.cost_basis || {};
+  const fmtK = (v) => (v == null ? '' : `$${(v / 1000).toFixed(1)}k`);
+
+  const Chip = ({ on, set, color, children }) => (
+    <button onClick={() => set(!on)} className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors ${on ? `${color} text-white` : 'border-slate-700 bg-slate-800/50 text-slate-400'}`}>{children}</button>
+  );
+
+  return (
+    <Card className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-100">
+          <Target className="h-4 w-4 text-sky-400" />Projection & Overlays
+          <InfoTip below text="Recent price with the forward 90% conformal price corridor (shaded), Albert's take-profit (bull) & invalidation pivots, and volume-weighted short/long-term holder cost-basis proxies. Toggle each overlay on/off." />
+        </h3>
+        <div className="ml-auto flex flex-wrap gap-1.5">
+          <Chip on={showCone} set={setShowCone} color="border-sky-500/50 bg-sky-500/70">Conformal cone</Chip>
+          <Chip on={showPivots} set={setShowPivots} color="border-emerald-500/50 bg-emerald-500/70">TP / invalidation</Chip>
+          <Chip on={showBasis} set={setShowBasis} color="border-amber-500/50 bg-amber-500/70">Cost basis</Chip>
+        </div>
+      </div>
+      <div className="h-72 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+            <XAxis dataKey="x" type="number" domain={['dataMin', 'dataMax']} tick={{ fill: '#64748b', fontSize: 10 }}
+              tickFormatter={(v) => (v === 0 ? 'now' : v > 0 ? `+${v}d` : `${v}d`)} />
+            <YAxis domain={['auto', 'auto']} tick={{ fill: '#64748b', fontSize: 10 }} tickFormatter={fmtK} width={48} />
+            <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 12 }}
+              labelFormatter={(v) => (v === 0 ? 'Now' : v > 0 ? `+${v} days (forecast)` : `${-v} days ago`)}
+              formatter={(val, name) => {
+                if (name === 'cone' && Array.isArray(val)) return [`${fmtUsd(val[0])} – ${fmtUsd(val[1])}`, '90% corridor'];
+                if (val == null) return [null, null];
+                return [fmtUsd(val), name === 'price' ? 'Price' : name === 'base' ? 'Projected base' : name];
+              }} />
+            {showCone && <Area dataKey="cone" stroke="#38bdf8" strokeOpacity={0.4} fill="#38bdf8" fillOpacity={0.14} connectNulls isAnimationActive={false} />}
+            <Line dataKey="price" stroke="#e2e8f0" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
+            {showCone && <Line dataKey="base" stroke="#38bdf8" strokeWidth={1.5} strokeDasharray="5 4" dot={{ r: 2 }} connectNulls isAnimationActive={false} />}
+            <ReferenceLine x={0} stroke="#475569" strokeDasharray="2 2" />
+            {showBasis && cb.sth != null && (
+              <ReferenceLine y={cb.sth} stroke="#f59e0b" strokeDasharray="6 3"
+                label={{ value: `STH basis ${fmtK(cb.sth)}`, position: 'insideLeft', fill: '#f59e0b', fontSize: 10 }} />
+            )}
+            {showBasis && cb.lth != null && (
+              <ReferenceLine y={cb.lth} stroke="#a78bfa" strokeDasharray="6 3"
+                label={{ value: `LTH basis ${fmtK(cb.lth)}`, position: 'insideLeft', fill: '#a78bfa', fontSize: 10 }} />
+            )}
+            {showPivots && fcs.map((f) => (
+              <ReferenceLine key={`inv-${f.horizon}`} y={f.invalidation} stroke="#f87171" strokeOpacity={0.55} strokeDasharray="3 3"
+                label={{ value: `${f.horizon} invalidation`, position: 'right', fill: '#f87171', fontSize: 9 }} />
+            ))}
+            {showPivots && fcs.map((f) => (
+              <ReferenceLine key={`tp-${f.horizon}`} y={f.bull} stroke="#34d399" strokeOpacity={0.45} strokeDasharray="3 3"
+                label={{ value: `${f.horizon} TP`, position: 'right', fill: '#34d399', fontSize: 9 }} />
+            ))}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-500">
+        <span className="flex items-center gap-1"><span className="h-2 w-4 rounded-sm bg-sky-400/40" />90% conformal corridor</span>
+        <span className="flex items-center gap-1"><span className="h-0.5 w-4" style={{ borderTop: '2px dashed #34d399' }} />take-profit (bull)</span>
+        <span className="flex items-center gap-1"><span className="h-0.5 w-4" style={{ borderTop: '2px dashed #f87171' }} />invalidation</span>
+        {showBasis && (cb.sth != null || cb.lth != null) && (
+          <span className="ml-auto italic">Cost basis = volume-weighted price proxy ({cb.sth_window}d / {cb.lth_window}d), not on-chain realized price.</span>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+
 function ForecastsSection({ d }) {
   return (
     <div className="space-y-5">
@@ -150,6 +236,7 @@ function ForecastsSection({ d }) {
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         {(d.forecasts || []).map((f) => <ForecastCard key={f.horizon} f={f} />)}
       </div>
+      <ProjectionChart d={d} />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
           <div className="mb-3 flex items-center gap-2">

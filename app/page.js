@@ -2103,6 +2103,43 @@ function AdminSection() {
 
 /* ---------------- Leverage screen ---------------- */
 
+function BreakerDemoCard({ passcode }) {
+  const [active, setActive] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState('');
+  React.useEffect(() => {
+    fetch(`${API_BASE}/v1/admin/simulate-shock`).then((r) => r.json()).then((j) => setActive(!!j.active)).catch(() => {});
+  }, []);
+  const toggle = async () => {
+    const pc = passcode || (typeof window !== 'undefined' ? window.localStorage.getItem('btciq_admin_passcode') : '') || '';
+    setBusy(true); setErr('');
+    try {
+      const r = await fetch(`${API_BASE}/v1/admin/simulate-shock`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode: pc, on: !active }),
+      });
+      if (r.status === 401) { setErr('Enter & save the admin passcode above first.'); setBusy(false); return; }
+      const j = await r.json();
+      setActive(!!j.active);
+    } catch (e) { setErr('Network error — please try again.'); } finally { setBusy(false); }
+  };
+  return (
+    <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+      <h3 className="mb-1 flex items-center gap-2 font-semibold text-white"><Zap className="h-4 w-4 text-red-400" />Circuit-breaker demo</h3>
+      <p className="mb-3 text-xs text-slate-500">Admin-only: simulate a market shock to force the feature-drift circuit breaker to trip live — the dashboard immediately shows <span className="font-semibold text-slate-300">Low</span> model confidence and a rule-based fallback. No recompute needed. Toggle off to restore the real model state.</p>
+      <div className="flex flex-wrap items-center gap-3">
+        <button onClick={toggle} disabled={busy || active === null}
+          className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${active ? 'bg-red-500' : 'bg-slate-700'} disabled:opacity-50`}>
+          <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${active ? 'translate-x-6' : 'translate-x-1'}`} />
+        </button>
+        <span className={`text-sm font-semibold ${active ? 'text-red-300' : 'text-slate-400'}`}>{active === null ? 'Loading…' : active ? 'Simulated shock ACTIVE' : 'Off (real model state)'}</span>
+      </div>
+      {active && <p className="mt-3 flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-200"><ShieldAlert className="h-3.5 w-3.5 shrink-0" />Breaker tripped (simulated). See the hero chip and the Performance → Feature-Drift Circuit Breaker panel.</p>}
+      {err && <p className="mt-2 text-[11px] font-semibold text-amber-400">{err}</p>}
+    </Card>
+  );
+}
+
 function SettingsSection({ onManualRun }) {
   const symbol = React.useContext(SymbolContext);
   const [pass, setPass] = React.useState('');
@@ -2124,6 +2161,7 @@ function SettingsSection({ onManualRun }) {
           {saved && <span className="text-xs font-semibold text-emerald-400">Saved ✓</span>}
         </div>
       </Card>
+      <BreakerDemoCard passcode={pass} />
       <EmailAlerts />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-2 font-semibold text-white">About & compliance</h3>

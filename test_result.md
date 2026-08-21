@@ -362,6 +362,35 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive validation via external URL. News→Forecast Link fully validated: (1) dashboard.news_forecast_link present with all required fields (signal, bias, n_high_impact, n_stories, top_driver, top_driver_dir, model_bias, applied) ✅ (2) signal=-0.163 (valid range -1..1) ✅ (3) applied list has 2 items (24H, 7D) with required fields (horizon, base, adj, delta) ✅ (4) 24H forecast has news_link object with all required fields (applied, higher_base, higher_adj, lower_base, lower_adj, delta, bias, signal, top_driver) ✅ (5) 24H has higher_adj=45.0 and lower_adj=55.0 fields ✅ (6) 24H adjustment logic validated: higher_adj ≈ clamp(higher_base + delta) = clamp(46.1 + -1.1) = 45.0 ✅ (7) 24H lower_adj ≈ 100 - higher_adj (55.0 ≈ 100 - 45.0) ✅ (8) 7D forecast has news_link with all required fields ✅ (9) 7D has higher_adj=47.2 and lower_adj=52.8 ✅ (10) 7D adjustment logic validated: higher_adj ≈ clamp(47.9 + -0.7) = 47.2 ✅ (11) 7D lower_adj ≈ 100 - higher_adj ✅ (12) 30D forecast correctly does NOT have news_link ✅ All math and logic checks passed."
+  - task: "Pillar 4 — Proactive Alerts (Liquidation Cascade + Basis Reclaim) + cost_basis/leverage_snapshot in dashboard"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW (Pillar 4). compute() adds cost_basis {sth,lth,sth_window:155,lth_window:365,price,sth_reclaimed,lth_reclaimed,method} — keyless volume-weighted price PROXIES for holder cost basis (NOT on-chain realized price, labeled as such) — and leverage_snapshot {funding_rate,funding_bias,funding_dir,oi_change_tf_pct,oi_state,squeeze} from cached OKX get_leverage('4H'). compute_smart_alerts() adds 'Liquidation Risk' (squeeze long/short_risk>=70 AND oi_change_tf_pct>=15) and 'Basis Reclaim' (spot crossing STH cost-basis proxy between runs) alerts — high severity so they auto-email via existing Resend instant pipeline. Regime-Flip message enriched with conviction+weighting. VERIFIED MANUALLY (calm data: no false cascade; synthetic deterministic call fired both alerts correctly). NEEDS RETEST via external URL: GET /api/v1/dashboard returns cost_basis + leverage_snapshot. Do NOT POST /api/v1/refresh; do NOT hit /email endpoints. Event-driven alerts may show none now (expected)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Pillar 4 validation via external URL (https://quant-features.preview.emergentagent.com/api). All validations passed (3/3 tests). TEST 1 - GET /api/v1/dashboard: HTTP 200 ✅, status='ready' ✅, cost_basis block present with all required fields (sth, lth, sth_window, lth_window, price, sth_reclaimed, lth_reclaimed, method) ✅, sth_window=155 ✅, lth_window=365 ✅, all fields have correct types (numbers for sth/lth/price, booleans for reclaimed flags, string for method) ✅, REPORTED VALUES: STH (155-day)=$68,428.46, LTH (365-day)=$81,116.11, Current Price=$75,491.80, STH Reclaimed=True, LTH Reclaimed=False, Method='Volume-weighted average price proxy (keyless) for short/long-term holder cost basis.' ✅, leverage_snapshot block present with all required fields (funding_rate, oi_change_tf_pct, oi_state, squeeze) ✅, all fields have correct types (numbers for funding_rate/oi_change_tf_pct, string for oi_state, object for squeeze) ✅, squeeze object has long_risk and short_risk (both numbers) ✅, REPORTED VALUES: Funding Rate=0.003770%, OI Change=2.70%, OI State='Rising', Squeeze Long Risk=27, Squeeze Short Risk=26 ✅. TEST 2 - Regression: GET /api/v1/health returns HTTP 200 ✅, GET /api/v1/alerts?symbol=BTC returns HTTP 200 with alerts array (24 items) ✅. All validations passed. Data is REAL (OKX derivatives data for leverage_snapshot, volume-weighted price proxy for cost_basis). No HTTP 500 errors. Feature is fully functional and production-ready. No /api/v1/refresh or /email endpoints triggered (as instructed)."
+  - task: "Breaker Demo Toggle (POST/GET /api/v1/admin/simulate-shock) — admin sim overrides drift+decision live"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW. GET /api/v1/admin/simulate-shock -> {active}. POST {passcode,on} requires ADMIN_PASSCODE (000000) else 401; sets misc 'breaker_sim'. When active, GET /api/v1/drift & /api/v1/dashboard apply a live override (no recompute): circuit_breaker=true/status='breaker'/confidence_level='Low'/model_mode='rule_based'/simulated=true and decision.overall_score shrunk toward 50 with decision.circuit_breaker.active=true. VERIFIED MANUALLY (ON->tripped, OFF->restored, bad passcode->401). NEEDS RETEST via external URL: POST on=true passcode 000000 -> active:true and drift/dashboard show tripped+simulated; POST on=false -> restored; wrong passcode -> 401. IMPORTANT: leave sim OFF at end."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Breaker Demo Toggle round-trip validation via external URL (https://quant-features.preview.emergentagent.com/api). All validations passed (6/6 steps + final verification). STEP a) POST /api/v1/admin/simulate-shock with {passcode:'000000', on:true}: HTTP 200 ✅, response {status:'ok', active:true} ✅. STEP b) GET /api/v1/drift (verify breaker active): HTTP 200 ✅, circuit_breaker=true ✅, status='breaker' ✅, simulated=true ✅, confidence_level='Low' ✅. STEP c) GET /api/v1/dashboard (verify decision reflects breaker): HTTP 200 ✅, decision.confidence_level='Low' ✅, decision.circuit_breaker.active=true ✅. STEP d) POST /api/v1/admin/simulate-shock with {passcode:'000000', on:false}: HTTP 200 ✅, response {status:'ok', active:false} ✅. STEP e) GET /api/v1/drift (verify breaker restored): HTTP 200 ✅, circuit_breaker=false (restored) ✅. STEP f) POST /api/v1/admin/simulate-shock with {passcode:'wrong', on:true}: HTTP 401 ✅ (wrong passcode correctly rejected). FINAL VERIFICATION: circuit_breaker=false (OFF) ✅. All validations passed. Toggle correctly overrides drift and decision endpoints when active, restores when deactivated, and rejects unauthorized access. Feature is fully functional and production-ready. Toggle left in OFF state as required."
+
   - task: "Pillar 2 — Feature Drift Circuit Breaker (GET /api/v1/drift + dashboard.drift + decision.circuit_breaker/confidence_level)"
     implemented: true
     working: true
@@ -657,7 +686,8 @@ frontend:
 
 test_plan:
   current_focus:
-    - "Pillar 2 — Feature Drift Circuit Breaker (GET /api/v1/drift + dashboard.decision.circuit_breaker/confidence_level)"
+    - "Pillar 4 — Proactive Alerts + cost_basis/leverage_snapshot (GET /api/v1/dashboard)"
+    - "Breaker Demo Toggle (POST/GET /api/v1/admin/simulate-shock)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -665,16 +695,24 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      RETEST FOCUS — Pillar 2 Feature-Drift Circuit Breaker (backend only). Test via external base URL + /api prefix.
-      Do NOT POST /api/v1/refresh (expensive) and do NOT hit any /email endpoints.
-      1) GET /api/v1/drift -> HTTP 200, status='ready'. Keys: circuit_breaker(bool), status in {stable,watch,breaker},
-         confidence_level in {Normal,Guarded,Low}, max_psi(num), per_feature(list of 8; each feature/label/psi/
-         ks_stat/ks_significant/status), ood{robust_z(map),mahalanobis(num),maha_threshold(num),extreme_features(list)},
-         data_completeness_pct(num), completeness_min(=95), model_mode in {ml,rule_based}, ml_signal, effective_signal,
-         fallback_signal{signal,confidence,basis}, reasons(list). Under NORMAL conditions expect circuit_breaker=false
-         and effective_signal==ml_signal.
-      2) GET /api/v1/dashboard -> HTTP 200; decision has confidence_level and circuit_breaker{active,model_mode};
-         top-level 'drift' block present and mirrors /api/v1/drift.
+      RETEST FOCUS — Pillar 4 alerts + Breaker Demo Toggle (backend only). Test via external base URL + /api prefix.
+      Do NOT POST /api/v1/refresh (expensive) and do NOT hit any /email endpoints. LEAVE the sim toggle OFF at the end.
+      1) GET /api/v1/dashboard -> HTTP 200 and contains:
+         - cost_basis {sth(num), lth(num), sth_window(=155), lth_window(=365), price(num), sth_reclaimed(bool),
+           lth_reclaimed(bool), method(str)}
+         - leverage_snapshot {funding_rate, oi_change_tf_pct, oi_state, squeeze{long_risk,short_risk,...}}
+      2) Breaker Demo Toggle:
+         a) POST /api/v1/admin/simulate-shock {"passcode":"000000","on":true} -> {status:'ok', active:true}
+         b) GET /api/v1/drift -> circuit_breaker=true, status='breaker', simulated=true, confidence_level='Low'
+         c) GET /api/v1/dashboard -> decision.circuit_breaker.active=true, decision.confidence_level='Low'
+         d) POST {"passcode":"000000","on":false} -> {active:false}; GET /api/v1/drift back to circuit_breaker=false
+         e) POST {"passcode":"wrong","on":true} -> HTTP 401
+      3) Regression: GET /api/v1/health, /api/v1/alerts?symbol=BTC still HTTP 200.
+      Report cost_basis/leverage_snapshot values and confirm the toggle round-trips and ends OFF.
+
+    -agent: "main"
+    -message: |
+      (Previous focus) Pillar 2 Feature-Drift Circuit Breaker — PASSED.
       3) Regression: GET /api/v1/validation and GET /api/v1/scorecard still HTTP 200 status='ready'.
       Report circuit_breaker value, confidence_level, mahalanobis vs threshold, and any 500s.
 
@@ -6020,3 +6058,43 @@ agent_communication:
       - ✅ /api/v1/health: HTTP 200
       
       NO CRITICAL ISSUES FOUND. All validations passed. Data is REAL (CQR conformal prediction + Triple-Barrier labels + PurgedKFold validation + Ensemble weighting + Coverage alerts + Self-healing corridor widen). Feature is fully functional and production-ready. No email endpoints triggered (as instructed).
+    -agent: "testing"
+    -comment: |
+      ✅ PILLAR 4 (PROACTIVE ALERTS DATA) + BREAKER DEMO TOGGLE VALIDATION COMPLETE - ALL TESTS PASSED (3/3)
+      
+      Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (pillar4_breaker_test.py).
+      
+      RESULTS SUMMARY:
+      1. ✅ GET /api/v1/dashboard (Pillar 4 - cost_basis + leverage_snapshot) → All validations passed
+      2. ✅ Breaker Demo Toggle Round-Trip (6 steps + final verification) → All validations passed
+      3. ✅ Regression Tests (health + alerts) → All passed
+      
+      CRITICAL VALIDATIONS CONFIRMED:
+      
+      PILLAR 4 - COST_BASIS BLOCK (NEW):
+      - ✅ cost_basis block present with all required fields (sth, lth, sth_window, lth_window, price, sth_reclaimed, lth_reclaimed, method)
+      - ✅ sth_window = 155 (as specified)
+      - ✅ lth_window = 365 (as specified)
+      - ✅ All fields have correct types (numbers for sth/lth/price, booleans for reclaimed flags, string for method)
+      - ✅ REPORTED VALUES: STH=$68,428.46, LTH=$81,116.11, Price=$75,491.80, STH Reclaimed=True, LTH Reclaimed=False
+      
+      PILLAR 4 - LEVERAGE_SNAPSHOT BLOCK (NEW):
+      - ✅ leverage_snapshot block present with all required fields (funding_rate, oi_change_tf_pct, oi_state, squeeze)
+      - ✅ All fields have correct types (numbers for funding_rate/oi_change_tf_pct, string for oi_state, object for squeeze)
+      - ✅ squeeze object has long_risk and short_risk (both numbers)
+      - ✅ REPORTED VALUES: Funding Rate=0.003770%, OI Change=2.70%, OI State='Rising', Long Risk=27, Short Risk=26
+      
+      BREAKER DEMO TOGGLE (NEW):
+      - ✅ POST /api/v1/admin/simulate-shock (ON): HTTP 200, {status:'ok', active:true}
+      - ✅ GET /api/v1/drift (breaker active): circuit_breaker=true, status='breaker', simulated=true, confidence_level='Low'
+      - ✅ GET /api/v1/dashboard (decision reflects breaker): decision.confidence_level='Low', decision.circuit_breaker.active=true
+      - ✅ POST /api/v1/admin/simulate-shock (OFF): HTTP 200, {status:'ok', active:false}
+      - ✅ GET /api/v1/drift (breaker restored): circuit_breaker=false
+      - ✅ POST /api/v1/admin/simulate-shock (wrong passcode): HTTP 401 (correctly rejected)
+      - ✅ FINAL VERIFICATION: circuit_breaker=false (toggle left in OFF state as required)
+      
+      REGRESSION TESTS:
+      - ✅ GET /api/v1/health: HTTP 200
+      - ✅ GET /api/v1/alerts?symbol=BTC: HTTP 200 with alerts array (24 items)
+      
+      NO CRITICAL ISSUES FOUND. All validations passed. Data is REAL (OKX derivatives data for leverage_snapshot, volume-weighted price proxy for cost_basis). Toggle correctly overrides drift and decision endpoints when active, restores when deactivated, and rejects unauthorized access. Features are fully functional and production-ready. No /api/v1/refresh or /email endpoints triggered (as instructed). Toggle left in OFF state as required.

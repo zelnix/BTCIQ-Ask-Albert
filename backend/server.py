@@ -4091,8 +4091,11 @@ def compute_smart_alerts(doc, prev_doc):
     cur_regime = (doc.get('regime') or {}).get('regime')
     prev_regime = (prev.get('regime') or {}).get('regime')
     if cur_regime and prev_regime and cur_regime != prev_regime:
+        _conv = (doc.get('decision') or {}).get('overall_score')
+        _wmode = (doc.get('decision') or {}).get('weights_mode')
         fire('Regime', 'high', f'Regime shift → {cur_regime}',
-             f'Market regime changed from "{prev_regime}" to "{cur_regime}". '
+             f'Market regime changed from "{prev_regime}" to "{cur_regime}" '
+             f'(conviction {_conv}/100, {_wmode or "dynamic"} signal weighting). '
              f'{(doc.get("regime") or {}).get("behavior", "")}', cur_regime)
 
     # 2) Decision label change (overall market state)
@@ -4138,6 +4141,46 @@ def compute_smart_alerts(doc, prev_doc):
              f'Large move: {"+" if dc > 0 else ""}{dc}% in 24h',
              f'Bitcoin moved {"+" if dc > 0 else ""}{dc}% over the last daily candle to '
              f'{fmt_usd_srv(doc.get("last_close"))} — elevated volatility.', f'move_{round(dc)}')
+
+    # 7) Liquidation cascade risk — derivatives over-leveraged (funding + OI expansion)
+    try:
+        lev = doc.get('leverage_snapshot') or {}
+        sq = lev.get('squeeze') or {}
+        long_risk = sq.get('long_risk')
+        short_risk = sq.get('short_risk')
+        oi_chg = lev.get('oi_change_tf_pct')
+        fr = lev.get('funding_rate')
+        cb_sth = (doc.get('cost_basis') or {}).get('sth')
+        if long_risk is not None and oi_chg is not None and long_risk >= 70 and oi_chg >= 15:
+            fire('Liquidation Risk', 'high', 'Elevated long-squeeze / cascade risk',
+                 f'Derivatives look over-leveraged long: squeeze risk {long_risk}/100, open interest '
+                 f'+{oi_chg}% this window, funding {fr}%. A flush toward the short-term cost basis '
+                 f'(~{fmt_usd_srv(cb_sth)}) could cascade.', f'cascade_long_{round(long_risk)}_{round(oi_chg)}')
+        elif short_risk is not None and oi_chg is not None and short_risk >= 70 and oi_chg >= 15:
+            fire('Liquidation Risk', 'high', 'Elevated short-squeeze / cascade risk',
+                 f'Derivatives look over-leveraged short: squeeze risk {short_risk}/100, open interest '
+                 f'+{oi_chg}% this window, funding {fr}%. A rapid move higher could force shorts to cover.',
+                 f'cascade_short_{round(short_risk)}_{round(oi_chg)}')
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    # 8) Pivotal basis reclaim — spot crossing the short-term-holder cost basis
+    try:
+        cb = doc.get('cost_basis') or {}
+        sth = cb.get('sth')
+        cur_px = doc.get('last_close')
+        prev_px = prev.get('last_close')
+        if sth and cur_px is not None and prev_px is not None:
+            if prev_px < sth <= cur_px:
+                fire('Basis Reclaim', 'high', 'Short-term cost basis reclaimed',
+                     f'Spot closed at {fmt_usd_srv(cur_px)}, reclaiming the short-term holder cost basis '
+                     f'(~{fmt_usd_srv(sth)}). Intraday bull scenario activated.', f'sth_reclaim_up_{round(sth)}')
+            elif prev_px >= sth > cur_px:
+                fire('Basis Reclaim', 'warning', 'Short-term cost basis lost',
+                     f'Spot closed at {fmt_usd_srv(cur_px)}, losing the short-term holder cost basis '
+                     f'(~{fmt_usd_srv(sth)}). Momentum turning cautious.', f'sth_lose_{round(sth)}')
+    except Exception:  # noqa
+        traceback.print_exc()
 
     return {'fired': fired, 'n_fired': len(fired)}
 
@@ -4744,6 +4787,43 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
 
+    # --- Pillar 4/5: holder cost-basis proxies + derivatives snapshot ---
+    # (keyless, transparent proxies used for chart overlays + proactive alerts)
+    cost_basis = None
+    try:
+        def _vwap(dd, nbars):
+            tail = dd.tail(nbars)
+            vol = tail['volume'].astype(float)
+            tot = float(vol.sum())
+            if tot > 0:
+                return float((tail['close'].astype(float) * vol).sum() / tot)
+            return float(tail['close'].astype(float).mean())
+        sth = round(_vwap(df, 155), 2)
+        lth = round(_vwap(df, 365), 2)
+        cost_basis = {
+            'sth': sth, 'lth': lth, 'sth_window': 155, 'lth_window': 365,
+            'price': round(last_close, 2),
+            'sth_reclaimed': bool(last_close >= sth),
+            'lth_reclaimed': bool(last_close >= lth),
+            'method': 'Volume-weighted average price proxy (keyless) for short/long-term holder cost basis.',
+        }
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    leverage_snapshot = None
+    try:
+        lv = get_leverage('4H') or {}
+        leverage_snapshot = {
+            'funding_rate': (lv.get('funding') or {}).get('rate'),
+            'funding_bias': (lv.get('funding') or {}).get('bias'),
+            'funding_dir': (lv.get('funding') or {}).get('direction'),
+            'oi_change_tf_pct': (lv.get('open_interest') or {}).get('change_tf_pct'),
+            'oi_state': (lv.get('open_interest') or {}).get('state'),
+            'squeeze': lv.get('squeeze'),
+        }
+    except Exception:  # noqa
+        traceback.print_exc()
+
     doc = {
         'id': str(uuid.uuid4()),
         'created_at': datetime.datetime.utcnow().isoformat(),
@@ -4779,6 +4859,8 @@ def compute():
         'decision': decision,        'news_forecast_link': news_forecast_link,
         'regime_analysis': regime_analysis,
         'drift': drift,
+        'cost_basis': cost_basis,
+        'leverage_snapshot': leverage_snapshot,
         'quant_validation': quant_val,
         'data_health': data_health,
         'event_calendar': event_calendar,
@@ -4979,6 +5061,13 @@ def dashboard(symbol: str = 'BTC'):
             doc['institutional'] = _live['institutional']
     except Exception:  # noqa
         traceback.print_exc()
+    # Admin demo: force the circuit breaker to trip live (no recompute needed).
+    if _breaker_sim_active():
+        try:
+            doc['drift'] = _sim_trip_drift(doc.get('drift') or {})
+            doc['decision'] = _sim_trip_decision(doc.get('decision') or {}, doc['drift'])
+        except Exception:  # noqa
+            traceback.print_exc()
     return {'status': 'ready', 'compute_status': _state['status'], **doc}
 
 
@@ -5086,6 +5175,66 @@ def quant_validation_endpoint():
 
 
 
+_SIM_REASONS = ['Simulated market shock (admin demo) — live inputs forced out-of-distribution.']
+
+
+def _breaker_sim_active():
+    try:
+        return bool((misc_col.find_one({'_id': 'breaker_sim'}) or {}).get('active'))
+    except Exception:  # noqa
+        return False
+
+
+def _sim_trip_drift(drift):
+    """Force a drift dict into a tripped/rule-based state for the admin demo."""
+    d = dict(drift) if isinstance(drift, dict) else {}
+    fb = d.get('fallback_signal') or {'signal': 'DOWN', 'confidence': 55,
+                                       'basis': 'EMA 9/21 trend + MACD confirmation (conservative rule-based)'}
+    d.update({
+        'status': 'breaker', 'circuit_breaker': True, 'confidence_level': 'Low',
+        'model_mode': 'rule_based', 'simulated': True, 'reasons': list(_SIM_REASONS),
+        'fallback_signal': fb, 'effective_signal': fb.get('signal'),
+        'effective_confidence': fb.get('confidence'),
+        'headline': 'Circuit breaker TRIPPED (SIMULATED) — reverted to conservative rule-based trend model.',
+    })
+    return d
+
+
+def _sim_trip_decision(decision, drift):
+    if not isinstance(decision, dict):
+        return decision
+    ov = decision.get('overall_score')
+    if ov is not None and decision.get('overall_score_pre_breaker') is None:
+        decision['overall_score_pre_breaker'] = ov
+        decision['overall_score'] = max(0, min(100, int(round(50 + (ov - 50) * 0.5))))
+        decision['label'] = _quant_score_label(decision['overall_score'])
+    decision['confidence_level'] = 'Low'
+    decision['circuit_breaker'] = {'active': True, 'model_mode': 'rule_based',
+                                   'confidence_level': 'Low', 'reasons': list(_SIM_REASONS),
+                                   'fallback_signal': (drift or {}).get('fallback_signal'),
+                                   'simulated': True}
+    return decision
+
+
+@app.get('/api/v1/admin/simulate-shock')
+def simulate_shock_state():
+    return {'active': _breaker_sim_active()}
+
+
+@app.post('/api/v1/admin/simulate-shock')
+def simulate_shock(request: Request, payload: dict = Body(default={})):
+    """Admin-only demo switch: force the drift circuit breaker to trip live in the UI
+    (without an expensive recompute). Toggle off to restore the real model state."""
+    if not _passcode_ok((payload or {}).get('passcode', '')):
+        return JSONResponse(status_code=401, content={
+            'status': 'unauthorized', 'message': 'A valid admin passcode is required.'})
+    on = bool(payload.get('on'))
+    misc_col.update_one({'_id': 'breaker_sim'},
+                        {'$set': {'active': on, 'updated_at': datetime.datetime.utcnow().isoformat()}},
+                        upsert=True)
+    return {'status': 'ok', 'active': on}
+
+
 @app.get('/api/v1/drift')
 def drift_endpoint():
     """Latest Feature-Drift Circuit Breaker assessment: PSI/KS per feature, data
@@ -5094,6 +5243,8 @@ def drift_endpoint():
         run = runs_col.find_one(sort=[('created_at', -1)])
         d = (run or {}).get('drift')
         if d:
+            if _breaker_sim_active():
+                d = _sim_trip_drift(d)
             return {'status': 'ready', **d}
         return {'status': 'computing'}
     except Exception:  # noqa
