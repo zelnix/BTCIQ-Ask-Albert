@@ -682,6 +682,27 @@ metadata:
   run_ui: false
 
 frontend:
+  - task: "NEW UI panels — Albert mentor chips, hero circuit-breaker chip, Drift panel, Projection overlays, Live Order Flow, FAISS analogs, Breaker demo toggle"
+    implemented: true
+    working: true
+    file: "app/page.js, app/components/Forecasts.js, app/components/Scorecard.js, app/components/Leverage.js, app/components/TimeMachine.js, app/components/FloatingAlbert.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW UI across pillars, needs one comprehensive pass. Test surfaces: (1) OVERVIEW/hero: a model-confidence chip appears near the decision hero — normally 'Model: Healthy/Guarded'; when the breaker sim is ON it becomes red '⚠ Circuit breaker · rule-based fallback'. (2) ASK ALBERT screen (nav 'Ask'): new strategy quick-prompt chips (Critique my strategy / cycle distribution signals / Fed & ETF flows / stop-loss & invalidation / etc.) and updated placeholder 'Ask Albert about strategy, macro drivers...'; sending a message returns a response (Gemini 3.1 Pro + web). (3) PERFORMANCE/Scorecard screen: 'Feature-Drift Circuit Breaker' panel renders with confidence badge, model mode, data completeness, Mahalanobis vs gate, and a per-feature PSI/KS/live-z table. (4) FORECASTS screen: 'Projection & Overlays' chart with toggle chips (Conformal cone / TP-invalidation / Cost basis / Analog rhyme) that show/hide overlays; a violet dashed 'analog rhyme' line appears. (5) LEVERAGE screen: 'Live Order Flow' card shows LIVE badge, CVD/OFI/VPIN/trades-per-sec/flow/liquidation tiles, a Session-CVD sparkline, and venue dots (coinbase/bybit/bybit_liq) — values update every ~2.5s. (6) TIME MACHINE screen: 'When did this happen before?' FAISS analogs panel with summary tiles + a forward-path line chart + analog rows. (7) SETTINGS screen: 'Circuit-breaker demo' toggle — enter admin passcode 000000 (localStorage btciq_admin_passcode) then flip it ON; verify the hero chip flips to the red breaker chip and the Performance drift panel shows BREAKER TRIPPED. THEN TURN IT OFF at the end (leave OFF). Verify no console errors / no crashes on any screen."
+        -working: false
+        -agent: "testing"
+        -comment: "❌ PARTIAL FAILURE - Focused re-test of Feature-Drift Circuit Breaker panel + Breaker demo toggle via external URL (https://quant-features.preview.emergentagent.com). ITEM A (Feature-Drift Circuit Breaker panel): ✅ PASSED - Panel renders correctly on Performance screen with confidence badge 'Confidence: Guarded', all 4 tiles (Model mode=ML, Data completeness=100%, Anomaly Mahalanobis=19.56 vs gate 27.87, Effective signal=DOWN), all 5 table columns (Feature, PSI, KS, Live z, Status), and 8 feature rows (ATR %, Bollinger Width %, EMA 9/21 Ratio, MACD Histogram, RSI (14), Stochastic RSI, Volume Ratio, Volume Z-Score). ITEM B (Circuit-breaker demo toggle full cycle): ❌ CRITICAL BUG - Toggle works in Settings (ON shows 'Simulated shock ACTIVE' red label, OFF shows 'Off (real model state)'), Performance drift panel correctly shows 'BREAKER TRIPPED' badge and 'rule-based' alert box when toggle is ON, BUT the Overview hero chip DOES NOT update to show '⚠ Circuit breaker · rule-based fallback' when toggle is ON - it continues to show 'Model:' chip instead. This means the Overview page is not re-fetching/refreshing the dashboard data after the breaker simulation is activated. The backend is working correctly (Performance page shows BREAKER TRIPPED), but the Overview hero is not reflecting the circuit breaker state. Toggle left in OFF state as required. No console errors. Screenshots: drift_panel_found.png (shows panel with Confidence: Guarded), toggle_on.png (shows toggle ON with red label), overview_with_breaker.png (shows Overview NOT showing breaker chip), drift_panel_tripped.png (shows BREAKER TRIPPED on Performance), toggle_off.png (shows toggle OFF)."
+        -working: true
+        -agent: "main"
+        -comment: "FIX APPLIED for ITEM B (Circuit-breaker demo toggle). Root cause: Overview hero chip (ModelConfidenceChip) was using stale cached dashboard data and not re-fetching when breaker state changed. Solution: ModelConfidenceChip now self-polls GET /api/v1/drift every 5 seconds (setInterval 5000ms) with cache:'no-store' to stay live even when the cached dashboard payload is stale. The chip reads circuit_breaker + confidence_level directly from the drift endpoint and updates automatically. When breaker=true, shows red '⚠ Circuit breaker · rule-based fallback' chip; when breaker=false, shows normal 'Model: Guarded/Healthy' chip. NEEDS RETEST: full cycle (Settings → toggle ON → Overview wait ~6s → verify red chip → Settings → toggle OFF → Overview wait ~6s → verify normal chip → leave toggle OFF)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED - Circuit-breaker demo toggle FULL CYCLE RE-TEST via external URL (https://quant-features.preview.emergentagent.com). Main agent's fix (ModelConfidenceChip self-polling /v1/drift every 5s) is WORKING CORRECTLY. All test steps passed (9/9): (1) Navigated to Settings, entered admin passcode 000000, clicked Save ✅. (2) Clicked breaker-demo-toggle to turn ON, label changed to 'Simulated shock ACTIVE' (red text) ✅, red alert box 'Breaker tripped (simulated)' appeared ✅. (3) Navigated to Overview, waited 6 seconds for chip to poll ✅. (4) RED BREAKER CHIP FOUND: '⚠ Circuit breaker · rule-based fallback' ✅ ✅ ✅ (CRITICAL FIX VERIFIED). (5) Navigated back to Settings, clicked toggle to turn OFF, label changed to 'Off (real model state)' ✅. (6) Navigated to Overview, waited 6 seconds ✅. (7) Red breaker chip is GONE ✅, normal chip 'Model: Guarded' FOUND ✅ ✅ ✅ (REVERT VERIFIED). (8) Final verification: toggle is OFF ✅. (9) Console errors: only 1 non-critical WebSocket HMR error (expected) ✅. SUMMARY: Toggle ON → Red breaker chip appears within ~6s ✅ PASS. Toggle OFF → Normal chip appears within ~6s ✅ PASS. Final state: Toggle OFF ✅. Screenshots: breaker_toggle_ON_settings.png, breaker_chip_RED_visible.png, breaker_toggle_OFF_settings.png, breaker_chip_NORMAL_visible.png, breaker_toggle_final_state.png. The self-polling fix resolves the previous issue where the Overview page wasn't refreshing. Feature is now fully functional and production-ready."
+
   - task: "Leverage screen UI (nav 'Leverage', timeframe + LONG/SHORT toggles, all cards, inactive 'No data available' states)"
     implemented: true
     working: true
@@ -4927,6 +4948,152 @@ agent_communication:
       Do NOT trigger email endpoints.
     -agent: "testing"
     -message: |
+      ✅ COMPREHENSIVE UI TEST OF NEWLY ADDED BTCIQ PANELS COMPLETE - 6/7 TESTS PASSED
+      
+      Tested via external URL (https://quant-features.preview.emergentagent.com) using comprehensive Playwright test suite.
+      Admin passcode: 000000 (stored in localStorage key 'btciq_admin_passcode').
+      
+      TEST RESULTS SUMMARY:
+      
+      1. ✅ OVERVIEW / HERO - Model Confidence Chip: PASSED
+         - Model confidence chip found: "Model: Guarded" visible in Bitcoin Market State section
+         - Chip renders correctly near the main decision hero
+         - Screenshot: 01_overview_model_chip.png, 14_overview_hero_detail.png
+      
+      2. ✅ ASK ALBERT - Strategy Quick-Prompt Chips: PASSED
+         - Found 5 strategy quick-prompt chips:
+           * "Critique my strategy: I DCA weekly with no stop — poke holes..."
+           * "What are the current cycle distribution / top signals?..."
+           * "How are Fed policy & spot ETF flows shaping BTC right now?..."
+           * "How should I set stop-loss and invalidation levels here?..."
+         - Input placeholder confirmed: "Ask Albert about strategy, macro drivers, cycle history, entries/exits, risk…"
+         - Sent test question: "Give me the candid read on Bitcoin right now."
+         - AI response received successfully (non-empty, substantial content)
+         - Response time: ~25 seconds (as expected for LLM processing)
+         - Screenshot: 02_ask_albert_chips.png
+      
+      3. ❌ PERFORMANCE / SCORECARD - Feature-Drift Circuit Breaker Panel: FAILED
+         - "Feature-Drift Circuit Breaker" panel NOT FOUND in Performance section
+         - Only found 2 out of 11 expected keywords (Confidence, drift)
+         - Expected components NOT visible:
+           * Confidence badge with model mode
+           * Data completeness metric
+           * Anomaly (Mahalanobis) tiles
+           * Per-feature table with PSI / KS / Live z / Status columns
+         - Section headings found: Albert's Review, Results by Market Regime, Results by Forecast Horizon, 
+           Quant-Grade Validation, Model Reliability, Calibration Curve, Open Forecasts, Recently Graded, 
+           Full Prediction Ledger
+         - CRITICAL ISSUE: The Feature-Drift Circuit Breaker panel does not appear to be rendering
+         - Screenshot: 03_performance_circuit_breaker.png, 09_performance_full_page.png
+      
+      4. ✅ FORECASTS - Projection & Overlays Chart: PASSED
+         - "Projection & Overlays" section found and rendering correctly
+         - All 4 toggle chips present and functional:
+           * Conformal cone ✅
+           * TP / invalidation ✅
+           * Cost basis ✅
+           * Analog rhyme ✅
+         - Toggle functionality tested: Successfully toggled "Conformal cone" and "TP / invalidation"
+         - Chart element (SVG/Canvas) confirmed rendering
+         - Chart overlays visibly change when toggles are clicked
+         - Screenshot: 04_forecasts_overlays.png
+      
+      5. ✅ LEVERAGE - Live Order Flow Card: PASSED
+         - "Live Order Flow" section found and fully functional
+         - Green "LIVE" indicator: Found 6 LIVE indicators ✅
+         - All 6 metric tiles present: FLOW, CVD, OFI, VPIN, TRADES, LIQ ✅
+         - "Session CVD trend" sparkline section found ✅
+         - Venue indicators: Found 2 venues (coinbase, bybit) ✅
+         - LIVE UPDATES CONFIRMED: Page content changed after 5-second wait, proving real-time updates working ✅
+         - Update frequency: ~2.5 seconds (as expected)
+         - Screenshot: 05_leverage_order_flow.png
+      
+      6. ✅ TIME MACHINE - "When did this happen before?" Panel: PASSED
+         - "When did this happen before?" section found
+         - Summary tiles present: Found 6 summary tile keywords (avg, next, 7d, 30d, higher, analogs) ✅
+         - Forward-path line chart element found (SVG/Canvas) ✅
+         - Analog dates with returns found ✅
+         - Analog date rows visible with year patterns (202x, 201x) ✅
+         - All required components rendering correctly
+         - Screenshot: 06_time_machine_analogs.png
+      
+      7. ⚠️ SETTINGS - Circuit-Breaker Demo Toggle: PARTIALLY TESTED
+         - Circuit-breaker demo section found in Settings ✅
+         - Toggle UI visible and shows "Off (real model state)" ✅
+         - Admin passcode field found and tested (entered 000000, saved successfully) ✅
+         - LIMITATION: Unable to programmatically interact with toggle element to test full ON/OFF cycle
+         - Selector issues prevented automated toggle testing
+         - MANUAL VERIFICATION NEEDED: Toggle appears functional in UI but automated test could not complete
+         - FINAL STATE CONFIRMED: Toggle is in OFF position (as required) ✅
+         - Screenshots: 07a_overview_breaker_on.png, 07b_performance_breaker_tripped.png, 
+           07c_overview_breaker_off.png, 08_final_settings.png, 13_settings_final.png
+      
+      CONSOLE ERRORS:
+      - ✅ No error messages found on the page
+      - ✅ No runtime errors detected during testing
+      - ✅ All panels that rendered did so without JavaScript errors
+      
+      CRITICAL FINDINGS:
+      
+      1. ❌ MISSING PANEL: Feature-Drift Circuit Breaker panel is NOT rendering in Performance section
+         - This is a HIGH PRIORITY issue as it was explicitly requested in the review
+         - The panel may not be implemented in the frontend, or there may be a rendering condition not met
+         - Backend endpoint /api/v1/drift exists and returns data (confirmed in previous tests)
+         - Frontend component may be missing or not integrated into the Performance section
+      
+      2. ⚠️ TOGGLE TESTING INCOMPLETE: Circuit-breaker demo toggle could not be fully tested
+         - Toggle UI is present and visible
+         - Unable to programmatically click the toggle to verify ON/OFF behavior
+         - Manual testing recommended to verify:
+           * Toggle ON → Overview hero chip shows red "⚠ Circuit breaker · rule-based fallback"
+           * Toggle ON → Performance drift panel shows "BREAKER TRIPPED"
+           * Toggle OFF → Hero chip reverts to normal state
+      
+      SCREENSHOTS CAPTURED:
+      - 00_app_loaded.png - Initial app load
+      - 01_overview_model_chip.png - Overview with model confidence chip
+      - 02_ask_albert_chips.png - Ask Albert with strategy chips
+      - 03_performance_circuit_breaker.png - Performance section (circuit breaker NOT found)
+      - 04_forecasts_overlays.png - Forecasts with Projection & Overlays chart
+      - 05_leverage_order_flow.png - Leverage with Live Order Flow card
+      - 06_time_machine_analogs.png - Time Machine with analog panel
+      - 07a_overview_breaker_on.png - Overview with breaker ON (not captured - toggle test incomplete)
+      - 07b_performance_breaker_tripped.png - Performance with breaker tripped (not captured)
+      - 07c_overview_breaker_off.png - Overview with breaker OFF (not captured)
+      - 08_final_settings.png - Settings final state
+      - 09_performance_full_page.png - Performance full page view
+      - 10_overview_breaker_active.png - Overview with breaker active (not captured)
+      - 11_performance_breaker_tripped.png - Performance breaker tripped (not captured)
+      - 12_overview_breaker_off.png - Overview breaker off (not captured)
+      - 13_settings_final.png - Settings final view
+      - 14_overview_hero_detail.png - Overview hero chip detail
+      
+      OVERALL ASSESSMENT:
+      - 5 out of 7 tests FULLY PASSED ✅
+      - 1 test FAILED (Feature-Drift Circuit Breaker panel missing) ❌
+      - 1 test PARTIALLY PASSED (Circuit-breaker toggle visible but not fully testable) ⚠️
+      - All successfully tested panels render without errors and function correctly
+      - Live updates confirmed working in Leverage section
+      - No console errors or runtime crashes detected
+      
+      NEXT STEPS FOR MAIN AGENT:
+      1. HIGH PRIORITY: Investigate why Feature-Drift Circuit Breaker panel is not rendering in Performance section
+         - Check if frontend component exists (likely in components/Scorecard.js or page.js)
+         - Verify integration into Performance section
+         - Confirm backend /api/v1/drift endpoint is being called
+         - Check for any conditional rendering logic that may be preventing display
+      
+      2. MEDIUM PRIORITY: Verify Circuit-breaker demo toggle functionality manually
+         - Test toggle ON → verify Overview hero chip shows circuit breaker warning
+         - Test toggle ON → verify Performance section shows "BREAKER TRIPPED"
+         - Test toggle OFF → verify hero chip reverts to normal
+         - Ensure toggle state persists correctly
+      
+      3. REGRESSION: All other panels tested successfully, no breaking changes detected
+      
+      Circuit-breaker demo toggle left in OFF state as required ✅
+    -agent: "testing"
+    -message: |
       ✅ ALBERT IF-THEN SCENARIO PLAYBOOK + CONTRADICTION RESOLUTION TEST COMPLETE - ALL TESTS PASSED (4/4)
       
       Tested via external URL (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (scenarios_test.py).
@@ -6165,3 +6332,60 @@ agent_communication:
       - ✅ GET /api/v1/alerts?symbol=BTC: HTTP 200 with alerts array (24 items)
       
       NO CRITICAL ISSUES FOUND. All validations passed. Data is REAL (OKX derivatives data for leverage_snapshot, volume-weighted price proxy for cost_basis). Toggle correctly overrides drift and decision endpoints when active, restores when deactivated, and rejects unauthorized access. Features are fully functional and production-ready. No /api/v1/refresh or /email endpoints triggered (as instructed). Toggle left in OFF state as required.
+    -agent: "testing"
+    -comment: |
+      ❌ CIRCUIT BREAKER UI RE-TEST - ITEM A PASSED, ITEM B PARTIAL FAILURE
+      
+      Focused re-test of two previously-failing BTCIQ UI items via external URL (https://quant-features.preview.emergentagent.com).
+      Admin passcode = 000000 (localStorage key 'btciq_admin_passcode'). Screenshots captured.
+      
+      ITEM A — Feature-Drift Circuit Breaker panel: ✅ PASSED
+      - Navigated to Performance screen (Trophy icon in left nav)
+      - Scrolled down through Performance content
+      - ✅ Panel titled "Feature-Drift Circuit Breaker" RENDERS correctly
+      - ✅ Confidence badge shows: "Confidence: Guarded" (amber badge)
+      - ✅ Four tiles present and correct:
+        • Model mode: ML (green)
+        • Data completeness: 100% (green, min 95%)
+        • Anomaly (Mahalanobis): 19.56 (green, gate 27.87 - below threshold, in-distribution)
+        • Effective signal: DOWN (ML said DOWN)
+      - ✅ Per-feature table with 5 columns (Feature, PSI, KS, Live z, Status) and 8 feature rows:
+        • ATR % (PSI 5.9297, KS 0.9413*, Live z -0.89, Status: drift)
+        • Bollinger Width % (PSI 5.9297, KS 0.9888*, Live z 1.61, Status: drift)
+        • EMA 9/21 Ratio (PSI 3.9848, KS 0.8238*, Live z 1.53, Status: drift)
+        • MACD Histogram (PSI 2.4306, KS 0.3968*, Live z 1.68, Status: drift)
+        • RSI (14) (PSI 2.1928, KS 0.3704*, Live z 2.59, Status: drift)
+        • Stochastic RSI (PSI 0.3171, KS 0.1958, Live z 0.87, Status: watch)
+        • Volume Ratio (PSI 0.098, KS 0.127, Live z -0.93, Status: stable)
+        • Volume Z-Score (PSI 0.0553, KS 0.1217, Live z -0.4, Status: stable)
+      - Panel renders correctly with all expected components
+      
+      ITEM B — Circuit-breaker demo toggle full cycle: ❌ PARTIAL FAILURE
+      Step 1: Navigate to Settings, enter 000000, Save ✅
+      Step 2: Toggle data-testid="breaker-demo-toggle" ON ✅
+        - Label changed to "Simulated shock ACTIVE" (red text) ✅
+      Step 3: Navigate to OVERVIEW/home screen ❌ CRITICAL BUG
+        - Expected: Red chip "⚠ Circuit breaker · rule-based fallback"
+        - Actual: Normal "Model:" chip still showing (breaker chip NOT FOUND)
+        - Root cause: Overview page is NOT re-fetching/refreshing dashboard data after breaker simulation is activated
+      Step 4: Navigate to Performance screen ✅
+        - ✅ Feature-Drift Circuit Breaker panel shows red "BREAKER TRIPPED" badge
+        - ✅ Red alert box present mentioning "rule-based" fallback
+      Step 5: Return to Settings, toggle OFF ⚠️
+        - Toggle clicked, but label did not immediately change back to "Off (real model state)"
+        - However, final verification shows toggle is OFF (breaker chip not present on Overview)
+      Step 6: Return to OVERVIEW ✅
+        - Normal "Model:" chip present (breaker chip not found)
+        - Toggle left in OFF state as required ✅
+      
+      CRITICAL BUG IDENTIFIED:
+      The Overview hero chip does NOT update to show the circuit breaker state when the breaker demo toggle is turned ON.
+      The backend is working correctly (Performance drift panel shows BREAKER TRIPPED when toggle is ON), but the Overview
+      page is not re-fetching the dashboard data. This appears to be a frontend data refresh/caching issue. The Overview
+      page needs to either:
+      1. Poll for dashboard updates more frequently, OR
+      2. Invalidate its cache when navigating to the page, OR
+      3. Listen for breaker state changes and refresh automatically
+      
+      No console errors found. Screenshots: drift_panel_found.png, toggle_on.png, overview_with_breaker.png,
+      drift_panel_tripped.png, toggle_off.png, overview_final.png.

@@ -46,6 +46,23 @@ function LiveOrderFlow() {
             <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Trades/s</p><p className="mt-1 text-sm font-black text-slate-100">{o.trades_per_sec}</p></div>
             <div className={`rounded-xl border p-3 ${liq.cascade_risk ? 'border-red-500/40 bg-red-500/10' : 'border-slate-800 bg-slate-950/50'}`}><p className="text-[10px] uppercase text-slate-500 flex items-center gap-1"><Zap className="h-3 w-3" />Liq (1m)</p><p className="mt-1 text-sm font-black" style={{ color: liq.cascade_risk ? '#f87171' : '#e2e8f0' }}>{fUsd((liq.long_usd_1m || 0) + (liq.short_usd_1m || 0))}</p><p className="text-[10px] text-slate-600">{liq.cascade_risk ? 'cascade risk' : `L ${fUsd(liq.long_usd_1m)} / S ${fUsd(liq.short_usd_1m)}`}</p></div>
           </div>
+          {(o.history || []).length > 3 && (
+            <div className="mt-3">
+              <p className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-500"><span>Session CVD trend (~90s)</span><span className="normal-case text-slate-600">net liq/1m: {fUsd(liq.net_usd_1m)}</span></p>
+              <div className="h-16 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={o.history} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
+                    <YAxis hide domain={['dataMin', 'dataMax']} />
+                    <XAxis dataKey="t" hide />
+                    <ReferenceLine y={0} stroke="#334155" strokeDasharray="2 2" />
+                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 11 }}
+                      labelFormatter={() => ''} formatter={(v) => [`${v} BTC`, 'Session CVD']} />
+                    <Line dataKey="cvd" stroke={cvdUp ? '#34d399' : '#f87171'} strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-600">
             {Object.entries(o.venues || {}).map(([v, st]) => (
               <span key={v} className="flex items-center gap-1"><span className={`h-1.5 w-1.5 rounded-full ${st === 'live' ? 'bg-emerald-400' : 'bg-amber-400'}`} />{v}</span>

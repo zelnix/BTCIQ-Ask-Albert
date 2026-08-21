@@ -4954,6 +4954,9 @@ def _startup():
         # Instant high-severity alert emails — checked every 5 minutes (idempotent per alert).
         scheduler.add_job(send_instant_alerts_bg, 'interval', minutes=5, id='instant_alerts',
                           replace_existing=True, coalesce=True, max_instances=1)
+        # Pillar 4/1: real-time liquidation-cascade watcher on the live WS feed.
+        scheduler.add_job(check_liq_cascade_alert, 'interval', seconds=30, id='liq_cascade',
+                          replace_existing=True, coalesce=True, max_instances=1)
         # Weekly recap — Sundays.
         try:
             scheduler.add_job(send_weekly_recap_bg, 'cron', day_of_week='sun', hour=WEEKLY_HOUR,
@@ -5289,11 +5292,11 @@ def drift_endpoint():
         if d:
             if _breaker_sim_active():
                 d = _sim_trip_drift(d)
-            return {'status': 'ready', **d}
-        return {'status': 'computing'}
+            return {**d, 'ready': True}
+        return {'ready': False, 'status': 'computing'}
     except Exception:  # noqa
         traceback.print_exc()
-        return {'status': 'error'}
+        return {'ready': False, 'status': 'error'}
 
 
 @app.get('/api/v1/forecast/regime')
@@ -6391,6 +6394,70 @@ def check_drift_circuit_alert(drift):
                                       'kind': 'drift_circuit_breaker', 'recipients': len(recips),
                                       'max_psi': drift.get('max_psi'),
                                       'completeness': drift.get('data_completeness_pct'),
+                                      'ok': result.get('ok'), 'resend_id': result.get('id'),
+                                      'error': result.get('error')})
+        except Exception:  # noqa
+            pass
+        return {**result, 'sent': 1 if result.get('ok') else 0}
+    except Exception as e:  # noqa
+        traceback.print_exc()
+        return {'ok': False, 'error': str(e)}
+
+
+def check_liq_cascade_alert():
+    """Real-time liquidation-cascade alert wired to the live WebSocket order-flow
+    feed. Edge-triggered (rising edge only) with a 1h cooldown so a sustained
+    cascade can't spam. Reuses the Resend recipient pipeline. Never raises."""
+    try:
+        snap = orderflow.get_latest() or {}
+        liq = snap.get('liquidations') or {}
+        active = bool(liq.get('cascade_risk'))
+        prev = misc_col.find_one({'_id': 'liq_cascade_state'}) or {}
+        was_active = bool(prev.get('active'))
+        last_sent = prev.get('last_sent_at')
+        cooldown_ok = True
+        if last_sent:
+            try:
+                elapsed = (datetime.datetime.utcnow()
+                           - datetime.datetime.fromisoformat(last_sent)).total_seconds()
+                cooldown_ok = elapsed >= 3600
+            except Exception:  # noqa
+                cooldown_ok = True
+        misc_col.update_one({'_id': 'liq_cascade_state'},
+                            {'$set': {'active': active, 'cascade_10s_usd': liq.get('cascade_10s_usd'),
+                                      'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+        if not (active and not was_active and cooldown_ok):
+            return {'ok': True, 'sent': 0, 'active': active}
+        if not resend_configured():
+            return {'ok': False, 'error': 'resend not configured'}
+        recips = [r.get('email') for r in _recipient_list() if r.get('email')]
+        if not recips:
+            return {'ok': False, 'error': 'no recipients'}
+        long_usd = liq.get('long_usd_1m') or 0
+        short_usd = liq.get('short_usd_1m') or 0
+        dom = 'long' if long_usd >= short_usd else 'short'
+        px = snap.get('last_price')
+        subject = '⚡ BTCIQ real-time liquidation cascade detected'
+        html = (f"<div style='font-family:system-ui,sans-serif;color:#0f172a'>"
+                f"<h2 style='margin:0 0 8px'>Liquidation cascade in progress</h2>"
+                f"<p>The live order-flow feed just detected a rapid liquidation cascade "
+                f"(&gt;${round((liq.get('cascade_10s_usd') or 0)/1e6, 2)}M force-liquidated in ~10s), "
+                f"dominated by <b>{dom}</b> liquidations, with price near "
+                f"<b>${'{:,.0f}'.format(px) if px else 'n/a'}</b>.</p>"
+                f"<p>1-minute totals — longs ${round(long_usd):,}, shorts ${round(short_usd):,}. "
+                f"Expect elevated volatility and slippage.</p>"
+                f"<p style='color:#64748b;font-size:12px'>Sent automatically by BTCIQ (Coinbase + Bybit "
+                f"live streams). 1-hour cooldown between cascade alerts.</p></div>")
+        text = (f"BTCIQ real-time liquidation cascade: >{round((liq.get('cascade_10s_usd') or 0)/1e6, 2)}M in ~10s, "
+                f"dominated by {dom}. Longs ${round(long_usd):,} / shorts ${round(short_usd):,}. Price ~{px}.")
+        result = _send_to_recipients(recips, subject, html, text)
+        if result.get('ok'):
+            misc_col.update_one({'_id': 'liq_cascade_state'},
+                                {'$set': {'last_sent_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+        try:
+            email_log_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
+                                      'kind': 'liq_cascade', 'recipients': len(recips),
+                                      'cascade_10s_usd': liq.get('cascade_10s_usd'),
                                       'ok': result.get('ok'), 'resend_id': result.get('id'),
                                       'error': result.get('error')})
         except Exception:  # noqa

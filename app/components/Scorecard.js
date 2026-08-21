@@ -116,7 +116,7 @@ function DriftMonitorPanel() {
     fetch(`${API_BASE}/v1/drift`, { cache: 'no-store' })
       .then((r) => r.json()).then(setV).catch(() => {});
   }, []);
-  if (!v || v.status !== 'ready') return null;
+  if (!v || !Array.isArray(v.per_feature) || !v.per_feature.length) return null;
 
   const breaker = !!v.circuit_breaker;
   const level = v.confidence_level || 'Normal';

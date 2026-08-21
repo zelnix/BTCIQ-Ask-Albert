@@ -465,6 +465,34 @@ const RISK_TXT = {
   Elevated: 'text-amber-400', High: 'text-orange-400', Extreme: 'text-red-400',
 };
 
+function ModelConfidenceChip({ fallback }) {
+  // Self-fetches /v1/drift (which carries confidence_level + circuit_breaker) and
+  // polls so the chip stays live even when the cached dashboard payload is stale
+  // (e.g. right after the admin breaker-demo toggle flips).
+  const [drift, setDrift] = React.useState(null);
+  React.useEffect(() => {
+    let alive = true;
+    const tick = () => fetch(`${API_BASE}/v1/drift`, { cache: 'no-store' })
+      .then((r) => r.json()).then((j) => { if (alive) setDrift(j); }).catch(() => {});
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  const breaker = drift ? !!drift.circuit_breaker : !!(fallback?.circuit_breaker?.active);
+  const level = drift ? drift.confidence_level : fallback?.confidence_level;
+  if (breaker) {
+    return <span className="rounded-full bg-red-500/15 px-2 py-0.5 font-semibold text-red-300 ring-1 ring-red-500/30">⚠ Circuit breaker · rule-based fallback</span>;
+  }
+  if (level && level !== 'Normal') {
+    return <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-300 ring-1 ring-amber-500/30">Model: {level}</span>;
+  }
+  if (level) {
+    return <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 font-semibold text-emerald-300">Model: Healthy</span>;
+  }
+  return null;
+}
+
+
 function MiniSpark({ points, height = 20, width = 72 }) {
   const vals = (points || []).map((p) => (p && typeof p.dominance === 'number' ? p.dominance : null)).filter((v) => v != null);
   if (vals.length < 2) {
@@ -557,13 +585,7 @@ function MarketStateHero({ d, ticker }) {
         <span className={`rounded-full px-2 py-0.5 font-semibold ${RISK_TXT[riskLevel] || 'text-slate-300'} bg-slate-800/60`}>Risk: {riskLevel}</span>
         {dec.label && <span className="rounded-full bg-slate-800/60 px-2 py-0.5 font-semibold text-slate-300">Decision: {dec.label} ({dec.overall_score}/100)</span>}
         <span className="rounded-full bg-slate-800/60 px-2 py-0.5">Alignment: {dec.alignment || '—'}</span>
-        {dec.circuit_breaker?.active ? (
-          <span title={(dec.circuit_breaker.reasons || []).join(' ')} className="rounded-full bg-red-500/15 px-2 py-0.5 font-semibold text-red-300 ring-1 ring-red-500/30">⚠ Circuit breaker · rule-based fallback</span>
-        ) : dec.confidence_level && dec.confidence_level !== 'Normal' ? (
-          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 font-semibold text-amber-300 ring-1 ring-amber-500/30">Model: {dec.confidence_level}</span>
-        ) : dec.confidence_level ? (
-          <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 font-semibold text-emerald-300">Model: Healthy</span>
-        ) : null}
+        <ModelConfidenceChip fallback={dec} />
         <span className="ml-auto italic">Probability, not certainty — not financial advice.</span>
       </div>
     </Card>
@@ -2128,7 +2150,7 @@ function BreakerDemoCard({ passcode }) {
       <h3 className="mb-1 flex items-center gap-2 font-semibold text-white"><Zap className="h-4 w-4 text-red-400" />Circuit-breaker demo</h3>
       <p className="mb-3 text-xs text-slate-500">Admin-only: simulate a market shock to force the feature-drift circuit breaker to trip live — the dashboard immediately shows <span className="font-semibold text-slate-300">Low</span> model confidence and a rule-based fallback. No recompute needed. Toggle off to restore the real model state.</p>
       <div className="flex flex-wrap items-center gap-3">
-        <button onClick={toggle} disabled={busy || active === null}
+        <button onClick={toggle} disabled={busy || active === null} data-testid="breaker-demo-toggle"
           className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors ${active ? 'bg-red-500' : 'bg-slate-700'} disabled:opacity-50`}>
           <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform ${active ? 'translate-x-6' : 'translate-x-1'}`} />
         </button>

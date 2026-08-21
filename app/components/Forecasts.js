@@ -147,17 +147,32 @@ function ProjectionChart({ d }) {
   const [showCone, setShowCone] = React.useState(true);
   const [showPivots, setShowPivots] = React.useState(true);
   const [showBasis, setShowBasis] = React.useState(true);
+  const [showRhyme, setShowRhyme] = React.useState(true);
+  const [analog, setAnalog] = React.useState(null);
+  React.useEffect(() => {
+    fetch(`${API_BASE}/v1/time-machine/analogs?k=1`, { cache: 'no-store' })
+      .then((r) => r.json()).then((j) => { if (j.status === 'ready' && (j.analogs || []).length) setAnalog(j.analogs[0]); }).catch(() => {});
+  }, []);
 
   const last = d.last_close;
   const hist = (d.performance || []).slice(-60).map((p, i, arr) => ({ x: i - (arr.length - 1), price: p.btcPrice, label: p.date }));
-  if (hist.length) hist[hist.length - 1] = { ...hist[hist.length - 1], cone: [last, last], base: last };
   const fcs = (d.forecasts || []).slice().sort((a, b) => (a.days || 0) - (b.days || 0));
-  const fc = fcs.map((f) => {
+
+  // Merge everything onto a single numeric x-axis (day offset; 0 = now).
+  const rows = new Map();
+  const put = (x, patch) => { rows.set(x, { ...(rows.get(x) || { x }), ...patch }); };
+  hist.forEach((h) => put(h.x, { price: h.price }));
+  put(0, { price: last, base: last, cone: showCone ? [last, last] : undefined, rhyme: last });
+  fcs.forEach((f) => {
     const lo = f.conformal?.lower ?? f.bear;
     const hi = f.conformal?.upper ?? f.bull;
-    return { x: f.days || 1, base: f.base, cone: showCone ? [lo, hi] : undefined, label: f.horizon };
+    put(f.days || 1, { base: f.base, cone: showCone ? [lo, hi] : undefined });
   });
-  const data = [...hist, ...fc];
+  if (analog && showRhyme && analog.path_30d?.length) {
+    const p0 = analog.path_30d[0].close;
+    analog.path_30d.forEach((p) => { if (p0) put(p.d, { rhyme: Math.round(last * (p.close / p0)) }); });
+  }
+  const data = [...rows.values()].sort((a, b) => a.x - b.x);
   const cb = d.cost_basis || {};
   const fmtK = (v) => (v == null ? '' : `$${(v / 1000).toFixed(1)}k`);
 
@@ -170,12 +185,13 @@ function ProjectionChart({ d }) {
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-100">
           <Target className="h-4 w-4 text-sky-400" />Projection & Overlays
-          <InfoTip below text="Recent price with the forward 90% conformal price corridor (shaded), Albert's take-profit (bull) & invalidation pivots, and volume-weighted short/long-term holder cost-basis proxies. Toggle each overlay on/off." />
+          <InfoTip below text="Recent price with the forward 90% conformal price corridor (shaded), Albert's take-profit (bull) & invalidation pivots, volume-weighted short/long-term holder cost-basis proxies, and the closest FAISS historical analog's forward path anchored to today ('rhyme' line). Toggle each overlay." />
         </h3>
         <div className="ml-auto flex flex-wrap gap-1.5">
           <Chip on={showCone} set={setShowCone} color="border-sky-500/50 bg-sky-500/70">Conformal cone</Chip>
           <Chip on={showPivots} set={setShowPivots} color="border-emerald-500/50 bg-emerald-500/70">TP / invalidation</Chip>
           <Chip on={showBasis} set={setShowBasis} color="border-amber-500/50 bg-amber-500/70">Cost basis</Chip>
+          {analog && <Chip on={showRhyme} set={setShowRhyme} color="border-violet-500/50 bg-violet-500/70">Analog rhyme</Chip>}
         </div>
       </div>
       <div className="h-72 w-full">
@@ -190,9 +206,11 @@ function ProjectionChart({ d }) {
               formatter={(val, name) => {
                 if (name === 'cone' && Array.isArray(val)) return [`${fmtUsd(val[0])} – ${fmtUsd(val[1])}`, '90% corridor'];
                 if (val == null) return [null, null];
-                return [fmtUsd(val), name === 'price' ? 'Price' : name === 'base' ? 'Projected base' : name];
+                const lbl = name === 'price' ? 'Price' : name === 'base' ? 'Projected base' : name === 'rhyme' ? 'Analog rhyme' : name;
+                return [fmtUsd(val), lbl];
               }} />
             {showCone && <Area dataKey="cone" stroke="#38bdf8" strokeOpacity={0.4} fill="#38bdf8" fillOpacity={0.14} connectNulls isAnimationActive={false} />}
+            {analog && showRhyme && <Line dataKey="rhyme" stroke="#a78bfa" strokeWidth={1.5} strokeDasharray="4 3" dot={false} connectNulls isAnimationActive={false} />}
             <Line dataKey="price" stroke="#e2e8f0" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
             {showCone && <Line dataKey="base" stroke="#38bdf8" strokeWidth={1.5} strokeDasharray="5 4" dot={{ r: 2 }} connectNulls isAnimationActive={false} />}
             <ReferenceLine x={0} stroke="#475569" strokeDasharray="2 2" />
@@ -219,6 +237,7 @@ function ProjectionChart({ d }) {
         <span className="flex items-center gap-1"><span className="h-2 w-4 rounded-sm bg-sky-400/40" />90% conformal corridor</span>
         <span className="flex items-center gap-1"><span className="h-0.5 w-4" style={{ borderTop: '2px dashed #34d399' }} />take-profit (bull)</span>
         <span className="flex items-center gap-1"><span className="h-0.5 w-4" style={{ borderTop: '2px dashed #f87171' }} />invalidation</span>
+        {analog && showRhyme && <span className="flex items-center gap-1"><span className="h-0.5 w-4" style={{ borderTop: '2px dashed #a78bfa' }} />analog rhyme ({analog.date})</span>}
         {showBasis && (cb.sth != null || cb.lth != null) && (
           <span className="ml-auto italic">Cost basis = volume-weighted price proxy ({cb.sth_window}d / {cb.lth_window}d), not on-chain realized price.</span>
         )}

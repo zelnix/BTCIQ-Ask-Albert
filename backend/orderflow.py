@@ -33,6 +33,7 @@ STREAM_MAXLEN = 100000   # circular Redis stream buffer
 _lock = threading.Lock()
 _trades = deque()        # (ts, price, size_btc, aggressor 'buy'/'sell', venue)
 _liqs = deque()          # (ts, price, notional_usd, side 'long'/'short', venue)
+_hist = deque(maxlen=180)  # per-second rolling samples for the sparkline
 _state = {
     'started': False,
     'venues': {'coinbase': 'connecting', 'bybit': 'connecting', 'bybit_liq': 'connecting'},
@@ -234,6 +235,9 @@ async def _aggregator():
                     'count_1m': len(lw),
                 },
             }
+            _hist.append({'t': int(now), 'cvd': _round(session_cvd, 3),
+                          'liq_net': _round(short_liq - long_liq, 0)})
+            snap['history'] = list(_hist)[-90:]
             _state['snapshot'] = snap
             r = _get_redis()
             if r:
