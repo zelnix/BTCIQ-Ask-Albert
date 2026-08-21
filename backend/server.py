@@ -61,6 +61,7 @@ import quant_validation
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
 _forecast_trigger = {'reason': None}
 _bitmark_last_manual = {'ts': 0.0}
+_CORRIDOR_WIDEN = {}  # horizon label -> q_hat widen factor (self-heals corridors toward 90% coverage)
 
 try:
     from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -1049,11 +1050,16 @@ def _conformal_corridor(Xf, close, lx, h, price, alpha=0.10):
         k = int(np.ceil((len(scores) + 1) * (1 - alpha)))
         k = min(max(k, 1), len(scores))
         q_hat = float(np.sort(scores)[k - 1])
+        # Self-healing: widen the corridor when this horizon's recent coverage dipped below target.
+        _lbl = {1: '24H', 7: '7D', 30: '30D'}.get(h)
+        widen = float(_CORRIDOR_WIDEN.get(_lbl, 1.0)) if _lbl else 1.0
+        widen = max(1.0, min(widen, 1.6))
+        q_hat_eff = q_hat * widen
         # empirical coverage on the calibration set after conformal correction
-        covered = ((ycal.values >= cal_lo - q_hat) & (ycal.values <= cal_hi + q_hat)).mean()
+        covered = ((ycal.values >= cal_lo - q_hat_eff) & (ycal.values <= cal_hi + q_hat_eff)).mean()
         raw_lo = float(gl.predict(lx)[0])
         raw_hi = float(gh.predict(lx)[0])
-        lo_ret, hi_ret = raw_lo - q_hat, raw_hi + q_hat
+        lo_ret, hi_ret = raw_lo - q_hat_eff, raw_hi + q_hat_eff
         return {
             'lower': round(price * (1 + lo_ret), 0),
             'upper': round(price * (1 + hi_ret), 0),
@@ -1061,6 +1067,7 @@ def _conformal_corridor(Xf, close, lx, h, price, alpha=0.10):
             'coverage': round(float(covered) * 100, 1),
             'target_coverage': int(round((1 - alpha) * 100)),
             'q_hat_pct': round(q_hat * 100, 2),
+            'widen': round(widen, 3),
             'n_calib': int(len(Xcal)),
         }
     except Exception:  # noqa
@@ -1334,6 +1341,12 @@ def compute_quant_analysis(df, feats, price, as_of_ts):
                   'trend30d_pct': round(slope30 * 100, 1), 'vol_percentile': round(atr_pct * 100)}
 
     # --- Multi-horizon probability forecasts ---
+    global _CORRIDOR_WIDEN
+    try:
+        _wd = misc_col.find_one({'_id': 'corridor_widen'}) or {}
+        _CORRIDOR_WIDEN = _wd.get('map', {}) or {}
+    except Exception:  # noqa
+        _CORRIDOR_WIDEN = {}
     Xfull = df[FEATURE_COLS]
     live_X = Xfull.iloc[[-1]]
     forecasts = []
@@ -4508,6 +4521,19 @@ def compute():
     try:
         quant_val = quant_validation.run_validation(df, FEATURE_COLS, horizon=5, n_splits=5)
         check_model_decay_alert(quant_val)
+        # Self-healing corridors: store next-run widen factors from this run's coverage dips.
+        try:
+            rc = (quant_val or {}).get('recent_coverage') or {}
+            tgt = (quant_val or {}).get('coverage_target', 90)
+            wmap = {}
+            for lbl, cov in rc.items():
+                wmap[lbl] = round(max(1.0, min(1.6, tgt / cov)), 3) if cov and cov > 0 else 1.0
+            if wmap:
+                misc_col.update_one({'_id': 'corridor_widen'},
+                                    {'$set': {'map': wmap, 'updated_at': datetime.datetime.utcnow().isoformat()}},
+                                    upsert=True)
+        except Exception:  # noqa
+            traceback.print_exc()
     except Exception:  # noqa
         traceback.print_exc()
 

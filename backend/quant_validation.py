@@ -212,6 +212,18 @@ def run_validation(df, feature_cols, horizon=5, n_splits=5):
         def _pf(v):
             return None if v is None else round(v, 4)
 
+        cov_by_h = {
+            lbl: _coverage_history(df, feature_cols, horizon=hb, alpha=0.10)
+            for lbl, hb in [('24H', 1), ('7D', 7), ('30D', 30)]
+        }
+        recent_cov, cov_alerts = {}, []
+        for lbl, series in cov_by_h.items():
+            if series:
+                last = series[-4:]
+                rc = round(sum(p['coverage'] for p in last) / len(last), 1)
+                recent_cov[lbl] = rc
+                if rc < 80:
+                    cov_alerts.append({'horizon': lbl, 'coverage': rc, 'threshold': 80})
         return {
             'n_trades': int(vm.sum()),
             'horizon_bars': horizon,
@@ -223,10 +235,9 @@ def run_validation(df, feature_cols, horizon=5, n_splits=5):
             'rolling_brier_slope': round(slope, 6),
             'rolling_brier_history': roll_hist,
             'coverage_history': _coverage_history(df, feature_cols, horizon=horizon, alpha=0.10),
-            'coverage_history_by_horizon': {
-                lbl: _coverage_history(df, feature_cols, horizon=hb, alpha=0.10)
-                for lbl, hb in [('24H', 1), ('7D', 7), ('30D', 30)]
-            },
+            'coverage_history_by_horizon': cov_by_h,
+            'recent_coverage': recent_cov,
+            'coverage_alerts': cov_alerts,
             'coverage_target': int(round((1 - 0.10) * 100)),
             'benchmarks': {
                 'brier_pass': brier < 0.20,

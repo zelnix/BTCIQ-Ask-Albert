@@ -1483,6 +1483,11 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
           <Sparkles className="h-5 w-5 text-amber-400" />
           <h3 className="text-lg font-bold text-white">Albert&apos;s Morning Brief</h3>
           {re.regime_label && <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[11px] font-bold text-violet-200">{re.regime_label}</span>}
+          {dec.ensemble_health != null && (() => {
+            const h0 = dec.ensemble_health;
+            const m = h0 >= 0.9 ? { t: 'Strong', c: '#34d399' } : h0 >= 0.75 ? { t: 'Steady', c: '#a3e635' } : h0 >= 0.6 ? { t: 'Soft', c: '#fbbf24' } : { t: 'Weak', c: '#f87171' };
+            return <span className="rounded-full border px-2 py-0.5 text-[11px] font-bold" style={{ borderColor: m.c + '55', color: m.c }} title={`Ensemble health ${Math.round(h0 * 100)}%`}>Model health: {m.t}</span>;
+          })()}
           <div className="ml-auto flex items-center gap-2">
             <button onClick={speakBrief} className={`flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${speaking ? 'border-amber-500/50 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:border-amber-500/50 hover:text-amber-200'}`}>
               {speaking ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}{speaking ? 'Stop' : 'Listen'}

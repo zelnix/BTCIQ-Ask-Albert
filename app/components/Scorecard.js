@@ -45,6 +45,11 @@ function QuantValidationPanel() {
     <Card className="border-0 bg-gradient-to-br from-sky-500/[0.06] to-slate-900 p-5 ring-1 ring-sky-500/25">
       <h3 className="mb-1 flex items-center gap-1 text-sm font-semibold text-white"><ShieldCheck className="h-4 w-4 text-sky-400" />Quant-Grade Validation<InfoTip below text="Purged & embargoed walk-forward validation (removes look-ahead leakage from the forward-looking triple-barrier labels). PSR/DSR correct the Sharpe ratio for fat tails and data-snooping across model trials." /></h3>
       <p className="mb-3 text-xs text-slate-500">{v.n_trades} purged out-of-sample trades · {v.horizon_bars}-bar triple-barrier holding.</p>
+      {(v.coverage_alerts || []).length > 0 && (
+        <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-[12px] text-amber-200">
+          <span className="font-semibold">Coverage alert:</span> {v.coverage_alerts.map((a) => `${a.horizon} band at ${a.coverage}%`).join(', ')} — below the 80% floor, so {v.coverage_alerts.length > 1 ? 'these corridors are' : 'this corridor is'} running too tight and will auto-widen next run.
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><div className="flex items-center justify-between"><p className="text-[10px] uppercase text-slate-500">Brier</p><Pass ok={b.brier_pass} /></div><p className="mt-1 text-2xl font-black" style={{ color: b.brier_pass ? '#34d399' : '#f87171' }}>{v.brier_score}</p><p className="text-[10px] text-slate-600">target &lt;0.20</p></div>
         <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><div className="flex items-center justify-between"><p className="text-[10px] uppercase text-slate-500">PSR</p><Pass ok={b.psr_pass} /></div><p className="mt-1 text-2xl font-black" style={{ color: b.psr_pass ? '#34d399' : '#fbbf24' }}>{pct(v.probabilistic_sharpe_ratio)}</p><p className="text-[10px] text-slate-600">target &gt;95%</p></div>
