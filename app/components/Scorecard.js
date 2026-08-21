@@ -67,6 +67,22 @@ function QuantValidationPanel() {
           <p className="mt-1 text-[10px] text-slate-500">Red line = 0.24 decay alert threshold · grey = 0.25 coin-flip baseline.</p>
         </div>
       )}
+      {(v.coverage_history || []).length > 2 && (
+        <div className="mt-4">
+          <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Corridor Coverage History<InfoTip text="How often the actual price landed inside the 90% conformal corridor, bucketed by week. Should hover around the 90% target line — consistently above means the band is conservative, below means too tight." /></p>
+          <ResponsiveContainer width="100%" height={120}>
+            <LineChart data={v.coverage_history} margin={{ top: 5, right: 8, bottom: 0, left: 0 }}>
+              <CartesianGrid stroke="#1e293b" vertical={false} />
+              <XAxis dataKey="week" tick={{ fill: '#64748b', fontSize: 10 }} />
+              <YAxis domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 10 }} width={36} unit="%" />
+              <ReferenceLine y={v.coverage_target || 90} stroke="#34d399" strokeDasharray="4 4" />
+              <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 12 }} formatter={(y) => [`${y}%`, 'Coverage']} />
+              <Line type="monotone" dataKey="coverage" stroke="#a78bfa" strokeWidth={2} dot={{ r: 2 }} />
+            </LineChart>
+          </ResponsiveContainer>
+          <p className="mt-1 text-[10px] text-slate-500">Green line = {v.coverage_target || 90}% coverage target.</p>
+        </div>
+      )}
     </Card>
   );
 }

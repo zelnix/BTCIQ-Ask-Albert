@@ -115,6 +115,49 @@ def _dsr(returns, num_trials=30, var_trials=0.5):
     return _psr(r, benchmark_sr=e_max)
 
 
+def _coverage_history(df, feature_cols, horizon=5, alpha=0.10, bucket=7):
+    """Walk the CQR corridor over history and report the corridor's REAL hit-rate bucketed
+    into ~weekly windows, so users can see whether the 90% band holds up week over week."""
+    try:
+        from sklearn.ensemble import GradientBoostingRegressor
+        data = df.dropna(subset=feature_cols).reset_index(drop=True)
+        close = data['close'].astype(float)
+        n = len(data)
+        y = (close.shift(-horizon) / close - 1.0)
+        X = data[feature_cols]
+        valid = y.notna()
+        X, y = X[valid].reset_index(drop=True), y[valid].reset_index(drop=True)
+        m = len(X)
+        if m < 200:
+            return []
+        cut = int(m * 0.6)
+        q_lo, q_hi = alpha / 2.0, 1.0 - alpha / 2.0
+        gl = GradientBoostingRegressor(loss='quantile', alpha=q_lo, n_estimators=60, max_depth=3,
+                                       learning_rate=0.05, random_state=42).fit(X.iloc[:cut], y.iloc[:cut])
+        gh = GradientBoostingRegressor(loss='quantile', alpha=q_hi, n_estimators=60, max_depth=3,
+                                       learning_rate=0.05, random_state=42).fit(X.iloc[:cut], y.iloc[:cut])
+        # conformal q_hat on the first half of the holdout, evaluate coverage on the rest
+        cal_end = cut + int((m - cut) * 0.4)
+        lo_c = gl.predict(X.iloc[cut:cal_end]); hi_c = gh.predict(X.iloc[cut:cal_end])
+        yc = y.iloc[cut:cal_end].to_numpy()
+        scores = np.maximum(lo_c - yc, yc - hi_c)
+        k = min(max(int(np.ceil((len(scores) + 1) * (1 - alpha))), 1), len(scores))
+        q_hat = float(np.sort(scores)[k - 1])
+        Xev, yev = X.iloc[cal_end:], y.iloc[cal_end:].to_numpy()
+        lo_e = gl.predict(Xev) - q_hat; hi_e = gh.predict(Xev) + q_hat
+        hit = ((yev >= lo_e) & (yev <= hi_e)).astype(int)
+        out = []
+        for i in range(0, len(hit), bucket):
+            chunk = hit[i:i + bucket]
+            if len(chunk) >= 3:
+                out.append({'week': len(out) + 1, 'coverage': round(float(chunk.mean()) * 100, 1),
+                            'n': int(len(chunk))})
+        return out[-16:]  # last ~16 weeks
+    except Exception:  # noqa
+        traceback.print_exc()
+        return []
+
+
 def run_validation(df, feature_cols, horizon=5, n_splits=5):
     """Purged walk-forward OOF validation + significance metrics on triple-barrier trades."""
     try:
@@ -179,6 +222,8 @@ def run_validation(df, feature_cols, horizon=5, n_splits=5):
             'max_drawdown_pct': round(mdd * 100, 2),
             'rolling_brier_slope': round(slope, 6),
             'rolling_brier_history': roll_hist,
+            'coverage_history': _coverage_history(df, feature_cols, horizon=horizon, alpha=0.10),
+            'coverage_target': int(round((1 - 0.10) * 100)),
             'benchmarks': {
                 'brier_pass': brier < 0.20,
                 'psr_pass': (psr is not None and psr > 0.95),

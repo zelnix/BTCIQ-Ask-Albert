@@ -55,7 +55,7 @@ function ForecastCard({ f }) {
         <h3 className="flex items-center gap-1 text-lg font-bold text-white">{f.horizon} Forecast<InfoTip text={`The model's probability that ${sym} is higher vs lower at the end of this window, plus bull/base/bear price scenarios. Odds, not a promise.`} /></h3>
         <Badge variant="outline" className={`border-slate-700 ${bullish ? 'text-emerald-400' : 'text-red-400'}`}>{bullish ? 'Leans Up' : 'Leans Down'}</Badge>
       </div>
-      {f.calibrated && <p className="mt-1 flex items-center gap-1 text-[10px] font-semibold text-violet-300"><Check className="h-3 w-3" />Isotonic-calibrated odds{f.features_used ? ` · ${f.features_used.length} horizon features` : ''}</p>}
+      {f.calibrated && <p className="mt-1 flex flex-wrap items-center gap-1 text-[10px] font-semibold text-violet-300"><Check className="h-3 w-3" />Isotonic-calibrated odds{f.features_used ? ` · ${f.features_used.length} horizon features` : ''}{f.decaying ? <span className="ml-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-amber-300">down-weighted {Math.round((f.ensemble_weight ?? 1) * 100)}% · model decaying</span> : null}</p>}
       <div className="mt-3">
         <div className="flex justify-between text-sm font-semibold"><span className="text-emerald-400">Higher {eff}%</span><span className="text-red-400">{effLow}% Lower</span></div>
         <div className="mt-1 h-2.5 w-full overflow-hidden rounded-full bg-red-500/40">

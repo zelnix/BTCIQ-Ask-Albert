@@ -1379,6 +1379,12 @@ function ScenarioSimulator({ d, onNav }) {
         <input type="range" min={-20} max={20} step={0.5} value={shock} onChange={(e) => setShock(parseFloat(e.target.value))} className="h-2 flex-1 cursor-pointer appearance-none rounded-full bg-gradient-to-r from-red-500/40 via-slate-700 to-emerald-500/40 accent-sky-400" />
         <span className="text-xs font-semibold text-emerald-400">+20%</span>
       </div>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button onClick={() => setShock(-20)} className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-[11px] font-semibold text-red-200 hover:bg-red-500/20">Flash crash −20%</button>
+        <button onClick={() => setShock(-10)} className="rounded-lg border border-orange-500/30 bg-orange-500/10 px-3 py-1.5 text-[11px] font-semibold text-orange-200 hover:bg-orange-500/20">Pullback −10%</button>
+        <button onClick={() => setShock(15)} className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-[11px] font-semibold text-emerald-200 hover:bg-emerald-500/20">ETF surge +15%</button>
+        <button onClick={() => setShock(0)} className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-[11px] font-semibold text-slate-300 hover:border-slate-600">Reset</button>
+      </div>
       <div className="mt-4 grid grid-cols-3 gap-3 text-center">
         <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Shock</p><p className={`text-lg font-black ${shock >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{shock > 0 ? '+' : ''}{shock}%</p></div>
         <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Hypothetical price</p><p className="text-lg font-black text-white">{fmtUsd(Math.round(hypo))}</p></div>

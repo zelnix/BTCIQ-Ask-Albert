@@ -3633,6 +3633,17 @@ def compute_scorecard():
     for hz in ['24H', '7D', '30D', '3M', '6M', '1Y']:
         a = agg([x for x in resolved if x.get('horizon') == hz])
         if a:
+            # Ensemble weighting: down-weight a horizon whose Brier drifts past the 0.24
+            # decay threshold (0.25 = coin flip). Weight falls linearly 1.0 -> 0.3 over
+            # Brier 0.24 -> 0.36, so decaying models quietly step aside in the blend.
+            br = a.get('brier')
+            if br is None:
+                a['ensemble_weight'], a['decaying'] = 1.0, False
+            elif br <= 0.24:
+                a['ensemble_weight'], a['decaying'] = 1.0, False
+            else:
+                w = max(0.3, 1.0 - (br - 0.24) / 0.12 * 0.7)
+                a['ensemble_weight'], a['decaying'] = round(w, 3), True
             by_h[hz] = a
     # probability calibration (predicted higher% vs realised up-rate)
     calib = []
@@ -4496,6 +4507,7 @@ def compute():
     quant_val = None
     try:
         quant_val = quant_validation.run_validation(df, FEATURE_COLS, horizon=5, n_splits=5)
+        check_model_decay_alert(quant_val)
     except Exception:  # noqa
         traceback.print_exc()
 
@@ -4528,6 +4540,25 @@ def compute():
         record_predictions(as_of, last_close, all_outlook, quant['regime']['regime'], source)
         resolve_predictions(close_by_date, as_of)
         prediction_ledger = compute_scorecard()
+        # Ensemble weighting: annotate each live forecast with its horizon's health and
+        # shrink the displayed confidence toward 50% for decaying horizons.
+        try:
+            bh = (prediction_ledger or {}).get('by_horizon') or {}
+            for f in (quant.get('forecasts', []) + quant.get('long_outlook', [])):
+                info = bh.get(f.get('horizon'))
+                if not info:
+                    continue
+                w = info.get('ensemble_weight', 1.0)
+                f['ensemble_weight'] = w
+                f['decaying'] = bool(info.get('decaying'))
+                f['horizon_brier'] = info.get('brier')
+                if w < 1.0 and f.get('higher') is not None:
+                    f['higher'] = round(50 + (f['higher'] - 50) * w, 1)
+                    f['lower'] = round(100 - f['higher'], 1)
+                    if f.get('confidence_pct') is not None:
+                        f['confidence_pct'] = round(f['confidence_pct'] * w)
+        except Exception:  # noqa
+            traceback.print_exc()
     except Exception:  # noqa
         traceback.print_exc()
 
@@ -5855,6 +5886,56 @@ def build_instant_alert_email(alerts):
         f"- [{(a.get('severity') or 'high').upper()}] {a.get('title') or a.get('category')}: {a.get('message') or ''}"
         for a in alerts) + '\n\nUnsubscribe: {{UNSUB}}'
     return subject, html, text
+
+
+def check_model_decay_alert(quant_val):
+    """Fire a one-off email when a model's rolling Brier slope turns positive AND the latest
+    rolling Brier is above the 0.24 decay threshold. Edge-triggered (only on healthy->decaying
+    transition) so it never spams; reuses the Resend recipient pipeline."""
+    try:
+        if not quant_val:
+            return {'ok': False, 'reason': 'no validation'}
+        slope = quant_val.get('rolling_brier_slope')
+        hist = quant_val.get('rolling_brier_history') or []
+        latest = hist[-1] if hist else None
+        decaying = (slope is not None and slope > 0 and latest is not None and latest > 0.24)
+
+        prev = misc_col.find_one({'_id': 'decay_alert_state'}) or {}
+        was_decaying = bool(prev.get('decaying'))
+        misc_col.update_one({'_id': 'decay_alert_state'},
+                            {'$set': {'decaying': decaying, 'slope': slope, 'latest_brier': latest,
+                                      'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+        if not (decaying and not was_decaying):
+            return {'ok': True, 'sent': 0, 'decaying': decaying}
+        if not resend_configured():
+            return {'ok': False, 'error': 'resend not configured'}
+        recips = [r.get('email') for r in _recipient_list() if r.get('email')]
+        if not recips:
+            return {'ok': False, 'error': 'no recipients'}
+        subject = '⚠️ BTCIQ model decay detected — rolling Brier rising'
+        html = (f"<div style='font-family:system-ui,sans-serif;color:#0f172a'>"
+                f"<h2 style='margin:0 0 8px'>Model decay alert</h2>"
+                f"<p>The walk-forward model's <b>rolling Brier score is trending up</b> "
+                f"(slope <b>{slope}</b>, latest <b>{latest}</b>), crossing the 0.24 decay threshold "
+                f"(0.25 = a coin flip).</p>"
+                f"<p>Decaying horizons are being auto-down-weighted in the ensemble. Review the "
+                f"Quant-Grade Validation panel on the Performance screen.</p>"
+                f"<p style='color:#64748b;font-size:12px'>Sent automatically by BTCIQ.</p></div>")
+        text = (f"BTCIQ model decay alert. Rolling Brier slope {slope}, latest {latest} "
+                f"(>0.24 decay threshold). Decaying horizons are auto-down-weighted.")
+        result = _send_to_recipients(recips, subject, html, text)
+        try:
+            email_log_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
+                                      'kind': 'decay_alert', 'recipients': len(recips),
+                                      'slope': slope, 'latest_brier': latest,
+                                      'ok': result.get('ok'), 'resend_id': result.get('id'),
+                                      'error': result.get('error')})
+        except Exception:  # noqa
+            pass
+        return {**result, 'sent': 1 if result.get('ok') else 0}
+    except Exception as e:  # noqa
+        traceback.print_exc()
+        return {'ok': False, 'error': str(e)}
 
 
 def send_instant_alerts_bg():
