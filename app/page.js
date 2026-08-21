@@ -1469,7 +1469,7 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
         <ExecKpi label="BTC Price" onClick={() => onNav('market-intel')} sub={`${chg >= 0 ? '+' : ''}${chg}% 24h`} subColor={chg >= 0 ? '#34d399' : '#f87171'}>
           <p className="text-3xl font-black text-white">{fmtUsd(price)}</p>
         </ExecKpi>
-        <ExecKpi label="Conviction Score" onClick={() => onNav('overview')} sub={dec.label || ''} subColor={scoreColor(dec.overall_score)}>
+        <ExecKpi label="Conviction Score" onClick={() => onNav('overview')} sub={dec.overall_score_raw != null && dec.overall_score_raw !== dec.overall_score ? `ensemble-adj from ${dec.overall_score_raw}` : (dec.label || '')} subColor={scoreColor(dec.overall_score)}>
           <p className="text-3xl font-black" style={{ color: scoreColor(dec.overall_score) }}>{dec.overall_score ?? '—'}<span className="text-lg text-slate-500">/100</span></p>
         </ExecKpi>
         <ExecKpi label="Confidence" onClick={() => onNav('performance')} sub={conf != null ? 'model confidence' : ''}>

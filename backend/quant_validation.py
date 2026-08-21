@@ -223,6 +223,10 @@ def run_validation(df, feature_cols, horizon=5, n_splits=5):
             'rolling_brier_slope': round(slope, 6),
             'rolling_brier_history': roll_hist,
             'coverage_history': _coverage_history(df, feature_cols, horizon=horizon, alpha=0.10),
+            'coverage_history_by_horizon': {
+                lbl: _coverage_history(df, feature_cols, horizon=hb, alpha=0.10)
+                for lbl, hb in [('24H', 1), ('7D', 7), ('30D', 30)]
+            },
             'coverage_target': int(round((1 - 0.10) * 100)),
             'benchmarks': {
                 'brier_pass': brier < 0.20,

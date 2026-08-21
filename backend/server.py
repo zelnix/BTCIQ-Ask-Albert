@@ -4557,6 +4557,17 @@ def compute():
                     f['lower'] = round(100 - f['higher'], 1)
                     if f.get('confidence_pct') is not None:
                         f['confidence_pct'] = round(f['confidence_pct'] * w)
+            # Feed ensemble health into the HEADLINE conviction score: decaying horizons
+            # lighten the top-line call by shrinking it toward neutral (50).
+            weights = [i.get('ensemble_weight') for i in bh.values() if i.get('ensemble_weight') is not None]
+            if weights and decision is not None and decision.get('overall_score') is not None:
+                health = sum(weights) / len(weights)
+                blend = 0.7 + 0.3 * health   # 0.7 (all decaying) .. 1.0 (all healthy)
+                ov = decision['overall_score']
+                decision['overall_score_raw'] = ov
+                decision['ensemble_health'] = round(health, 3)
+                decision['overall_score'] = max(0, min(100, int(round(50 + (ov - 50) * blend))))
+                decision['label'] = _quant_score_label(decision['overall_score'])
         except Exception:  # noqa
             traceback.print_exc()
     except Exception:  # noqa
@@ -5902,11 +5913,23 @@ def check_model_decay_alert(quant_val):
 
         prev = misc_col.find_one({'_id': 'decay_alert_state'}) or {}
         was_decaying = bool(prev.get('decaying'))
+        last_sent = prev.get('last_sent_at')
+        # 7-day cooldown so a flapping model can't email repeatedly
+        cooldown_ok = True
+        if last_sent:
+            try:
+                elapsed = (datetime.datetime.utcnow()
+                           - datetime.datetime.fromisoformat(last_sent)).total_seconds()
+                cooldown_ok = elapsed >= 7 * 24 * 3600
+            except Exception:  # noqa
+                cooldown_ok = True
         misc_col.update_one({'_id': 'decay_alert_state'},
                             {'$set': {'decaying': decaying, 'slope': slope, 'latest_brier': latest,
                                       'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
         if not (decaying and not was_decaying):
             return {'ok': True, 'sent': 0, 'decaying': decaying}
+        if not cooldown_ok:
+            return {'ok': True, 'sent': 0, 'decaying': decaying, 'reason': 'cooldown (7d)'}
         if not resend_configured():
             return {'ok': False, 'error': 'resend not configured'}
         recips = [r.get('email') for r in _recipient_list() if r.get('email')]
@@ -5924,6 +5947,10 @@ def check_model_decay_alert(quant_val):
         text = (f"BTCIQ model decay alert. Rolling Brier slope {slope}, latest {latest} "
                 f"(>0.24 decay threshold). Decaying horizons are auto-down-weighted.")
         result = _send_to_recipients(recips, subject, html, text)
+        if result.get('ok'):
+            misc_col.update_one({'_id': 'decay_alert_state'},
+                                {'$set': {'last_sent_at': datetime.datetime.utcnow().isoformat()}},
+                                upsert=True)
         try:
             email_log_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
                                       'kind': 'decay_alert', 'recipients': len(recips),

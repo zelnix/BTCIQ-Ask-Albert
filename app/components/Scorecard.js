@@ -67,22 +67,39 @@ function QuantValidationPanel() {
           <p className="mt-1 text-[10px] text-slate-500">Red line = 0.24 decay alert threshold · grey = 0.25 coin-flip baseline.</p>
         </div>
       )}
-      {(v.coverage_history || []).length > 2 && (
-        <div className="mt-4">
-          <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Corridor Coverage History<InfoTip text="How often the actual price landed inside the 90% conformal corridor, bucketed by week. Should hover around the 90% target line — consistently above means the band is conservative, below means too tight." /></p>
-          <ResponsiveContainer width="100%" height={120}>
-            <LineChart data={v.coverage_history} margin={{ top: 5, right: 8, bottom: 0, left: 0 }}>
-              <CartesianGrid stroke="#1e293b" vertical={false} />
-              <XAxis dataKey="week" tick={{ fill: '#64748b', fontSize: 10 }} />
-              <YAxis domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 10 }} width={36} unit="%" />
-              <ReferenceLine y={v.coverage_target || 90} stroke="#34d399" strokeDasharray="4 4" />
-              <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 12 }} formatter={(y) => [`${y}%`, 'Coverage']} />
-              <Line type="monotone" dataKey="coverage" stroke="#a78bfa" strokeWidth={2} dot={{ r: 2 }} />
-            </LineChart>
-          </ResponsiveContainer>
-          <p className="mt-1 text-[10px] text-slate-500">Green line = {v.coverage_target || 90}% coverage target.</p>
-        </div>
-      )}
+      {(v.coverage_history_by_horizon || v.coverage_history) && (() => {
+        const byh = v.coverage_history_by_horizon || {};
+        const hzKeys = ['24H', '7D', '30D'].filter((k) => (byh[k] || []).length > 2);
+        const colors = { '24H': '#38bdf8', '7D': '#a78bfa', '30D': '#f59e0b' };
+        let data = [];
+        if (hzKeys.length) {
+          const wk = {};
+          hzKeys.forEach((k) => (byh[k] || []).forEach((p) => { wk[p.week] = wk[p.week] || { week: p.week }; wk[p.week][k] = p.coverage; }));
+          data = Object.values(wk).sort((a, b) => a.week - b.week);
+        } else if ((v.coverage_history || []).length > 2) {
+          data = v.coverage_history; hzKeys.push('coverage'); colors.coverage = '#a78bfa';
+        }
+        if (data.length <= 2) return null;
+        return (
+          <div className="mt-4">
+            <p className="mb-1 flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Corridor Coverage by Horizon<InfoTip text="How often the actual price landed inside each horizon's 90% conformal corridor, by week. Should hover near the 90% target line — a line drifting below means that band is running too tight." /></p>
+            <ResponsiveContainer width="100%" height={140}>
+              <LineChart data={data} margin={{ top: 5, right: 8, bottom: 0, left: 0 }}>
+                <CartesianGrid stroke="#1e293b" vertical={false} />
+                <XAxis dataKey="week" tick={{ fill: '#64748b', fontSize: 10 }} />
+                <YAxis domain={[0, 100]} tick={{ fill: '#64748b', fontSize: 10 }} width={36} unit="%" />
+                <ReferenceLine y={v.coverage_target || 90} stroke="#34d399" strokeDasharray="4 4" />
+                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 12 }} formatter={(y, n) => [`${y}%`, n]} />
+                {hzKeys.map((k) => <Line key={k} type="monotone" dataKey={k} name={k === 'coverage' ? 'coverage' : k} stroke={colors[k]} strokeWidth={2} dot={{ r: 2 }} connectNulls />)}
+              </LineChart>
+            </ResponsiveContainer>
+            <div className="mt-1 flex flex-wrap gap-3 text-[10px] text-slate-500">
+              {hzKeys.filter((k) => k !== 'coverage').map((k) => <span key={k} className="flex items-center gap-1"><span className="h-2 w-2 rounded-full" style={{ background: colors[k] }} />{k}</span>)}
+              <span className="flex items-center gap-1"><span className="h-0.5 w-4" style={{ borderTop: '2px dashed #34d399' }} />{v.coverage_target || 90}% target</span>
+            </div>
+          </div>
+        );
+      })()}
     </Card>
   );
 }
