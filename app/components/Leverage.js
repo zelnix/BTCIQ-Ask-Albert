@@ -1,13 +1,63 @@
 'use client';
 
 import React from 'react';
-import { Brain, Gauge, History, Lock } from 'lucide-react';
+import { Brain, Gauge, History, Lock, Activity, Zap } from 'lucide-react';
 import { ResponsiveContainer, ComposedChart, Line, Area, Bar, BarChart, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, Cell } from 'recharts';
 import { Card } from '@/components/ui/card';
 import { API_BASE } from '../lib/api';
 import { riskColor, TF_TOUCH } from '../lib/format';
 import { sec } from '../lib/sections';
 import { SectionHead, AiReview, InfoTip, DemoBadge, LevGauge } from './shared';
+
+function LiveOrderFlow() {
+  const [o, setO] = React.useState(null);
+  React.useEffect(() => {
+    let alive = true;
+    const tick = () => fetch(`${API_BASE}/v1/orderflow`, { cache: 'no-store' })
+      .then((r) => r.json()).then((j) => { if (alive) setO(j); }).catch(() => {});
+    tick();
+    const id = setInterval(tick, 2500);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  if (!o) return null;
+  const live = o.status === 'live';
+  const liq = o.liquidations || {};
+  const cvdUp = (o.cvd_window_btc ?? 0) >= 0;
+  const fUsd = (v) => (v == null ? '—' : '$' + (Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : Math.abs(v) >= 1e3 ? (v / 1e3).toFixed(0) + 'k' : Math.round(v)));
+  const flowColor = o.flow_state === 'Aggressive buying' ? '#34d399' : o.flow_state === 'Aggressive selling' ? '#f87171' : '#94a3b8';
+  return (
+    <Card className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-white"><Activity className="h-4 w-4 text-sky-400" />Live Order Flow</h3>
+        <InfoTip below text="Real-time trade flow from Coinbase + Bybit WebSocket streams, aggregated every second. CVD = cumulative volume delta (buy − sell BTC). OFI = order-flow imbalance per second. VPIN ≈ order-flow toxicity (0–1, higher = more one-sided). Liquidation cascade watch flags >$1M force-liquidated in 10s." />
+        <span className={`ml-auto flex items-center gap-1 text-[10px] font-bold ${live ? 'text-emerald-400' : 'text-amber-400'}`}>
+          <span className={`h-2 w-2 rounded-full ${live ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />{live ? 'LIVE' : (o.status || 'connecting').toUpperCase()}
+        </span>
+      </div>
+      {o.status === 'connecting' ? (
+        <p className="text-sm text-slate-500">{o.message || 'Order-flow pipeline warming up…'}</p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Flow (1m)</p><p className="mt-1 text-sm font-black" style={{ color: flowColor }}>{o.flow_state}</p><p className="text-[10px] text-slate-600">{o.buy_ratio_pct}% buys</p></div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">CVD (1m)</p><p className="mt-1 text-sm font-black" style={{ color: cvdUp ? '#34d399' : '#f87171' }}>{cvdUp ? '+' : ''}{o.cvd_window_btc} BTC</p></div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">OFI /s</p><p className="mt-1 text-sm font-black text-slate-100">{o.ofi_btc_per_s}</p></div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">VPIN</p><p className="mt-1 text-sm font-black" style={{ color: (o.vpin ?? 0) > 0.6 ? '#fbbf24' : '#34d399' }}>{o.vpin}</p></div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Trades/s</p><p className="mt-1 text-sm font-black text-slate-100">{o.trades_per_sec}</p></div>
+            <div className={`rounded-xl border p-3 ${liq.cascade_risk ? 'border-red-500/40 bg-red-500/10' : 'border-slate-800 bg-slate-950/50'}`}><p className="text-[10px] uppercase text-slate-500 flex items-center gap-1"><Zap className="h-3 w-3" />Liq (1m)</p><p className="mt-1 text-sm font-black" style={{ color: liq.cascade_risk ? '#f87171' : '#e2e8f0' }}>{fUsd((liq.long_usd_1m || 0) + (liq.short_usd_1m || 0))}</p><p className="text-[10px] text-slate-600">{liq.cascade_risk ? 'cascade risk' : `L ${fUsd(liq.long_usd_1m)} / S ${fUsd(liq.short_usd_1m)}`}</p></div>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-600">
+            {Object.entries(o.venues || {}).map(([v, st]) => (
+              <span key={v} className="flex items-center gap-1"><span className={`h-1.5 w-1.5 rounded-full ${st === 'live' ? 'bg-emerald-400' : 'bg-amber-400'}`} />{v}</span>
+            ))}
+            <span className="ml-auto italic">WebSocket → Redis Streams → 1s aggregator{o.redis ? '' : ' (in-memory)'}</span>
+          </div>
+        </>
+      )}
+    </Card>
+  );
+}
+
 
 function LeverageSection() {
   const [tf, setTf] = React.useState('4H');
@@ -44,6 +94,8 @@ function LeverageSection() {
   return (
     <div className="space-y-5">
       <SectionHead icon={Gauge} title="Leverage" blurb="Long & short positioning, market leverage and liquidation pressure" coin="BTC" />
+
+      <LiveOrderFlow />
 
       <Card className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800">
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">

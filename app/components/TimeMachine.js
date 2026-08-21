@@ -158,6 +158,79 @@ function ScenariosPanel() {
   );
 }
 
+function AnalogsPanel() {
+  const [d, setD] = React.useState(null);
+  React.useEffect(() => {
+    fetch(`${API_BASE}/v1/time-machine/analogs?k=3`, { cache: 'no-store' })
+      .then((r) => r.json()).then(setD).catch(() => setD({ status: 'error' }));
+  }, []);
+  if (!d) return (<Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800"><p className="text-sm text-slate-500">Finding historical analogs (FAISS)…</p></Card>);
+  if (d.status !== 'ready' || !(d.analogs || []).length) return null;
+
+  const colors = ['#38bdf8', '#a78bfa', '#f59e0b'];
+  // Build a normalized (% from day 0) forward-path chart across all analogs.
+  const chart = [];
+  for (let o = 0; o <= 30; o++) {
+    const row = { d: o };
+    d.analogs.forEach((a, i) => {
+      const p0 = a.path_30d[0]?.close;
+      const p = a.path_30d[o]?.close;
+      if (p0 && p != null) row[`a${i}`] = +(((p - p0) / p0) * 100).toFixed(2);
+    });
+    chart.push(row);
+  }
+  const s = d.summary || {};
+  const up = (s.avg_ret_30d_pct ?? 0) >= 0;
+
+  return (
+    <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h3 className="flex items-center gap-1.5 text-sm font-semibold text-white"><Sparkles className="h-4 w-4 text-violet-400" />When did this happen before?</h3>
+        <span className="rounded-full border border-violet-500/40 px-2 py-0.5 text-[10px] font-bold text-violet-300">FAISS analog match</span>
+        <span className="ml-auto text-[11px] text-slate-500">today ≈ {fmtUsd(d.current_price)} · as of {d.as_of}</span>
+      </div>
+      {s && (
+        <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Avg next 7d</p><p className="mt-1 text-xl font-black" style={{ color: (s.avg_ret_7d_pct ?? 0) >= 0 ? '#34d399' : '#f87171' }}>{s.avg_ret_7d_pct > 0 ? '+' : ''}{s.avg_ret_7d_pct}%</p></div>
+          <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Avg next 30d</p><p className="mt-1 text-xl font-black" style={{ color: up ? '#34d399' : '#f87171' }}>{s.avg_ret_30d_pct > 0 ? '+' : ''}{s.avg_ret_30d_pct}%</p></div>
+          <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Higher after 30d</p><p className="mt-1 text-xl font-black text-slate-100">{s.pct_higher_30d}%</p></div>
+          <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase text-slate-500">Analogs</p><p className="mt-1 text-xl font-black text-slate-100">{d.k}</p></div>
+        </div>
+      )}
+      <div className="h-56 w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={chart} margin={{ top: 8, right: 12, left: 4, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+            <XAxis dataKey="d" tick={{ fill: '#64748b', fontSize: 10 }} tickFormatter={(v) => `+${v}d`} />
+            <YAxis tick={{ fill: '#64748b', fontSize: 10 }} tickFormatter={(v) => `${v}%`} width={40} />
+            <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 12 }}
+              labelFormatter={(v) => `+${v} days`} formatter={(val, name) => [`${val}%`, name]} />
+            <ReferenceLine y={0} stroke="#475569" strokeDasharray="2 2" />
+            {d.analogs.map((a, i) => (
+              <Line key={i} type="monotone" dataKey={`a${i}`} name={a.date} stroke={colors[i]} strokeWidth={2} dot={false} connectNulls />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+      <div className="mt-3 space-y-1.5">
+        {d.analogs.map((a, i) => (
+          <div key={i} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
+            <span className="h-2 w-2 rounded-full" style={{ background: colors[i] }} />
+            <span className="font-semibold text-slate-200">{a.date}</span>
+            <span className="text-slate-500">{(a.similarity * 100).toFixed(1)}% match · {fmtUsd(a.price_then)}</span>
+            <span className="ml-auto flex gap-3">
+              <span style={{ color: a.ret_7d_pct >= 0 ? '#34d399' : '#f87171' }}>7d {a.ret_7d_pct > 0 ? '+' : ''}{a.ret_7d_pct}%</span>
+              <span style={{ color: a.ret_30d_pct >= 0 ? '#34d399' : '#f87171' }}>30d {a.ret_30d_pct > 0 ? '+' : ''}{a.ret_30d_pct}%</span>
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[10px] text-slate-600">FAISS cosine match over standardized momentum/trend/volatility/volume vectors. Past analogs are context, not a prediction — outcomes vary.</p>
+    </Card>
+  );
+}
+
+
 function TimeMachineSection() {
   const [rep, setRep] = React.useState(null);
   const [date, setDate] = React.useState('');
@@ -202,6 +275,8 @@ function TimeMachineSection() {
       <AiReview section="timemachine" text="Albert is reviewing the Time Machine…" voice />
 
       <ScenariosPanel />
+
+      <AnalogsPanel />
 
       <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
         <div className="flex flex-wrap items-end gap-3">

@@ -58,6 +58,8 @@ from email_service import send_email, resend_configured
 import regime_engine
 import quant_validation
 import drift_monitor
+import orderflow
+import time_machine
 
 # BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
 _forecast_trigger = {'reason': None}
@@ -4924,6 +4926,11 @@ def run_compute_bg():
 @app.on_event('startup')
 def _startup():
     global _scheduler
+    # Pillar 1: start the real-time WebSocket order-flow ingestion pipeline.
+    try:
+        orderflow.start()
+    except Exception:  # noqa
+        traceback.print_exc()
     try:
         scheduler = BackgroundScheduler(timezone='UTC')
         scheduler.add_job(run_compute_bg, 'cron', hour=0, minute=5, id='daily_refresh')
@@ -5233,6 +5240,43 @@ def simulate_shock(request: Request, payload: dict = Body(default={})):
                         {'$set': {'active': on, 'updated_at': datetime.datetime.utcnow().isoformat()}},
                         upsert=True)
     return {'status': 'ok', 'active': on}
+
+
+@app.get('/api/v1/orderflow')
+def orderflow_endpoint():
+    """Real-time order-flow microstructure snapshot (CVD, OFI, VPIN, liquidation
+    cascade) computed by the 1-second aggregator over live Coinbase + Bybit WS feeds."""
+    try:
+        return orderflow.get_latest()
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
+
+
+_tm_cache = {'ts': 0, 'df': None}
+
+
+def _tm_df():
+    """Cached OHLCV+features DataFrame for the Time Machine (refresh hourly)."""
+    if _tm_cache['df'] is not None and (time.time() - _tm_cache['ts'] < 3600):
+        return _tm_cache['df']
+    dfr, _src = fetch_ohlcv()
+    dfr = build_features(dfr).dropna().reset_index(drop=True)
+    _tm_cache.update(ts=time.time(), df=dfr)
+    return dfr
+
+
+@app.get('/api/v1/time-machine/analogs')
+def time_machine_analogs(k: int = 3):
+    """FAISS analog engine — "when did this happen before?": top-K most similar
+    historical days + their 7d/30d forward return paths + aggregate outcome."""
+    try:
+        k = max(1, min(6, int(k)))
+        df = _tm_df()
+        return time_machine.find_analogs(df, FEATURE_COLS, k=k)
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
 
 
 @app.get('/api/v1/drift')

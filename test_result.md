@@ -362,6 +362,34 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive validation via external URL. News→Forecast Link fully validated: (1) dashboard.news_forecast_link present with all required fields (signal, bias, n_high_impact, n_stories, top_driver, top_driver_dir, model_bias, applied) ✅ (2) signal=-0.163 (valid range -1..1) ✅ (3) applied list has 2 items (24H, 7D) with required fields (horizon, base, adj, delta) ✅ (4) 24H forecast has news_link object with all required fields (applied, higher_base, higher_adj, lower_base, lower_adj, delta, bias, signal, top_driver) ✅ (5) 24H has higher_adj=45.0 and lower_adj=55.0 fields ✅ (6) 24H adjustment logic validated: higher_adj ≈ clamp(higher_base + delta) = clamp(46.1 + -1.1) = 45.0 ✅ (7) 24H lower_adj ≈ 100 - higher_adj (55.0 ≈ 100 - 45.0) ✅ (8) 7D forecast has news_link with all required fields ✅ (9) 7D has higher_adj=47.2 and lower_adj=52.8 ✅ (10) 7D adjustment logic validated: higher_adj ≈ clamp(47.9 + -0.7) = 47.2 ✅ (11) 7D lower_adj ≈ 100 - higher_adj ✅ (12) 30D forecast correctly does NOT have news_link ✅ All math and logic checks passed."
+  - task: "Pillar 1 — Real-time WebSocket order-flow pipeline (GET /api/v1/orderflow)"
+    implemented: true
+    working: true
+    file: "backend/orderflow.py, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW (Pillar 1). New module orderflow.py runs a background thread with asyncio WebSocket consumers for Coinbase spot trades (matches) + Bybit perp trades (publicTrade.BTCUSDT) + Bybit liquidations (allLiquidation.BTCUSDT). NOTE: Binance is geo-blocked (HTTP 451) from this host, so Coinbase+Bybit are used. Trades/liquidations are XADD'd to Redis Streams (of:trades / of:liq, MAXLEN ~100k, approximate) AND kept in an in-memory rolling window. A 1-second aggregator computes CVD (window+session), buy ratio, OFI/s, VPIN (order-flow toxicity), trades/sec, and 1-minute long/short liquidation notional + a 10s cascade flag (>$1M). Snapshot cached in Redis (of:latest) + process memory for sub-ms endpoint responses. Redis installed via apt + supervisor (program:redis on 127.0.0.1:6379). GET /api/v1/orderflow returns {status, venues, redis, last_price, cvd_window_btc, session_cvd_btc, buy_ratio_pct, ofi_btc_per_s, vpin, trades_per_sec, flow_state, liquidations{...}}. VERIFIED MANUALLY: status='live', all 3 venues live, redis=True, ~26 trades/s, CVD/OFI/VPIN populated and varying naturally across polls. NEEDS RETEST via external URL: GET /api/v1/orderflow -> HTTP 200; status should be 'live' or 'connecting' (never 500); when live, numeric fields present and venues map shows coinbase/bybit/bybit_liq. Reconnects automatically."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Pillar 1 Real-time Order Flow validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/orderflow). All validations passed (4/4 tests). TEST 1 - GET /api/v1/orderflow FIRST POLL: HTTP 200 (NEVER 500) ✅, status='live' (not 'connecting', fully warmed up) ✅, ALL REQUIRED FIELDS VALIDATED: last_price=$74,681.34 (float) ✅, cvd_window_btc=8.1728 BTC (float) ✅, session_cvd_btc=-46.523 BTC (float) ✅, ofi_btc_per_s=0.1362 BTC/s (float) ✅, vpin=0.676 (float, order-flow toxicity metric) ✅, trades_per_sec=87.63 (float) ✅, buy_ratio_pct=54.3% (float) ✅, flow_state='Balanced' (string, in [Aggressive buying, Aggressive selling, Balanced]) ✅, venues={'coinbase': 'live', 'bybit': 'live', 'bybit_liq': 'live'} (all 3 venues LIVE, Binance intentionally absent due to geo-block) ✅, redis=True (Redis integration working) ✅, liquidations object validated: long_usd_1m=0.0, short_usd_1m=0.0, net_usd_1m=0.0, cascade_10s_usd=0.0, cascade_risk=False (boolean), count_1m=0 (all correct types) ✅. TEST 2 - SECOND POLL (3 seconds later): HTTP 200 ✅, LIVE UPDATES CONFIRMED (proving 1-second aggregator is live-updating): trades_window changed 5258→5044 ✅, trades_per_sec changed 87.63→84.07 ✅, cvd_window_btc changed 8.1728→7.2656 ✅, last_price changed $74,681.34→$74,673.83 ✅. TEST 3 - REGRESSION: GET /api/v1/health returns HTTP 200 ✅. TEST 4 - REGRESSION: GET /api/v1/dashboard returns HTTP 200 with status='ready' ✅. All validations passed. Data is REAL (Coinbase + Bybit WebSocket live trades + liquidations, Redis Streams ingestion, 1-second rolling aggregator). No HTTP 500 errors. Feature is fully functional and production-ready. Order-flow pipeline is LIVE with all 3 venues connected and streaming real-time data."
+  - task: "Pillar 3 — FAISS Time Machine analogs (GET /api/v1/time-machine/analogs)"
+    implemented: true
+    working: true
+    file: "backend/time_machine.py, backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW (Pillar 3). New module time_machine.py builds a FAISS cosine-similarity index (IndexFlatIP over standardized+L2-normalized 8-feature vectors) across all historical daily bars and, for today's vector, returns the top-K most similar historical days (excluding the most recent 7 + de-duped by 15-day gaps, requiring a full 30d forward window) with each analog's 7d/30d forward return and a 31-point forward price path, plus an aggregate summary (avg 7d/30d return, % higher). GET /api/v1/time-machine/analogs?k=3 (k clamped 1-6). Uses a 1h-cached fetch_ohlcv+build_features DataFrame. VERIFIED MANUALLY: status='ready', engine='faiss', 3 analogs with 0.95+ cosine similarity, forward returns + 31-pt paths, summary computed. NEEDS RETEST via external URL: GET /api/v1/time-machine/analogs?k=3 -> HTTP 200 status='ready', analogs: list (each date/similarity/price_then/ret_7d_pct/ret_30d_pct/path_30d[31]), summary{avg_ret_7d_pct,avg_ret_30d_pct,pct_higher_30d}. First call may take ~1-2s (fetch). Must NOT 500."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Pillar 3 FAISS Time Machine validation via external URL (https://quant-features.preview.emergentagent.com/api/v1/time-machine/analogs). All validations passed (3/3 test cases: k=3, k=1, k=5). TEST CASE 1 - k=3: HTTP 200 (NOT 500) ✅, status='ready' ✅, engine='faiss' (FAISS library working) ✅, analogs: 3 items (expected up to 3) ✅, FIRST ANALOG VALIDATED: date='2024-10-18' (YYYY-MM-DD format) ✅, similarity=0.9581 (float ~0-1, high cosine similarity) ✅, price_then=$68,440.30 ✅, ret_7d_pct=-2.68% (7-day forward return) ✅, ret_30d_pct=31.28% (30-day forward return) ✅, path_30d: 31 points with {d, close} structure (complete 31-day forward price path) ✅, SUMMARY VALIDATED: avg_ret_7d_pct=4.61% ✅, avg_ret_30d_pct=19.71% ✅, pct_higher_7d=33% ✅, pct_higher_30d=100% ✅. TEST CASE 2 - k=1: HTTP 200 ✅, status='ready' ✅, engine='faiss' ✅, analogs: 1 item (expected 1) ✅, analog structure validated (date, similarity, price_then, ret_7d_pct, ret_30d_pct, path_30d[31]) ✅, summary validated (avg_ret_7d_pct=-2.68%, avg_ret_30d_pct=31.28%, pct_higher_7d=0%, pct_higher_30d=100%) ✅. TEST CASE 3 - k=5: HTTP 200 ✅, status='ready' ✅, engine='faiss' ✅, analogs: 5 items (expected up to 5) ✅, analog structure validated ✅, summary validated (avg_ret_7d_pct=0.42%, avg_ret_30d_pct=9.62%, pct_higher_7d=20%, pct_higher_30d=80%) ✅. All validations passed. Data is REAL (FAISS cosine-similarity index over standardized 8-feature vectors from historical BTC daily bars, with forward return paths). No HTTP 500 errors. Feature is fully functional and production-ready. Time Machine returns historically similar market conditions with their subsequent outcomes."
   - task: "Pillar 4 — Proactive Alerts (Liquidation Cascade + Basis Reclaim) + cost_basis/leverage_snapshot in dashboard"
     implemented: true
     working: true
@@ -686,29 +714,68 @@ frontend:
 
 test_plan:
   current_focus:
-    - "Pillar 4 — Proactive Alerts + cost_basis/leverage_snapshot (GET /api/v1/dashboard)"
-    - "Breaker Demo Toggle (POST/GET /api/v1/admin/simulate-shock)"
+    - "Pillar 1 — Real-time WebSocket order-flow pipeline (GET /api/v1/orderflow)"
+    - "Pillar 3 — FAISS Time Machine analogs (GET /api/v1/time-machine/analogs)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
+    -agent: "testing"
+    -message: |
+      ✅ PILLAR 1 + PILLAR 3 TESTING COMPLETE - ALL TESTS PASSED (4/4)
+      
+      Tested Pillar 1 (Real-time Order Flow) + Pillar 3 (FAISS Time Machine) backend ONLY via external URL 
+      (https://quant-features.preview.emergentagent.com/api) using comprehensive test suite (test_pillar_1_3.py). 
+      Base URL from /app/.env NEXT_PUBLIC_BASE_URL with /api prefix. Did NOT POST /api/v1/refresh and did NOT hit /email endpoints.
+      
+      RESULTS SUMMARY:
+      1. ✅ GET /api/v1/orderflow (Pillar 1) → All validations passed, LIVE with real-time updates confirmed
+      2. ✅ GET /api/v1/time-machine/analogs (Pillar 3) → All test cases passed (k=1, k=3, k=5)
+      3. ✅ GET /api/v1/health (Regression) → Passed
+      4. ✅ GET /api/v1/dashboard (Regression) → Passed
+      
+      PILLAR 1 - ORDER FLOW DETAILED RESULTS:
+      - ✅ HTTP 200 (NEVER 500)
+      - ✅ status='live' (fully warmed up, not 'connecting')
+      - ✅ All required numeric fields validated: last_price=$74,681.34, cvd_window_btc=8.1728 BTC, session_cvd_btc=-46.523 BTC, 
+           ofi_btc_per_s=0.1362 BTC/s, vpin=0.676, trades_per_sec=87.63, buy_ratio_pct=54.3%
+      - ✅ flow_state='Balanced' (string)
+      - ✅ venues={'coinbase': 'live', 'bybit': 'live', 'bybit_liq': 'live'} (all 3 venues LIVE, Binance intentionally absent)
+      - ✅ redis=True (Redis integration working)
+      - ✅ liquidations object validated: long_usd_1m=0.0, short_usd_1m=0.0, net_usd_1m=0.0, cascade_10s_usd=0.0, 
+           cascade_risk=False, count_1m=0
+      - ✅ LIVE UPDATES CONFIRMED (polled twice 3s apart): trades_window (5258→5044), trades_per_sec (87.63→84.07), 
+           cvd_window_btc (8.1728→7.2656), last_price ($74,681.34→$74,673.83) all changed, proving 1-second aggregator is live
+      
+      PILLAR 3 - TIME MACHINE DETAILED RESULTS:
+      - ✅ k=3: HTTP 200, status='ready', engine='faiss', 3 analogs returned
+        • First analog: date=2024-10-18, similarity=0.9581, price_then=$68,440.30, ret_7d_pct=-2.68%, ret_30d_pct=31.28%, 
+          path_30d=31 points
+        • Summary: avg_ret_7d_pct=4.61%, avg_ret_30d_pct=19.71%, pct_higher_7d=33%, pct_higher_30d=100%
+      - ✅ k=1: HTTP 200, status='ready', 1 analog returned with valid structure
+      - ✅ k=5: HTTP 200, status='ready', 5 analogs returned with valid structure
+      - ✅ All analogs have correct date format (YYYY-MM-DD), similarity ~0-1, forward returns, and 31-point price paths
+      
+      NO HTTP 500 ERRORS. Both features are fully functional and production-ready.
+    
     -agent: "main"
     -message: |
-      RETEST FOCUS — Pillar 4 alerts + Breaker Demo Toggle (backend only). Test via external base URL + /api prefix.
-      Do NOT POST /api/v1/refresh (expensive) and do NOT hit any /email endpoints. LEAVE the sim toggle OFF at the end.
-      1) GET /api/v1/dashboard -> HTTP 200 and contains:
-         - cost_basis {sth(num), lth(num), sth_window(=155), lth_window(=365), price(num), sth_reclaimed(bool),
-           lth_reclaimed(bool), method(str)}
-         - leverage_snapshot {funding_rate, oi_change_tf_pct, oi_state, squeeze{long_risk,short_risk,...}}
-      2) Breaker Demo Toggle:
-         a) POST /api/v1/admin/simulate-shock {"passcode":"000000","on":true} -> {status:'ok', active:true}
-         b) GET /api/v1/drift -> circuit_breaker=true, status='breaker', simulated=true, confidence_level='Low'
-         c) GET /api/v1/dashboard -> decision.circuit_breaker.active=true, decision.confidence_level='Low'
-         d) POST {"passcode":"000000","on":false} -> {active:false}; GET /api/v1/drift back to circuit_breaker=false
-         e) POST {"passcode":"wrong","on":true} -> HTTP 401
-      3) Regression: GET /api/v1/health, /api/v1/alerts?symbol=BTC still HTTP 200.
-      Report cost_basis/leverage_snapshot values and confirm the toggle round-trips and ends OFF.
+      RETEST FOCUS — Pillar 1 (order flow) + Pillar 3 (FAISS Time Machine), backend only. External base URL + /api prefix.
+      Do NOT POST /api/v1/refresh and do NOT hit /email endpoints.
+      1) GET /api/v1/orderflow -> HTTP 200. status should be 'live' (or 'connecting' if just warming up) — NEVER 500.
+         When 'live': numeric last_price, cvd_window_btc, ofi_btc_per_s, vpin, trades_per_sec; flow_state string;
+         venues map has coinbase/bybit/bybit_liq; liquidations object with long_usd_1m/short_usd_1m/cascade_risk(bool).
+         Poll twice ~3s apart to confirm it updates. (WS feeds: Coinbase+Bybit; Binance is geo-blocked so absent.)
+      2) GET /api/v1/time-machine/analogs?k=3 -> HTTP 200 status='ready' (first call may take ~1-2s).
+         analogs: list of up to 3, each {date, similarity(0-1), price_then, ret_7d_pct, ret_30d_pct, path_30d(list of 31)}.
+         summary {avg_ret_7d_pct, avg_ret_30d_pct, pct_higher_7d, pct_higher_30d}. engine should be 'faiss'. Try k=1 and k=5 too.
+      3) Regression: GET /api/v1/health and GET /api/v1/dashboard still HTTP 200.
+      Report status/values for both endpoints and any 500s.
+
+    -agent: "main"
+    -message: |
+      (Previous focus) Pillar 4 alerts + Breaker Demo Toggle — PASSED.
 
     -agent: "main"
     -message: |
