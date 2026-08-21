@@ -161,6 +161,14 @@ function ScenariosPanel() {
 function AnalogsPanel() {
   const [d, setD] = React.useState(null);
   const [open, setOpen] = React.useState(-1);
+  const [recaps, setRecaps] = React.useState({});
+  const loadRecap = (a) => {
+    if (recaps[a.date]) return;
+    setRecaps((m) => ({ ...m, [a.date]: { loading: true } }));
+    fetch(`${API_BASE}/v1/time-machine/analog-recap?date=${a.date}&price=${a.price_then}`, { cache: 'no-store' })
+      .then((r) => r.json()).then((j) => setRecaps((m) => ({ ...m, [a.date]: { loading: false, text: j.recap || 'No recap available for this date.' } })))
+      .catch(() => setRecaps((m) => ({ ...m, [a.date]: { loading: false, text: 'Could not load recap — please try again.' } })));
+  };
   React.useEffect(() => {
     fetch(`${API_BASE}/v1/time-machine/analogs?k=3`, { cache: 'no-store' })
       .then((r) => r.json()).then(setD).catch(() => setD({ status: 'error' }));
@@ -238,6 +246,15 @@ function AnalogsPanel() {
                   <span>Prior 30d: <b style={{ color: (a.context.prior_30d_pct ?? 0) >= 0 ? '#34d399' : '#f87171' }}>{a.context.prior_30d_pct != null ? (a.context.prior_30d_pct > 0 ? '+' : '') + a.context.prior_30d_pct + '%' : '—'}</b></span>
                 </div>
                 <p className="mt-2 text-[10px] italic text-slate-600">{a.context.note}</p>
+                <div className="mt-2">
+                  {!recaps[a.date] ? (
+                    <button onClick={() => loadRecap(a)} className="rounded-md border border-violet-500/40 bg-violet-500/10 px-2 py-1 text-[10px] font-semibold text-violet-300 hover:bg-violet-500/20">Ask Albert what happened →</button>
+                  ) : recaps[a.date].loading ? (
+                    <p className="text-[11px] italic text-slate-500">Albert is searching the web…</p>
+                  ) : (
+                    <p className="rounded-md border border-slate-800 bg-slate-950/50 p-2 text-[11px] leading-snug text-slate-300"><span className="font-semibold text-violet-300">Albert: </span>{recaps[a.date].text}</p>
+                  )}
+                </div>
               </div>
             )}
           </div>

@@ -5282,6 +5282,48 @@ def time_machine_analogs(k: int = 3):
         return {'status': 'error'}
 
 
+@app.get('/api/v1/time-machine/analog-recap')
+def analog_recap(date: str, price: float = None):
+    """On-demand: Albert (Gemini + live web search) recaps what actually happened
+    in Bitcoin/macro around a historical analog date. Cached per date in Mongo."""
+    try:
+        key = f'analog_recap:{date}'
+        cached = misc_col.find_one({'_id': key})
+        if cached and cached.get('recap'):
+            return {'date': date, 'recap': cached['recap'], 'cached': True}
+        if not EMERGENT_LLM_KEY:
+            return {'date': date, 'recap': None, 'error': 'LLM not configured'}
+        sys = ("You are Albert, a concise market historian. Using live web search, recap what was "
+               "actually happening in Bitcoin and broader markets around the given date. Reply in 2-4 "
+               "short sentences covering: the price level/action, the key catalyst(s) or news (spot ETF "
+               "flows, Fed/macro prints, regulation, hacks, major liquidations), and overall sentiment. "
+               "Be factual and specific; no disclaimers, no bullet lists, no preamble.")
+        q = f"What was happening in Bitcoin and macro markets around {date}?"
+        if price:
+            q += f" (BTC traded near ${round(price):,} at that time.)"
+        chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'analog-{date}', system_message=sys)
+                .with_model('gemini', ALBERT_CHAT_MODEL)
+                .with_params(temperature=0.3, max_tokens=3000))
+        text = ''
+        try:
+            reply = asyncio.run(chat.with_tools([{'googleSearch': {}}])
+                                .send_message_with_tools(UserMessage(text=q)))
+            text = (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '').strip()
+        except Exception:  # noqa
+            traceback.print_exc()
+        if not text:
+            reply2 = asyncio.run(chat.send_message(UserMessage(text=q)))
+            text = (getattr(reply2, 'text', None) or str(reply2)).strip()
+        if text:
+            misc_col.update_one({'_id': key},
+                                {'$set': {'recap': text, 'ts': datetime.datetime.utcnow().isoformat()}},
+                                upsert=True)
+        return {'date': date, 'recap': text, 'cached': False}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'date': date, 'recap': None, 'error': 'failed'}
+
+
 @app.get('/api/v1/drift')
 def drift_endpoint():
     """Latest Feature-Drift Circuit Breaker assessment: PSI/KS per feature, data
