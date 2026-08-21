@@ -96,6 +96,20 @@ function LiveOrderFlow() {
                 <div className="h-full bg-red-500/70" style={{ width: `${100 - o.orderbook.depth_imbalance.bid_pct}%` }} />
               </div>
               <div className="mt-0.5 flex justify-between text-[9px] text-slate-600"><span>bids {fUsd(o.orderbook.depth_imbalance.bid_usd_total)}</span><span>asks {fUsd(o.orderbook.depth_imbalance.ask_usd_total)}</span></div>
+              {(o.history || []).some((x) => x.imb != null) && (
+                <div className="mt-1 h-10 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={(o.history || []).filter((x) => x.imb != null)} margin={{ top: 2, right: 2, left: 2, bottom: 0 }}>
+                      <YAxis hide domain={[0, 100]} />
+                      <XAxis dataKey="t" hide />
+                      <ReferenceLine y={50} stroke="#475569" strokeDasharray="2 2" />
+                      <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 11 }}
+                        labelFormatter={() => ''} formatter={(v) => [`${v}% bids`, 'Depth imbalance']} />
+                      <Line dataKey="imb" stroke="#38bdf8" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </div>
           )}
           {(o.walls?.recent_events || []).length > 0 && (

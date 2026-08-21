@@ -492,6 +492,54 @@ function ModelConfidenceChip({ fallback }) {
   return null;
 }
 
+function WallAlertToaster() {
+  // App-level: polls /v1/orderflow and pops a dismissible toast whenever a large
+  // resting wall appears or is pulled near price — so you don't have to watch the
+  // Leverage screen. De-dupes by event timestamp.
+  const [toasts, setToasts] = React.useState([]);
+  const seen = React.useRef(new Set());
+  const first = React.useRef(true);
+  React.useEffect(() => {
+    let alive = true;
+    const fUsd = (v) => (v == null ? '' : '$' + (Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : Math.round(v / 1e3) + 'k'));
+    const tick = () => fetch(`${API_BASE}/v1/orderflow`, { cache: 'no-store' })
+      .then((r) => r.json()).then((o) => {
+        if (!alive) return;
+        const evs = (o.walls && o.walls.recent_events) || [];
+        const fresh = [];
+        evs.forEach((e) => {
+          const key = `${e.t}-${e.side}-${e.event}`;
+          if (seen.current.has(key)) return;
+          seen.current.add(key);
+          if (first.current) return; // skip backlog on first load
+          fresh.push({
+            id: key, side: e.side, event: e.event, price: e.price,
+            text: `${e.event === 'pulled' ? '✕' : e.side === 'bid' ? '⬆' : '⬇'} ${fUsd(e.usd)} ${e.side} wall ${e.event}${e.price ? ` @ ${Math.round(e.price).toLocaleString()}` : ''}`,
+          });
+        });
+        first.current = false;
+        if (fresh.length) {
+          setToasts((t) => [...t, ...fresh].slice(-4));
+          fresh.forEach((f) => setTimeout(() => setToasts((t) => t.filter((x) => x.id !== f.id)), 9000));
+        }
+      }).catch(() => {});
+    tick();
+    const id = setInterval(tick, 4000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  if (!toasts.length) return null;
+  return (
+    <div className="fixed bottom-24 right-4 z-[60] flex flex-col gap-2">
+      {toasts.map((t) => (
+        <div key={t.id} className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold shadow-lg backdrop-blur ${t.event === 'pulled' ? 'border-amber-500/40 bg-amber-950/80 text-amber-200' : t.side === 'bid' ? 'border-emerald-500/40 bg-emerald-950/80 text-emerald-200' : 'border-red-500/40 bg-red-950/80 text-red-200'}`}>
+          <span>{t.text}</span>
+          <button onClick={() => setToasts((x) => x.filter((z) => z.id !== t.id))} className="ml-1 text-slate-400 hover:text-white">✕</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 
 function MiniSpark({ points, height = 20, width = 72 }) {
   const vals = (points || []).map((p) => (p && typeof p.dominance === 'number' ? p.dominance : null)).filter((v) => v != null);
@@ -2868,6 +2916,7 @@ export default function DashboardPage() {
       </div>
     </div>
     <FloatingAlbert active={active} symbol={symbol} onExpand={() => setActive('ask')} />
+    <WallAlertToaster />
     {showReport && <DailyReportModal d={d} onClose={() => setShowReport(false)} />}
     </SymbolContext.Provider>
   );

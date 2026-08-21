@@ -160,6 +160,7 @@ function ScenariosPanel() {
 
 function AnalogsPanel() {
   const [d, setD] = React.useState(null);
+  const [open, setOpen] = React.useState(-1);
   React.useEffect(() => {
     fetch(`${API_BASE}/v1/time-machine/analogs?k=3`, { cache: 'no-store' })
       .then((r) => r.json()).then(setD).catch(() => setD({ status: 'error' }));
@@ -214,18 +215,35 @@ function AnalogsPanel() {
       </div>
       <div className="mt-3 space-y-1.5">
         {d.analogs.map((a, i) => (
-          <div key={i} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
-            <span className="h-2 w-2 rounded-full" style={{ background: colors[i] }} />
-            <span className="font-semibold text-slate-200">{a.date}</span>
-            <span className="text-slate-500">{(a.similarity * 100).toFixed(1)}% match · {fmtUsd(a.price_then)}</span>
-            <span className="ml-auto flex gap-3">
-              <span style={{ color: a.ret_7d_pct >= 0 ? '#34d399' : '#f87171' }}>7d {a.ret_7d_pct > 0 ? '+' : ''}{a.ret_7d_pct}%</span>
-              <span style={{ color: a.ret_30d_pct >= 0 ? '#34d399' : '#f87171' }}>30d {a.ret_30d_pct > 0 ? '+' : ''}{a.ret_30d_pct}%</span>
-            </span>
+          <div key={i} className="rounded-lg border border-slate-800/70 bg-slate-950/40">
+            <button onClick={() => setOpen(open === i ? -1 : i)} className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-2.5 py-1.5 text-left text-[12px] hover:bg-slate-800/30">
+              <span className="h-2 w-2 rounded-full" style={{ background: colors[i] }} />
+              <span className="font-semibold text-slate-200">{a.date}</span>
+              <span className="text-slate-500">{(a.similarity * 100).toFixed(1)}% match · {fmtUsd(a.price_then)}</span>
+              <span className="ml-auto flex items-center gap-3">
+                <span style={{ color: a.ret_7d_pct >= 0 ? '#34d399' : '#f87171' }}>7d {a.ret_7d_pct > 0 ? '+' : ''}{a.ret_7d_pct}%</span>
+                <span style={{ color: a.ret_30d_pct >= 0 ? '#34d399' : '#f87171' }}>30d {a.ret_30d_pct > 0 ? '+' : ''}{a.ret_30d_pct}%</span>
+                <span className={`text-slate-500 transition-transform ${open === i ? 'rotate-180' : ''}`}>▾</span>
+              </span>
+            </button>
+            {open === i && a.context && (
+              <div className="border-t border-slate-800/70 px-2.5 py-2 text-[11px] text-slate-400">
+                <p className="mb-2 text-slate-300">{a.context.summary}</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
+                  <span>RSI: <b className="text-slate-200">{a.context.rsi ?? '—'}</b></span>
+                  <span>Trend: <b className="text-slate-200">{a.context.trend}</b></span>
+                  <span>ATR: <b className="text-slate-200">{a.context.atr_pct != null ? a.context.atr_pct + '%' : '—'}</b></span>
+                  <span>Vol vs avg: <b className="text-slate-200">{a.context.volume_ratio != null ? a.context.volume_ratio + '×' : '—'}</b></span>
+                  <span>Prior 7d: <b style={{ color: (a.context.prior_7d_pct ?? 0) >= 0 ? '#34d399' : '#f87171' }}>{a.context.prior_7d_pct != null ? (a.context.prior_7d_pct > 0 ? '+' : '') + a.context.prior_7d_pct + '%' : '—'}</b></span>
+                  <span>Prior 30d: <b style={{ color: (a.context.prior_30d_pct ?? 0) >= 0 ? '#34d399' : '#f87171' }}>{a.context.prior_30d_pct != null ? (a.context.prior_30d_pct > 0 ? '+' : '') + a.context.prior_30d_pct + '%' : '—'}</b></span>
+                </div>
+                <p className="mt-2 text-[10px] italic text-slate-600">{a.context.note}</p>
+              </div>
+            )}
           </div>
         ))}
       </div>
-      <p className="mt-2 text-[10px] text-slate-600">FAISS cosine match over standardized momentum/trend/volatility/volume vectors. Past analogs are context, not a prediction — outcomes vary.</p>
+      <p className="mt-2 text-[10px] text-slate-600">FAISS cosine match over standardized momentum/trend/volatility/volume vectors. Click a day for its market backdrop. Past analogs are context, not a prediction — outcomes vary.</p>
     </Card>
   );
 }

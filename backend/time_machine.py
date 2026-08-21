@@ -16,6 +16,47 @@ except Exception:  # noqa
     _HAS_FAISS = False
 
 
+def _analog_context(df, j):
+    """Human-readable market backdrop for a historical analog day, derived from
+    price/volume/indicators (a true news archive isn't stored for past dates)."""
+    try:
+        closes = df['close'].values
+        n = len(closes)
+
+        def ret(a, b):
+            return round((closes[a] - closes[b]) / closes[b] * 100, 1) if 0 <= b < n and closes[b] else None
+        prior7 = ret(j, j - 7)
+        prior30 = ret(j, j - 30)
+        vr = None
+        if 'volume' in df.columns and j >= 20:
+            base = float(df['volume'].values[max(0, j - 20):j].mean() or 0)
+            vr = round(float(df['volume'].values[j]) / base, 2) if base else None
+        rsi_raw = float(df['RSI'].iloc[j]) if 'RSI' in df.columns else None
+        rsi = round(rsi_raw * 100) if (rsi_raw is not None and rsi_raw <= 1.5) else (round(rsi_raw) if rsi_raw is not None else None)
+        ema = float(df['EMA_Ratio'].iloc[j]) if 'EMA_Ratio' in df.columns else 0.0
+        atr = float(df['ATR_Pct'].iloc[j]) if 'ATR_Pct' in df.columns else None
+        trend = 'up-trend' if ema > 0.002 else 'down-trend' if ema < -0.002 else 'flat'
+        mom = 'overbought' if (rsi is not None and rsi >= 70) else 'oversold' if (rsi is not None and rsi <= 30) else 'neutral momentum'
+        vol_desc = ('elevated volatility' if (atr is not None and atr > 0.04)
+                    else 'calm volatility' if (atr is not None and atr < 0.02) else 'normal volatility')
+        vol_flow = ('above-average volume' if (vr and vr > 1.2) else 'below-average volume' if (vr and vr < 0.8) else 'average volume')
+        bits = []
+        if prior30 is not None:
+            bits.append(f"price had moved {prior30:+.1f}% over the prior month ({prior7:+.1f}% in the prior week)")
+        bits.append(f"in a {trend} with {mom}")
+        bits.append(f"{vol_desc} and {vol_flow}")
+        summary = 'On this day, ' + ', '.join(bits) + '.'
+        return {
+            'prior_7d_pct': prior7, 'prior_30d_pct': prior30,
+            'rsi': rsi, 'trend': trend, 'momentum': mom,
+            'atr_pct': round(atr * 100, 2) if atr is not None else None,
+            'volume_ratio': vr, 'summary': summary,
+            'note': 'News archive not available for past dates — context derived from price, volume and indicators.',
+        }
+    except Exception:  # noqa
+        return None
+
+
 def find_analogs(df, feature_cols, k=3, forward=30, exclude_recent=7, min_gap=15):
     """df: OHLCV+features DataFrame (must include feature_cols, 'close', 'timestamp')."""
     cols = [c for c in feature_cols if c in df.columns]
@@ -71,6 +112,7 @@ def find_analogs(df, feature_cols, k=3, forward=30, exclude_recent=7, min_gap=15
             'ret_7d_pct': round((c7 - c0) / c0 * 100, 2),
             'ret_30d_pct': round((c30 - c0) / c0 * 100, 2),
             'path_30d': path,
+            'context': _analog_context(df, j),
         })
         if len(results) >= k:
             break

@@ -365,13 +365,19 @@ async def _aggregator():
                     'count_1m': len(lw),
                 },
             }
-            _hist.append({'t': int(now), 'cvd': _round(session_cvd, 3),
-                          'liq_net': _round(short_liq - long_liq, 0)})
-            snap['history'] = list(_hist)[-90:]
+            ob = None
             try:
                 ob = _build_heatmap()
+            except Exception:  # noqa
+                ob = None
+            imb = ((ob or {}).get('depth_imbalance') or {}).get('bid_pct') if ob else None
+            _hist.append({'t': int(now), 'cvd': _round(session_cvd, 3),
+                          'liq_net': _round(short_liq - long_liq, 0), 'imb': imb})
+            snap['history'] = list(_hist)[-90:]
+            try:
                 snap['orderbook'] = ob
-                _track_walls(ob, now)
+                if ob:
+                    _track_walls(ob, now)
                 snap['walls'] = {'bid': _walls_state.get('bid'), 'ask': _walls_state.get('ask'),
                                  'recent_events': list(_wall_events)[-5:]}
             except Exception:  # noqa

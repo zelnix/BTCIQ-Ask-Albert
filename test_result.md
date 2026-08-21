@@ -744,6 +744,97 @@ test_plan:
 agent_communication:
     -agent: "testing"
     -message: |
+      ✅ TIME MACHINE ANALOG DRILL-DOWN + LEVERAGE DEPTH IMBALANCE HISTORY UI TEST COMPLETE - ALL TESTS PASSED (2/2)
+      
+      Focused UI test of two NEW BTCIQ features via external URL (https://quant-features.preview.emergentagent.com).
+      Screenshots captured. Desktop viewport (1920x1080).
+      
+      ITEM A — TIME MACHINE ANALOG DRILL-DOWN: ✅ PASSED (ALL ELEMENTS RENDER + EXPAND/COLLAPSE WORKS)
+      
+      Navigation & Panel Presence:
+      - ✅ Navigated to Time Machine screen (Bitcoin Time Machine in left nav)
+      - ✅ "When did this happen before?" panel renders with heading visible
+      - ✅ FAISS analog match badge present (purple chip)
+      
+      Summary Tiles (4/4 found):
+      - ✅ "Avg next 7d" tile with percentage (e.g., +4.93%)
+      - ✅ "Avg next 30d" tile with percentage (e.g., +21.45%)
+      - ✅ "Higher after 30d" tile with percentage (e.g., 100%)
+      - ✅ "Analogs" tile with count (e.g., 3)
+      
+      Analog Rows (3 found):
+      - ✅ Each row is a clickable button with all required elements:
+        • Date in YYYY-MM-DD format (e.g., 2024-10-18)
+        • % match (e.g., 97.1% match)
+        • Price at that time (e.g., $68,440)
+        • 7d forward return (e.g., 7d -2.68%)
+        • 30d forward return (e.g., 30d +31.28%)
+        • Chevron (▾) indicator for expand/collapse
+      
+      Expand/Collapse Functionality:
+      - ✅ CLICKED first analog row → EXPANDED successfully
+      - ✅ Expanded detail section shows MARKET BACKDROP with ALL 6 stat chips:
+        • RSI: 72 (numeric value)
+        • Trend: up-trend (text label)
+        • ATR: 2.64% (percentage)
+        • Vol vs avg: 0.67× (ratio)
+        • Prior 7d: +9.5% (percentage with color)
+        • Prior 30d: — (null value handled)
+      - ✅ Summary sentence present: "On this day, in a up-trend with overbought, normal volatility and average volume."
+      - ✅ Italic note present: "News archive not available for past dates — context derived from price, volume and indicators."
+      - ✅ CLICKED again → COLLAPSED successfully (stats reduced from 6 to 0)
+      
+      Screenshots: timemachine_analogs_panel.png, timemachine_analog_expanded.png, timemachine_analog_collapsed.png
+      
+      ITEM B — LEVERAGE DEPTH IMBALANCE HISTORY LINE CHART: ✅ PASSED (CHART RENDERS + LIVE UPDATES)
+      
+      Navigation & Card Presence:
+      - ✅ Navigated to Leverage screen (Gauge icon in left nav)
+      - ✅ "Live Order Flow" card renders with heading visible
+      - ✅ Green "LIVE" badge present
+      
+      Depth Imbalance Section:
+      - ✅ "DEPTH IMBALANCE (±1.2%)" heading found
+      - ✅ Green/red split meter (horizontal bar) visible
+      - ✅ State label present (e.g., "Bids stacked · 59.4% bids" or "Balanced · 66.8% bids")
+      - ✅ % bids figure displayed
+      - ✅ Bids/asks dollar amounts underneath (e.g., "bids $545k / asks $271k")
+      
+      Depth Imbalance HISTORY LINE CHART (mini chart below meter):
+      - ✅ CHART RENDERS: Small line chart (h-10 = 40px height) visible DIRECTLY BELOW the split meter
+      - ✅ Chart shows depth imbalance % over time (blue wavy line)
+      - ✅ Dashed midline at 50% visible (reference line)
+      - ✅ Chart is rendered by Recharts (SVG elements detected)
+      - ✅ Chart container indicators confirmed: h-10 class, Recharts library, dataKey="imb"
+      - ✅ LIVE UPDATES CONFIRMED: Waited 6 seconds, CVD value changed from +3.8831 BTC → -3.7489 BTC
+      - ✅ Chart updates as card polls every ~2.5s (live WebSocket data)
+      
+      Screenshots: leverage_live_order_flow.png, leverage_depth_imbalance_detail.png, leverage_after_6s_wait.png
+      
+      Console Errors:
+      - ✅ No error messages found on the page
+      - ✅ No console errors detected during testing
+      
+      SUMMARY:
+      ✅ ITEM A (Time Machine Analog Drill-Down): FULLY FUNCTIONAL
+         - "When did this happen before?" panel with FAISS badge ✅
+         - 4 summary tiles (Avg 7d, Avg 30d, Higher after 30d, Analogs) ✅
+         - 3 analog rows with date, % match, price, 7d/30d returns, chevron ✅
+         - EXPAND functionality: Click row → shows market backdrop detail (summary + 6 stat chips + italic note) ✅
+         - COLLAPSE functionality: Click again → hides detail section ✅
+      
+      ✅ ITEM B (Leverage Depth Imbalance History Line): FULLY FUNCTIONAL
+         - "Live Order Flow" card with LIVE badge ✅
+         - Depth imbalance section with green/red split meter ✅
+         - Mini line chart BELOW meter showing depth imbalance % over time ✅
+         - Dashed midline at 50% ✅
+         - Chart updates live (~2.5s polling) ✅
+      
+      NO CRITICAL ISSUES. Both UI features render correctly with all specified elements present and functional. 
+      Analog drill-down expand/collapse works smoothly. Depth imbalance history chart renders and updates in real-time. 
+      Features are production-ready.
+    -agent: "testing"
+    -message: |
       ✅ PILLAR 1 + PILLAR 3 TESTING COMPLETE - ALL TESTS PASSED (4/4)
       
       Tested Pillar 1 (Real-time Order Flow) + Pillar 3 (FAISS Time Machine) backend ONLY via external URL 
