@@ -149,9 +149,12 @@ function ProjectionChart({ d }) {
   const [showBasis, setShowBasis] = React.useState(true);
   const [showRhyme, setShowRhyme] = React.useState(true);
   const [analog, setAnalog] = React.useState(null);
+  const [analogs, setAnalogs] = React.useState([]);
   React.useEffect(() => {
-    fetch(`${API_BASE}/v1/time-machine/analogs?k=1`, { cache: 'no-store' })
-      .then((r) => r.json()).then((j) => { if (j.status === 'ready' && (j.analogs || []).length) setAnalog(j.analogs[0]); }).catch(() => {});
+    fetch(`${API_BASE}/v1/time-machine/analogs?k=3`, { cache: 'no-store' })
+      .then((r) => r.json()).then((j) => {
+        if (j.status === 'ready' && (j.analogs || []).length) { setAnalog(j.analogs[0]); setAnalogs(j.analogs); }
+      }).catch(() => {});
   }, []);
 
   const last = d.last_close;
@@ -171,6 +174,18 @@ function ProjectionChart({ d }) {
   if (analog && showRhyme && analog.path_30d?.length) {
     const p0 = analog.path_30d[0].close;
     analog.path_30d.forEach((p) => { if (p0) put(p.d, { rhyme: Math.round(last * (p.close / p0)) }); });
+  }
+  if (showRhyme && analogs.length > 1) {
+    // Confidence band = min/max across ALL top-K analog forward paths (anchored to today).
+    const maxD = Math.max(...analogs.map((a) => (a.path_30d || []).length - 1));
+    for (let dd = 0; dd <= maxD; dd++) {
+      const prices = analogs.map((a) => {
+        const p0 = a.path_30d?.[0]?.close; const pv = a.path_30d?.[dd]?.close;
+        return (p0 && pv != null) ? last * (pv / p0) : null;
+      }).filter((x) => x != null);
+      if (prices.length > 1) put(dd, { aband: [Math.round(Math.min(...prices)), Math.round(Math.max(...prices))] });
+    }
+    put(0, { aband: [last, last] });
   }
   const data = [...rows.values()].sort((a, b) => a.x - b.x);
   const cb = d.cost_basis || {};
@@ -205,11 +220,13 @@ function ProjectionChart({ d }) {
               labelFormatter={(v) => (v === 0 ? 'Now' : v > 0 ? `+${v} days (forecast)` : `${-v} days ago`)}
               formatter={(val, name) => {
                 if (name === 'cone' && Array.isArray(val)) return [`${fmtUsd(val[0])} – ${fmtUsd(val[1])}`, '90% corridor'];
+                if (name === 'aband' && Array.isArray(val)) return [`${fmtUsd(val[0])} – ${fmtUsd(val[1])}`, 'analog spread'];
                 if (val == null) return [null, null];
                 const lbl = name === 'price' ? 'Price' : name === 'base' ? 'Projected base' : name === 'rhyme' ? 'Analog rhyme' : name;
                 return [fmtUsd(val), lbl];
               }} />
             {showCone && <Area dataKey="cone" stroke="#38bdf8" strokeOpacity={0.4} fill="#38bdf8" fillOpacity={0.14} connectNulls isAnimationActive={false} />}
+            {showRhyme && analogs.length > 1 && <Area dataKey="aband" stroke="#a78bfa" strokeOpacity={0.25} fill="#a78bfa" fillOpacity={0.1} connectNulls isAnimationActive={false} />}
             {analog && showRhyme && <Line dataKey="rhyme" stroke="#a78bfa" strokeWidth={1.5} strokeDasharray="4 3" dot={false} connectNulls isAnimationActive={false} />}
             <Line dataKey="price" stroke="#e2e8f0" strokeWidth={2} dot={false} connectNulls isAnimationActive={false} />
             {showCone && <Line dataKey="base" stroke="#38bdf8" strokeWidth={1.5} strokeDasharray="5 4" dot={{ r: 2 }} connectNulls isAnimationActive={false} />}
@@ -238,6 +255,7 @@ function ProjectionChart({ d }) {
         <span className="flex items-center gap-1"><span className="h-0.5 w-4" style={{ borderTop: '2px dashed #34d399' }} />take-profit (bull)</span>
         <span className="flex items-center gap-1"><span className="h-0.5 w-4" style={{ borderTop: '2px dashed #f87171' }} />invalidation</span>
         {analog && showRhyme && <span className="flex items-center gap-1"><span className="h-0.5 w-4" style={{ borderTop: '2px dashed #a78bfa' }} />analog rhyme ({analog.date})</span>}
+        {showRhyme && analogs.length > 1 && <span className="flex items-center gap-1"><span className="h-2 w-4 rounded-sm bg-violet-400/25" />analog spread (top {analogs.length})</span>}
         {showBasis && (cb.sth != null || cb.lth != null) && (
           <span className="ml-auto italic">Cost basis = volume-weighted price proxy ({cb.sth_window}d / {cb.lth_window}d), not on-chain realized price.</span>
         )}

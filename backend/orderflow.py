@@ -31,12 +31,14 @@ WINDOW_SEC = 60          # rolling analytics window
 STREAM_MAXLEN = 100000   # circular Redis stream buffer
 
 _lock = threading.Lock()
+_book_lock = threading.Lock()
 _trades = deque()        # (ts, price, size_btc, aggressor 'buy'/'sell', venue)
 _liqs = deque()          # (ts, price, notional_usd, side 'long'/'short', venue)
 _hist = deque(maxlen=180)  # per-second rolling samples for the sparkline
+_book = {'bids': {}, 'asks': {}, 'ts': 0}  # live Bybit L2 order book (price->size)
 _state = {
     'started': False,
-    'venues': {'coinbase': 'connecting', 'bybit': 'connecting', 'bybit_liq': 'connecting'},
+    'venues': {'coinbase': 'connecting', 'bybit': 'connecting', 'bybit_liq': 'connecting', 'bybit_book': 'connecting'},
     'last_price': None,
     'session_cvd_btc': 0.0,
     'snapshot': None,
@@ -165,6 +167,84 @@ async def _bybit_liq():
             await asyncio.sleep(3)
 
 
+async def _bybit_book():
+    """Maintain a live L2 order book from Bybit (orderbook.50) for the liquidity
+    heatmap: snapshot resets, deltas patch (size '0' removes a level)."""
+    url = 'wss://stream.bybit.com/v5/public/linear'
+    sub = {'op': 'subscribe', 'args': ['orderbook.50.BTCUSDT']}
+    while True:
+        try:
+            async with websockets.connect(url, open_timeout=10, ping_interval=20) as ws:
+                await ws.send(json.dumps(sub))
+                _state['venues']['bybit_book'] = 'live'
+                async for raw in ws:
+                    m = json.loads(raw)
+                    if not m.get('topic', '').startswith('orderbook'):
+                        continue
+                    data = m.get('data') or {}
+                    typ = m.get('type')
+                    with _book_lock:
+                        if typ == 'snapshot':
+                            _book['bids'] = {float(p): float(s) for p, s in data.get('b', [])}
+                            _book['asks'] = {float(p): float(s) for p, s in data.get('a', [])}
+                        else:  # delta
+                            for p, s in data.get('b', []):
+                                p = float(p); s = float(s)
+                                if s == 0:
+                                    _book['bids'].pop(p, None)
+                                else:
+                                    _book['bids'][p] = s
+                            for p, s in data.get('a', []):
+                                p = float(p); s = float(s)
+                                if s == 0:
+                                    _book['asks'].pop(p, None)
+                                else:
+                                    _book['asks'][p] = s
+                        _book['ts'] = time.time()
+        except Exception:  # noqa
+            _state['venues']['bybit_book'] = 'reconnecting'
+            await asyncio.sleep(3)
+
+
+def _build_heatmap(mid_hint=None, band=0.012, nb=20):
+    """Bucket live resting liquidity into price bins around mid for the heatmap."""
+    with _book_lock:
+        bids = dict(_book['bids'])
+        asks = dict(_book['asks'])
+    if not bids or not asks:
+        return None
+    best_bid = max(bids)
+    best_ask = min(asks)
+    mid = (best_bid + best_ask) / 2.0
+    lo = mid * (1 - band)
+    hi = mid * (1 + band)
+    step = (hi - lo) / nb
+    if step <= 0:
+        return None
+    bins = [{'lo': lo + i * step, 'hi': lo + (i + 1) * step, 'bid_usd': 0.0, 'ask_usd': 0.0} for i in range(nb)]
+    for p, s in bids.items():
+        if lo <= p <= mid:
+            bins[min(nb - 1, int((p - lo) / step))]['bid_usd'] += p * s
+    for p, s in asks.items():
+        if mid < p <= hi:
+            bins[min(nb - 1, int((p - lo) / step))]['ask_usd'] += p * s
+    out = []
+    max_bid = {'usd': 0.0, 'price': None}
+    max_ask = {'usd': 0.0, 'price': None}
+    for b in bins:
+        bmid = (b['lo'] + b['hi']) / 2.0
+        bu = round(b['bid_usd'], 0)
+        au = round(b['ask_usd'], 0)
+        out.append({'price': round(bmid, 1), 'pct': round((bmid - mid) / mid * 100, 3),
+                    'bid_usd': bu, 'ask_usd': au})
+        if bu > max_bid['usd']:
+            max_bid = {'usd': bu, 'price': round(bmid, 1)}
+        if au > max_ask['usd']:
+            max_ask = {'usd': au, 'price': round(bmid, 1)}
+    return {'mid': round(mid, 1), 'band_pct': band * 100, 'bins': out,
+            'max_bid_wall': max_bid, 'max_ask_wall': max_ask, 'levels': len(bids) + len(asks)}
+
+
 # ---------------------------------------------------------------- aggregator
 def _round(v, n=2):
     try:
@@ -238,6 +318,10 @@ async def _aggregator():
             _hist.append({'t': int(now), 'cvd': _round(session_cvd, 3),
                           'liq_net': _round(short_liq - long_liq, 0)})
             snap['history'] = list(_hist)[-90:]
+            try:
+                snap['orderbook'] = _build_heatmap()
+            except Exception:  # noqa
+                snap['orderbook'] = None
             _state['snapshot'] = snap
             r = _get_redis()
             if r:
@@ -254,7 +338,7 @@ def _run_loop():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(asyncio.gather(
-        _coinbase(), _bybit(), _bybit_liq(), _aggregator(),
+        _coinbase(), _bybit(), _bybit_liq(), _bybit_book(), _aggregator(),
     ))
 
 

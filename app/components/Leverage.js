@@ -63,6 +63,28 @@ function LiveOrderFlow() {
               </div>
             </div>
           )}
+          {o.orderbook && o.orderbook.bins && o.orderbook.bins.length > 0 && (
+            <div className="mt-3">
+              <p className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-500">
+                <span>Resting liquidity (±{o.orderbook.band_pct}%)</span>
+                <span className="normal-case text-slate-600">walls: <span className="text-emerald-400">bid {fUsd(o.orderbook.max_bid_wall?.usd)}</span> · <span className="text-red-400">ask {fUsd(o.orderbook.max_ask_wall?.usd)}</span></span>
+              </p>
+              <div className="flex h-10 w-full overflow-hidden rounded-md ring-1 ring-slate-800">
+                {(() => {
+                  const bins = o.orderbook.bins;
+                  const mx = Math.max(1, ...bins.map((b) => Math.max(b.bid_usd || 0, b.ask_usd || 0)));
+                  return bins.map((b, i) => {
+                    const isBid = (b.bid_usd || 0) >= (b.ask_usd || 0);
+                    const usd = isBid ? (b.bid_usd || 0) : (b.ask_usd || 0);
+                    const a = Math.min(1, usd / mx);
+                    const bg = usd <= 0 ? 'transparent' : isBid ? `rgba(52,211,153,${0.12 + a * 0.78})` : `rgba(248,113,113,${0.12 + a * 0.78})`;
+                    return <div key={i} title={`$${Math.round(b.price).toLocaleString()} · ${isBid ? 'bids' : 'asks'} ${fUsd(usd)}`} className="flex-1 border-r border-slate-950/40" style={{ background: bg }} />;
+                  });
+                })()}
+              </div>
+              <div className="mt-0.5 flex justify-between text-[9px] text-slate-600"><span>−{o.orderbook.band_pct}% (bids)</span><span>mid ${Math.round(o.orderbook.mid).toLocaleString()}</span><span>+{o.orderbook.band_pct}% (asks)</span></div>
+            </div>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-600">
             {Object.entries(o.venues || {}).map(([v, st]) => (
               <span key={v} className="flex items-center gap-1"><span className={`h-1.5 w-1.5 rounded-full ${st === 'live' ? 'bg-emerald-400' : 'bg-amber-400'}`} />{v}</span>
