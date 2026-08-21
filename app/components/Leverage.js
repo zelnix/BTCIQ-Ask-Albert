@@ -85,6 +85,28 @@ function LiveOrderFlow() {
               <div className="mt-0.5 flex justify-between text-[9px] text-slate-600"><span>−{o.orderbook.band_pct}% (bids)</span><span>mid ${Math.round(o.orderbook.mid).toLocaleString()}</span><span>+{o.orderbook.band_pct}% (asks)</span></div>
             </div>
           )}
+          {o.orderbook?.depth_imbalance && (
+            <div className="mt-3">
+              <p className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-500">
+                <span>Depth imbalance (±{o.orderbook.band_pct}%)</span>
+                <span className="normal-case font-semibold" style={{ color: o.orderbook.depth_imbalance.state === 'Bids stacked' ? '#34d399' : o.orderbook.depth_imbalance.state === 'Asks stacked' ? '#f87171' : '#94a3b8' }}>{o.orderbook.depth_imbalance.state} · {o.orderbook.depth_imbalance.bid_pct}% bids</span>
+              </p>
+              <div className="flex h-2.5 w-full overflow-hidden rounded-full bg-slate-800">
+                <div className="h-full bg-emerald-500/70" style={{ width: `${o.orderbook.depth_imbalance.bid_pct}%` }} />
+                <div className="h-full bg-red-500/70" style={{ width: `${100 - o.orderbook.depth_imbalance.bid_pct}%` }} />
+              </div>
+              <div className="mt-0.5 flex justify-between text-[9px] text-slate-600"><span>bids {fUsd(o.orderbook.depth_imbalance.bid_usd_total)}</span><span>asks {fUsd(o.orderbook.depth_imbalance.ask_usd_total)}</span></div>
+            </div>
+          )}
+          {(o.walls?.recent_events || []).length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {o.walls.recent_events.slice().reverse().map((e, i) => (
+                <span key={i} className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${e.event === 'pulled' ? 'border-amber-500/40 bg-amber-500/10 text-amber-300' : e.side === 'bid' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-red-500/40 bg-red-500/10 text-red-300'}`}>
+                  {e.event === 'pulled' ? '✕ ' : e.side === 'bid' ? '⬆ ' : '⬇ '}{fUsd(e.usd)} {e.side} wall {e.event === 'pulled' ? 'pulled' : 'appeared'}{e.price ? ` @ ${Math.round(e.price).toLocaleString()}` : ''}
+                </span>
+              ))}
+            </div>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-600">
             {Object.entries(o.venues || {}).map(([v, st]) => (
               <span key={v} className="flex items-center gap-1"><span className={`h-1.5 w-1.5 rounded-full ${st === 'live' ? 'bg-emerald-400' : 'bg-amber-400'}`} />{v}</span>

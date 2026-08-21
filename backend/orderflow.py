@@ -36,6 +36,11 @@ _trades = deque()        # (ts, price, size_btc, aggressor 'buy'/'sell', venue)
 _liqs = deque()          # (ts, price, notional_usd, side 'long'/'short', venue)
 _hist = deque(maxlen=180)  # per-second rolling samples for the sparkline
 _book = {'bids': {}, 'asks': {}, 'ts': 0}  # live Bybit L2 order book (price->size)
+_walls_state = {}          # 'bid'/'ask' -> tracked significant wall near price
+_wall_events = deque(maxlen=20)
+WALL_MIN_USD = 3_000_000   # a resting wall this large near price is noteworthy
+WALL_NEAR_PCT = 0.5        # within ±0.5% of mid
+WALL_PERSIST_S = 5         # must persist this long to count (filters flicker/spoof noise)
 _state = {
     'started': False,
     'venues': {'coinbase': 'connecting', 'bybit': 'connecting', 'bybit_liq': 'connecting', 'bybit_book': 'connecting'},
@@ -231,18 +236,63 @@ def _build_heatmap(mid_hint=None, band=0.012, nb=20):
     out = []
     max_bid = {'usd': 0.0, 'price': None}
     max_ask = {'usd': 0.0, 'price': None}
+    bid_total = 0.0
+    ask_total = 0.0
     for b in bins:
         bmid = (b['lo'] + b['hi']) / 2.0
         bu = round(b['bid_usd'], 0)
         au = round(b['ask_usd'], 0)
+        bid_total += bu
+        ask_total += au
         out.append({'price': round(bmid, 1), 'pct': round((bmid - mid) / mid * 100, 3),
                     'bid_usd': bu, 'ask_usd': au})
         if bu > max_bid['usd']:
             max_bid = {'usd': bu, 'price': round(bmid, 1)}
         if au > max_ask['usd']:
             max_ask = {'usd': au, 'price': round(bmid, 1)}
+    tot = bid_total + ask_total
+    depth_imbalance = {
+        'bid_usd_total': round(bid_total, 0),
+        'ask_usd_total': round(ask_total, 0),
+        'bid_pct': round(100 * bid_total / tot, 1) if tot > 0 else 50.0,
+        'state': ('Bids stacked' if tot > 0 and bid_total / tot > 0.58 else
+                  'Asks stacked' if tot > 0 and bid_total / tot < 0.42 else 'Balanced'),
+    }
     return {'mid': round(mid, 1), 'band_pct': band * 100, 'bins': out,
-            'max_bid_wall': max_bid, 'max_ask_wall': max_ask, 'levels': len(bids) + len(asks)}
+            'max_bid_wall': max_bid, 'max_ask_wall': max_ask, 'levels': len(bids) + len(asks),
+            'depth_imbalance': depth_imbalance}
+
+
+def _track_walls(ob, now):
+    """Detect large resting walls that APPEAR (persisted) or get PULLED near price
+    (a spoofing / support-resistance tell). Emits debounced events."""
+    if not ob or not ob.get('mid'):
+        return
+    mid = ob['mid']
+    for side in ('bid', 'ask'):
+        wall = ob['max_bid_wall'] if side == 'bid' else ob['max_ask_wall']
+        usd = (wall or {}).get('usd') or 0
+        price = (wall or {}).get('price')
+        pct = abs((price - mid) / mid * 100) if price and mid else 999
+        significant = usd >= WALL_MIN_USD and pct <= WALL_NEAR_PCT
+        st = _walls_state.get(side)
+        if significant:
+            if not st or (price and st.get('price') and abs(st['price'] - price) / price > 0.003):
+                st = {'price': price, 'usd': usd, 'since': now, 'active': False}
+                _walls_state[side] = st
+            st['usd'] = usd
+            st['last_seen'] = now
+            if not st['active'] and now - st['since'] >= WALL_PERSIST_S:
+                st['active'] = True
+                _wall_events.append({'t': now, 'side': side, 'event': 'appeared',
+                                     'price': price, 'usd': usd,
+                                     'pct': round((price - mid) / mid * 100, 3)})
+        else:
+            if st and st.get('active'):
+                _wall_events.append({'t': now, 'side': side, 'event': 'pulled',
+                                     'price': st.get('price'), 'usd': st.get('usd')})
+            if st:
+                _walls_state.pop(side, None)
 
 
 # ---------------------------------------------------------------- aggregator
@@ -319,7 +369,11 @@ async def _aggregator():
                           'liq_net': _round(short_liq - long_liq, 0)})
             snap['history'] = list(_hist)[-90:]
             try:
-                snap['orderbook'] = _build_heatmap()
+                ob = _build_heatmap()
+                snap['orderbook'] = ob
+                _track_walls(ob, now)
+                snap['walls'] = {'bid': _walls_state.get('bid'), 'ask': _walls_state.get('ask'),
+                                 'recent_events': list(_wall_events)[-5:]}
             except Exception:  # noqa
                 snap['orderbook'] = None
             _state['snapshot'] = snap
