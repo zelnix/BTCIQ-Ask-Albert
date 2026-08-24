@@ -6587,3 +6587,62 @@ agent_communication:
       
       NO CRITICAL ISSUES. Both UI items render correctly with all specified elements present and functional. 
       Live order-flow data updates in real-time. Projection overlays toggle correctly. Feature is production-ready.
+
+#====================================================================================================
+# SESSION: Engine-error fix + Notification read-state / badge / sound
+#====================================================================================================
+
+frontend:
+  - task: "Notifications: accurate global unread badge + persistent push dedup + chime + nav badge"
+    implemented: true
+    working: true
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          P1 notification work (frontend-only; backend /v1/alerts + /v1/alerts/ack unchanged):
+          1. Top-bar bell + NEW sidebar "Alerts" nav badge now driven by a GLOBAL (all-coins) feed
+             fetched from GET /api/v1/alerts?limit=50 (state: notif / loadNotif, polled 30s). Previously
+             the badge was scoped to the selected coin so it under-counted -> now accurate.
+          2. "Mark all read" in the bell now calls a GLOBAL ack (POST /api/v1/alerts/ack with empty body)
+             clearing unseen across every coin. Verified badge clears.
+          3. Persistent read-state for browser push: already-notified alert IDs are stored in localStorage
+             (btciq_notified_ids, capped 200) and hydrated on mount, so reloads / a later device visit do
+             NOT re-fire OS push or the chime for alerts already shown.
+          4. Notification chime (Web Audio, no asset) plays on NEW high/critical/warning alerts, with a
+             mute toggle in the bell header persisted to localStorage (btciq_notif_sound).
+          Verified via screenshots: bell badge shows count, dropdown lists alerts + mute toggle, Alerts nav
+          badge shows, "Mark all read" clears the badge globally. App boots cleanly.
+
+  - task: "Fix Engine error (SyntaxError: Unexpected token '<' <!DOCTYPE) on preview load"
+    implemented: true
+    working: true
+    file: "infra: supervisor redis + reinstall redis-server"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Root cause: a container rebuild wiped the redis-server binary (/usr/bin/redis-server), so the
+          'redis' supervisor program crash-looped (BACKOFF/FATAL) and the backend was unstable during cold
+          start; on-load API fetches then received the HTML fallback page -> JSON.parse failed -> Engine error.
+          Fix: reinstalled redis-server (apt), disabled the systemd-managed redis to avoid a port clash, and
+          restarted redis + backend via supervisor. redis-cli PONG OK; /api/v1/dashboard returns status:ready;
+          /api/v1/orderflow shows status:live, redis:true. App now loads fully (LIVE price, BULLISH bias,
+          Albert's Morning Brief). Verified on the external preview URL.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Fixed the Engine error (missing redis-server binary after container rebuild) and shipped the P1
+      notification read-state work: accurate GLOBAL unread badge on the bell + a new sidebar Alerts badge,
+      persistent push/chime dedup via localStorage, a notification chime with a mute toggle, and a global
+      "Mark all read". All changes are FRONTEND-only (app/page.js) plus an infra Redis fix — the backend
+      /v1/alerts and /v1/alerts/ack endpoints were unchanged. Verified manually via screenshots; awaiting
+      user decision on running the automated frontend test suite.

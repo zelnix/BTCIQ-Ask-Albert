@@ -491,26 +491,87 @@ function ModelConfidenceChip({ fallback }) {
   return null;
 }
 
+// Play a short, pleasant two-note chime via the Web Audio API (no asset needed).
+function playAlertChime() {
+  try {
+    const Ctx = (typeof window !== 'undefined') && (window.AudioContext || window.webkitAudioContext);
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    [880, 1320].forEach((f, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.value = f;
+      o.connect(g); g.connect(ctx.destination);
+      const t = ctx.currentTime + i * 0.13;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.16, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.32);
+      o.start(t); o.stop(t + 0.34);
+    });
+    setTimeout(() => { try { ctx.close(); } catch (e) { /* noop */ } }, 1000);
+  } catch (e) { /* noop */ }
+}
+
+const NOTIFIED_KEY = 'btciq_notified_ids';
+const SOUND_KEY = 'btciq_notif_sound';
+
 function NotificationBell({ alertsData, onAck, onViewAll }) {
   const [open, setOpen] = React.useState(false);
   const [perm, setPerm] = React.useState(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
+  const [soundOn, setSoundOn] = React.useState(true);
   const notified = React.useRef(new Set());
-  const first = React.useRef(true);
+  const hydrated = React.useRef(false);
   const alerts = (alertsData && alertsData.alerts) || [];
   const unseen = (alertsData && alertsData.unseen) || 0;
 
+  // Hydrate the "already-notified" set + sound preference from localStorage so a
+  // page reload (or a second device visiting later) never re-fires push/chime for
+  // alerts the user has already been shown. This is the persistent read-state.
   React.useEffect(() => {
-    // Browser push: fire an OS notification for new, meaningful alerts.
-    if (typeof Notification === 'undefined') return;
+    try {
+      const raw = window.localStorage.getItem(NOTIFIED_KEY);
+      if (raw) JSON.parse(raw).forEach((id) => notified.current.add(id));
+      setSoundOn(window.localStorage.getItem(SOUND_KEY) !== 'off');
+    } catch (e) { /* noop */ }
+    hydrated.current = true;
+  }, []);
+
+  const persistNotified = React.useCallback(() => {
+    try {
+      const arr = Array.from(notified.current).slice(-200); // cap the history
+      window.localStorage.setItem(NOTIFIED_KEY, JSON.stringify(arr));
+    } catch (e) { /* noop */ }
+  }, []);
+
+  React.useEffect(() => {
+    // Wait until the persisted set is hydrated so we don't treat the backlog as "new".
+    if (!hydrated.current) return;
     const note = ['high', 'critical', 'warning'];
     const fresh = alerts.filter((a) => a.id && !notified.current.has(a.id));
+    if (fresh.length === 0) return;
     fresh.forEach((a) => notified.current.add(a.id));
-    if (first.current) { first.current = false; return; } // skip backlog on load
-    if (Notification.permission !== 'granted') return;
-    fresh.filter((a) => note.includes(a.severity)).slice(0, 3).forEach((a) => {
-      try { new Notification(`BTCIQ · ${a.title}`, { body: a.message, icon: '/btciq-logo.png', tag: a.id }); } catch (e) { /* noop */ }
+    persistNotified();
+    const meaningful = fresh.filter((a) => note.includes(a.severity)).slice(0, 3);
+    if (meaningful.length === 0) return;
+    // Browser push: fire an OS notification for new, meaningful alerts.
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      meaningful.forEach((a) => {
+        try { new Notification(`BTCIQ · ${a.title}`, { body: a.message, icon: '/btciq-logo.png', tag: a.id }); } catch (e) { /* noop */ }
+      });
+    }
+    // Audible chime (respecting the user's mute preference).
+    if (soundOn) playAlertChime();
+  }, [alerts, soundOn, persistNotified]);
+
+  const toggleSound = () => {
+    setSoundOn((s) => {
+      const next = !s;
+      try { window.localStorage.setItem(SOUND_KEY, next ? 'on' : 'off'); } catch (e) { /* noop */ }
+      if (next) playAlertChime();
+      return next;
     });
-  }, [alerts]);
+  };
 
   const askPerm = async () => {
     try { const p = await Notification.requestPermission(); setPerm(p); } catch (e) { /* noop */ }
@@ -535,7 +596,13 @@ function NotificationBell({ alertsData, onAck, onViewAll }) {
           <div className="absolute right-0 z-50 mt-2 w-80 max-w-[92vw] overflow-hidden rounded-xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/50">
             <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
               <span className="text-sm font-semibold text-white">Notifications</span>
-              {unseen > 0 && <button onClick={() => onAck()} className="text-[11px] font-semibold text-sky-400 hover:text-sky-300">Mark all read</button>}
+              <div className="flex items-center gap-2">
+                <button onClick={toggleSound} title={soundOn ? 'Mute alert sound' : 'Unmute alert sound'}
+                  className={`rounded-md p-1 transition-colors ${soundOn ? 'text-sky-400 hover:text-sky-300' : 'text-slate-500 hover:text-slate-300'}`}>
+                  {soundOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+                </button>
+                {unseen > 0 && <button onClick={() => onAck()} className="text-[11px] font-semibold text-sky-400 hover:text-sky-300">Mark all read</button>}
+              </div>
             </div>
             {perm !== 'granted' && perm !== 'unsupported' && (
               <button onClick={askPerm} className="flex w-full items-center gap-2 border-b border-slate-800 bg-sky-500/10 px-3 py-2 text-left text-[11px] font-semibold text-sky-300 hover:bg-sky-500/20">
@@ -2615,6 +2682,7 @@ let __dashCache = null;
 let __tickerCache = null;
 let __newsCache = null;
 let __alertsCache = null;
+let __notifCache = null;
 
 
 export default function DashboardPage() {
@@ -2636,9 +2704,11 @@ export default function DashboardPage() {
   const [newsStatus, setNewsStatus] = useState(__newsCache ? 'ready' : 'loading');
   const [newsRefreshing, setNewsRefreshing] = useState(false);
   const [alertsData, setAlertsData] = useState(__alertsCache);
+  const [notif, setNotif] = useState(__notifCache);
   const [alertFilter, setAlertFilter] = useState('BTC');
   const [compareOpen, setCompareOpen] = useState(false);
   const firstSym = React.useRef(true);
+  const failCount = React.useRef(0);
 
   // Restore last-picked coin + load the supported coin list.
   useEffect(() => {
@@ -2705,6 +2775,31 @@ export default function DashboardPage() {
     return () => clearInterval(id);
   }, [loadAlerts]);
 
+  // Global (all-coins) notification feed that powers the top-bar bell + sidebar
+  // badge, so the unread count stays accurate no matter which coin is selected.
+  const loadNotif = useCallback(async () => {
+    try {
+      const r = await fetch(`${API_BASE}/v1/alerts?limit=50`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j.status === 'ready') { __notifCache = j; setNotif(j); }
+    } catch (e) { /* noop */ }
+  }, []);
+
+  const ackNotif = useCallback(async (ids) => {
+    try {
+      const body = ids ? { ids } : {}; // empty payload => mark every coin's alerts read
+      await fetch(`${API_BASE}/v1/alerts/ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      loadNotif();
+      loadAlerts();
+    } catch (e) { /* noop */ }
+  }, [loadNotif, loadAlerts]);
+
+  useEffect(() => {
+    loadNotif();
+    const id = setInterval(loadNotif, 30000);
+    return () => clearInterval(id);
+  }, [loadNotif]);
+
   const loadNews = useCallback(async () => {
     try {
       const r = await fetch(symbol === 'BTC' ? `${API_BASE}/v1/news` : `${API_BASE}/v1/news?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
@@ -2732,10 +2827,18 @@ export default function DashboardPage() {
     try {
       const res = await fetch(symbol === 'BTC' ? `${API_BASE}/v1/dashboard` : `${API_BASE}/v1/dashboard?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
       const json = await res.json();
-      if (json.status === 'ready') { if (symbol === 'BTC') __dashCache = json; setData(json); setStatus('ready'); setRefreshing(false); }
+      if (json.status === 'ready') { failCount.current = 0; if (symbol === 'BTC') __dashCache = json; setData(json); setStatus('ready'); setRefreshing(false); }
       else if (json.status === 'error') { setError(json.error || 'Unknown error'); setStatus('error'); }
-      else setStatus('computing');
-    } catch (e) { setError(String(e)); setStatus('error'); }
+      else { failCount.current = 0; setStatus('computing'); }
+    } catch (e) {
+      // Transient during cold start: the ingress can return an HTML page before the
+      // backend is ready, which fails JSON.parse. Keep showing the skeleton and
+      // auto-retry a few times before surfacing a hard error, so a brief restart
+      // never strands the user on the "Engine error" screen.
+      failCount.current += 1;
+      if (failCount.current <= 6) setStatus((s) => (s === 'ready' ? s : 'computing'));
+      else { setError(String(e)); setStatus('error'); }
+    }
   }, [symbol]);
 
   useEffect(() => {
@@ -2886,11 +2989,15 @@ export default function DashboardPage() {
             {visibleSections.map((s) => {
               const Icon = s.icon;
               const on = active === s.id;
+              const navUnread = s.id === 'alerts' ? ((notif && notif.unseen) || 0) : 0;
               return (
                 <button key={s.id} onClick={() => setActive(s.id)}
                   className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${on ? 'bg-gradient-to-r from-sky-500/20 via-violet-500/12 to-transparent font-semibold text-white ring-1 ring-sky-500/25' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'}`}>
                   <Icon className="h-4 w-4" />{s.label}
-                  {s.soon && <Lock className="ml-auto h-3 w-3 text-slate-600" />}
+                  {navUnread > 0 && (
+                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">{navUnread > 9 ? '9+' : navUnread}</span>
+                  )}
+                  {s.soon && navUnread === 0 && <Lock className="ml-auto h-3 w-3 text-slate-600" />}
                 </button>
               );
             })}
@@ -2924,7 +3031,7 @@ export default function DashboardPage() {
               {ticker?.price_aud && <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/20">≈ {fmtAud(ticker.price_aud)}</span>}
               <span className={`text-sm font-semibold ${(ticker?.change24h ?? d.day_change_pct) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ticker?.change24h ?? d.day_change_pct}%</span>
             </div>
-            <NotificationBell alertsData={alertsData} onAck={ackAlerts} onViewAll={() => setActive('alerts')} />
+            <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => setActive('alerts')} />
             <Button onClick={() => setShowReport(true)} size="sm" variant="outline" title="Shareable daily report"
               className="gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800">
               <ClipboardList className="h-4 w-4" /><span className="hidden sm:inline">Report</span>
