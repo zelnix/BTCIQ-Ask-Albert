@@ -910,8 +910,10 @@ def fetch_news():
         fire_news_alerts(cards)
     except Exception:  # noqa
         traceback.print_exc()
-    news_col.delete_many({})
+    # Keep only the latest news doc, but insert BEFORE trimming so there is never an
+    # empty window and we never wipe the whole collection on a managed DB (idempotent-safe).
     news_col.insert_one({**doc, '_id': doc['id']})
+    news_col.delete_many({'_id': {'$ne': doc['id']}})
     return doc
 
 
