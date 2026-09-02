@@ -353,7 +353,7 @@ function TimeMachineSection() {
               <p className="mt-2 text-xs text-slate-500">{fmtUsd(rep.close)} → {fmtUsd(rep.next_close)} next day</p>
             </Card>
             <Card className={`border-0 p-5 ring-1 ${correct ? 'bg-emerald-500/5 ring-emerald-500/25' : 'bg-red-500/5 ring-red-500/25'}`}>
-              <div className="flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className={`h-6 w-6 rounded-full object-cover ring-1 ${correct ? 'ring-emerald-500/40' : 'ring-red-500/40'}`} onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] uppercase tracking-wider text-slate-400">Albert&apos;s Call</p></div>
+              <div className="flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className={`h-8 w-8 rounded-full object-cover ring-1 ${correct ? 'ring-emerald-500/40' : 'ring-red-500/40'}`} onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] uppercase tracking-wider text-slate-400">Albert&apos;s Call</p></div>
               <div className="mt-2 flex items-center gap-2">
                 {correct ? <Check className="h-7 w-7 text-emerald-400" /> : <X className="h-7 w-7 text-red-400" />}
                 <span className={`text-3xl font-black ${correct ? 'text-emerald-400' : 'text-red-400'}`}>{correct ? 'Correct' : 'Missed'}</span>

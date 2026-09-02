@@ -292,7 +292,7 @@ function LeverageSection() {
       </Card>
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <h3 className="mb-2 flex items-center gap-2 font-semibold text-white"><img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full" onError={(e) => { e.currentTarget.style.display = 'none'; }} />Impact on Albert's Call</h3>
+        <h3 className="mb-2 flex items-center gap-2 font-semibold text-white"><img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full" onError={(e) => { e.currentTarget.style.display = 'none'; }} />Impact on Albert's Call</h3>
         <div className="flex items-center gap-3"><span className="text-[11px] text-slate-500">Currently:</span><span className={`text-lg font-bold ${ac.impact_points < 0 ? 'text-red-400' : ac.impact_points > 0 ? 'text-emerald-400' : 'text-slate-300'}`}>{ac.impact_label} {ac.impact_points >= 0 ? '+' : ''}{ac.impact_points}</span></div>
         <p className="mt-2 text-sm text-slate-300">{ac.explanation}</p>
       </Card>

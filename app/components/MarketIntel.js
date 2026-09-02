@@ -107,7 +107,7 @@ function AnalysisSection({ d }) {
           </div>
           <p className="mt-2 text-xs text-slate-500">P(Up) {d.prob_up}% · P(Down) {d.prob_down}% · predicts {d.predict_for_date}</p>
           <div className="mt-3 flex items-start gap-2.5 rounded-lg border border-slate-800 bg-slate-950/50 p-3">
-            <img src="/albert.png" alt="Albert" className={`h-8 w-8 shrink-0 rounded-full object-cover ring-2 ${isUp ? 'ring-emerald-500/40' : 'ring-red-500/40'}`} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+            <img src="/albert.png" alt="Albert" className={`h-10 w-10 shrink-0 rounded-full object-cover ring-2 ${isUp ? 'ring-emerald-500/40' : 'ring-red-500/40'}`} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
             <div>
               <p className="text-[11px] font-bold uppercase tracking-wider text-sky-400">Albert&apos;s Call</p>
               <p className="mt-0.5 text-xs leading-relaxed text-slate-300">

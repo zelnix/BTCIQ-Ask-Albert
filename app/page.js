@@ -209,7 +209,7 @@ function TechnicalBreakdownLink({ d, dec }) {
         <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm" onClick={() => setOpen(false)}>
           <div className="max-h-[86vh] w-full max-w-2xl overflow-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <div className="mb-4 flex items-center gap-3">
-              <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
+              <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-sky-500/40" />
               <div className="flex-1">
                 <h3 className="text-base font-bold text-white">Technical Breakdown</h3>
                 <p className="text-[11px] text-slate-500">The numbers behind Albert’s bottom line · probability, not certainty</p>
@@ -823,7 +823,7 @@ function MarketStateHero({ d, ticker }) {
 function AlbertIntroCard() {
   return (
     <Card className="flex items-start gap-4 border-0 bg-gradient-to-br from-sky-500/5 to-violet-500/5 p-5 ring-1 ring-sky-500/20">
-      <img src="/albert.png" alt="Albert" className="h-16 w-16 shrink-0 rounded-full object-cover ring-2 ring-sky-500/40" />
+      <img src="/albert.png" alt="Albert" className="h-20 w-20 shrink-0 rounded-full object-cover ring-2 ring-sky-500/40" />
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-base font-bold text-white">Albert</h3>
@@ -1225,7 +1225,7 @@ function OverviewSection({ d, ticker }) {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <div className="mb-3 flex items-center gap-2"><img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-emerald-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><TrendingUp className="h-5 w-5 text-emerald-400" /><h3 className="font-semibold text-slate-100">Albert's Top Bullish Factors</h3></div>
+          <div className="mb-3 flex items-center gap-2"><img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-1 ring-emerald-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><TrendingUp className="h-5 w-5 text-emerald-400" /><h3 className="font-semibold text-slate-100">Albert's Top Bullish Factors</h3></div>
           <ul className="space-y-2">
             {d.factors.bullish.map((t, i) => (
               <li key={i} className="flex gap-2 text-sm text-slate-300"><Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />{t}</li>
@@ -1233,7 +1233,7 @@ function OverviewSection({ d, ticker }) {
           </ul>
         </Card>
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-          <div className="mb-3 flex items-center gap-2"><img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-red-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><TrendingDown className="h-5 w-5 text-red-400" /><h3 className="font-semibold text-slate-100">Albert's Top Risk Factors</h3></div>
+          <div className="mb-3 flex items-center gap-2"><img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-1 ring-red-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><TrendingDown className="h-5 w-5 text-red-400" /><h3 className="font-semibold text-slate-100">Albert's Top Risk Factors</h3></div>
           <ul className="space-y-2">
             {d.factors.risk.map((t, i) => (
               <li key={i} className="flex gap-2 text-sm text-slate-300"><X className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />{t}</li>
@@ -1345,8 +1345,8 @@ function MarketIntelCard({ d }) {
         ))}
       </div>
       <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><div className="mb-1 flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-emerald-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] font-semibold uppercase text-emerald-400">Albert&apos;s Primary Tailwind</p></div><p className="mt-1 text-sm text-slate-300">{mi.top_positive}</p></div>
-        <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><div className="mb-1 flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-red-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] font-semibold uppercase text-red-400">Albert&apos;s Primary Risk</p></div><p className="mt-1 text-sm text-slate-300">{mi.top_risk}</p></div>
+        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><div className="mb-1 flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-emerald-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] font-semibold uppercase text-emerald-400">Albert&apos;s Primary Tailwind</p></div><p className="mt-1 text-sm text-slate-300">{mi.top_positive}</p></div>
+        <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><div className="mb-1 flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-red-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] font-semibold uppercase text-red-400">Albert&apos;s Primary Risk</p></div><p className="mt-1 text-sm text-slate-300">{mi.top_risk}</p></div>
       </div>
     </Card>
   );
@@ -1451,8 +1451,8 @@ function PolicySection({ d }) {
           ))}
         </div>
         <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
-          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><div className="mb-1 flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-emerald-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] font-semibold uppercase text-emerald-400">Albert&apos;s Primary Tailwind</p></div><p className="mt-1 text-sm text-slate-300">{p.tailwind}</p></div>
-          <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><div className="mb-1 flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-red-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] font-semibold uppercase text-red-400">Albert&apos;s Primary Risk</p></div><p className="mt-1 text-sm text-slate-300">{p.risk}</p></div>
+          <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3"><div className="mb-1 flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-emerald-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] font-semibold uppercase text-emerald-400">Albert&apos;s Primary Tailwind</p></div><p className="mt-1 text-sm text-slate-300">{p.tailwind}</p></div>
+          <div className="rounded-lg border border-red-500/20 bg-red-500/5 p-3"><div className="mb-1 flex items-center gap-1.5"><img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-red-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><p className="text-[11px] font-semibold uppercase text-red-400">Albert&apos;s Primary Risk</p></div><p className="mt-1 text-sm text-slate-300">{p.risk}</p></div>
         </div>
         <p className="mt-3 text-sm text-slate-400"><span className="font-semibold text-slate-200">Interpretation:</span> {p.interpretation}</p>
       </Card>
@@ -1531,7 +1531,7 @@ function AlertsSection({ d, alertsData, onAck, filter = 'BTC', onFilter, coins =
       </Card>
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <div className="mb-3 flex items-center gap-2"><img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-slate-600" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><Radio className="h-5 w-5 text-slate-400" /><h3 className="font-semibold text-slate-100">Albert&apos;s Current Market Read</h3><span className="text-sm text-slate-500">{live.length} active</span></div>
+        <div className="mb-3 flex items-center gap-2"><img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-1 ring-slate-600" onError={(e) => { e.currentTarget.style.display = 'none'; }} /><Radio className="h-5 w-5 text-slate-400" /><h3 className="font-semibold text-slate-100">Albert&apos;s Current Market Read</h3><span className="text-sm text-slate-500">{live.length} active</span></div>
         <div className="space-y-2">
           {live.map((a, i) => (
             <div key={i} className={`flex items-start gap-3 rounded-lg border p-3 ${styleFor(a.level)}`}>
@@ -1744,7 +1744,7 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
       {/* Albert's Morning Brief */}
       <Card className="border-0 bg-gradient-to-br from-amber-500/[0.06] via-violet-500/[0.06] to-slate-900 p-6 ring-1 ring-violet-500/25">
         <div className="flex flex-wrap items-center gap-2">
-          <img src="/albert.png" alt="Albert" className="h-7 w-7 rounded-full object-cover ring-2 ring-amber-400/50" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+          <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-amber-400/50" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
           <h3 className="text-lg font-bold text-white">Albert&apos;s Morning Brief</h3>
           {re.regime_label && <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[11px] font-bold text-violet-200">{re.regime_label}</span>}
           {dec.ensemble_health != null && (() => {
@@ -2103,14 +2103,14 @@ function AskQuantSection({ d }) {
       <WeeklyRecap />
       <Card className="flex h-[560px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
         <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3">
-          <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
+          <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-sky-500/40" />
           <div><p className="text-sm font-semibold text-white">Albert · BTCIQ HuCentAI Quant</p><p className="text-[10px] text-slate-500">Crypto strategist & advisor · live dashboard + web search · fast by default, Deep dive for depth</p></div>
           <span className="ml-auto flex items-center gap-1 text-[10px] font-bold text-emerald-400"><span className="h-2 w-2 rounded-full bg-emerald-400" />LIVE</span>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
           {messages.length === 0 && (
             <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-              <img src="/albert.png" alt="Albert" className="h-20 w-20 rounded-full object-cover ring-2 ring-sky-500/40" />
+              <img src="/albert.png" alt="Albert" className="h-24 w-24 rounded-full object-cover ring-2 ring-sky-500/40" />
               <div>
                 <p className="font-semibold text-slate-200">Hi, I’m Albert — your market mentor & sounding board</p>
                 <p className="mt-1 max-w-sm text-xs text-slate-500">I blend the live dashboard (score, regime, forecasts, flows) with 100+ years of market wisdom and live web search for macro, cycles and strategy. I’ll give you the candid read — never invent dashboard numbers.</p>
@@ -2124,7 +2124,7 @@ function AskQuantSection({ d }) {
           )}
           {messages.map((m, i) => (
             <div key={i} className={`flex items-end gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" />}
+              {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" />}
               <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>
                 {m.role === 'assistant' ? <><AlbertText text={m.text} /><AlbertReplyMeta text={m.text} sources={m.sources} symbol={symbol} pid={pid} /></> : m.text}
               </div>
@@ -2132,7 +2132,7 @@ function AskQuantSection({ d }) {
           ))}
           {loading && (
             <div className="flex items-end justify-start gap-2">
-              <img src="/albert.png" alt="Albert" className="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" />
+              <img src="/albert.png" alt="Albert" className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" />
               <div className="flex items-center gap-1.5 rounded-2xl bg-slate-950/60 px-4 py-3 ring-1 ring-slate-800">
                 <span className="h-2 w-2 animate-bounce rounded-full bg-sky-400" style={{ animationDelay: '0ms' }} />
                 <span className="h-2 w-2 animate-bounce rounded-full bg-sky-400" style={{ animationDelay: '150ms' }} />
@@ -2264,7 +2264,7 @@ function MorningBriefCard() {
   return (
     <Card className="border-0 bg-gradient-to-br from-sky-950/40 to-slate-900 p-6 ring-1 ring-sky-900/50">
       <div className="mb-3 flex items-center gap-2">
-        <img src="/albert.png" alt="Albert" className="h-7 w-7 rounded-full" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+        <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
         <h3 className="font-semibold text-white">Albert's Morning Brief</h3>
         <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-sky-300">Plain English</span>
       </div>
@@ -2622,7 +2622,7 @@ function CompareSection() {
 
       <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-violet-500/[0.06] p-4 ring-1 ring-sky-500/25">
         <div className="flex flex-wrap items-center gap-3">
-          <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
+          <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-sky-500/40" />
           <div className="min-w-[220px] flex-1">
             <p className="text-sm font-semibold text-sky-100">Albert</p>
             {anyPending ? (

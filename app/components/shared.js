@@ -63,7 +63,7 @@ function QuantGauge({ score }) {
 
 const InfoBlock = ({ children }) => (
   <div className="flex gap-3 rounded-lg border border-sky-500/20 bg-sky-500/[0.04] p-4 text-sm text-slate-400">
-    <img src="/albert.png" alt="Albert" className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-sky-500/40" />
+    <img src="/albert.png" alt="Albert" className="h-11 w-11 shrink-0 rounded-full object-cover ring-2 ring-sky-500/40" />
     <div>
       <div className="mb-0.5 flex items-center gap-2">
         <span className="font-semibold text-sky-200">Albert</span>
@@ -189,7 +189,7 @@ function AiReview({ text, voice = true, section, footer }) {
   return (
     <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-violet-500/[0.06] p-5 ring-1 ring-sky-500/25">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-500/40" />
+        <img src="/albert.png" alt="Albert" className="h-10 w-10 rounded-full object-cover ring-2 ring-sky-500/40" />
         <h3 className="text-sm font-semibold text-sky-100">Albert’s Review</h3>
         {aiText ? (
           <span className="flex items-center gap-1 rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-semibold text-violet-200 ring-1 ring-violet-500/40"><Sparkles className="h-3 w-3" />AI insight</span>
@@ -223,7 +223,7 @@ function AiReview({ text, voice = true, section, footer }) {
         <div className="fixed inset-0 z-[130] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm" onClick={() => setTechOpen(false)}>
           <div className="max-h-[86vh] w-full max-w-2xl overflow-auto rounded-2xl border border-slate-700 bg-slate-900 p-6 shadow-2xl animate-in fade-in-0 zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
             <div className="mb-4 flex items-center gap-3">
-              <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-violet-500/40" />
+              <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-violet-500/40" />
               <div className="flex-1">
                 <h3 className="flex items-center gap-1.5 text-base font-bold text-white"><Brain className="h-4 w-4 text-violet-300" />Technical Briefing</h3>
                 <p className="text-[11px] text-slate-500">Albert’s deeper, indicator-level read · probability, not certainty</p>

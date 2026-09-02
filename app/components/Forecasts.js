@@ -49,7 +49,7 @@ function ForecastCard({ f }) {
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
       <div className="mb-2 flex items-center gap-1.5">
-        <img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-sky-500/50" />
+        <img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-sky-500/50" />
         <span className="text-[10px] font-bold uppercase tracking-wider text-sky-300">Albert’s Call</span>
       </div>
       <div className="flex items-center justify-between">
@@ -301,7 +301,7 @@ function ForecastsSection({ d }) {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
           <div className="mb-3 flex items-center gap-2">
-            <img src="/albert.png" alt="Albert" className="h-8 w-8 shrink-0 rounded-full object-cover ring-2 ring-emerald-500/40" />
+            <img src="/albert.png" alt="Albert" className="h-10 w-10 shrink-0 rounded-full object-cover ring-2 ring-emerald-500/40" />
             <div>
               <h3 className="flex items-center gap-1.5 font-semibold text-slate-100"><TrendingUp className="h-4 w-4 text-emerald-400" />Albert’s Call · Why it could go up</h3>
               <p className="text-[11px] text-slate-500">Albert’s read of the bullish evidence</p>
@@ -311,7 +311,7 @@ function ForecastsSection({ d }) {
         </Card>
         <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
           <div className="mb-3 flex items-center gap-2">
-            <img src="/albert.png" alt="Albert" className="h-8 w-8 shrink-0 rounded-full object-cover ring-2 ring-red-500/40" />
+            <img src="/albert.png" alt="Albert" className="h-10 w-10 shrink-0 rounded-full object-cover ring-2 ring-red-500/40" />
             <div>
               <h3 className="flex items-center gap-1.5 font-semibold text-slate-100"><TrendingDown className="h-4 w-4 text-red-400" />Albert’s Call · Why it could go down</h3>
               <p className="text-[11px] text-slate-500">Albert’s read of the downside risks</p>
@@ -338,7 +338,7 @@ function BmHorizonCard({ h }) {
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
       <div className="mb-2 flex items-center gap-1.5">
-        <img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-sky-500/50" />
+        <img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-sky-500/50" />
         <span className="text-[10px] font-bold uppercase tracking-wider text-sky-300">Albert’s Call</span>
       </div>
       <div className="flex items-center justify-between">
@@ -380,7 +380,7 @@ function BmScenarioCard({ h }) {
   return (
     <Card className="border-0 bg-gradient-to-br from-violet-500/[0.06] to-slate-900 p-5 ring-1 ring-violet-500/20">
       <div className="mb-2 flex items-center gap-1.5">
-        <img src="/albert.png" alt="Albert" className="h-5 w-5 rounded-full object-cover ring-1 ring-violet-500/50" />
+        <img src="/albert.png" alt="Albert" className="h-6 w-6 rounded-full object-cover ring-1 ring-violet-500/50" />
         <span className="text-[10px] font-bold uppercase tracking-wider text-violet-300">Albert’s Call</span>
       </div>
       <div className="flex items-center justify-between">
@@ -412,7 +412,7 @@ function WhyChangedPanel({ bm }) {
   return (
     <Card className="border-0 bg-gradient-to-br from-sky-500/[0.06] to-slate-900 p-5 ring-1 ring-sky-500/20">
       <div className="mb-2 flex items-center gap-2.5">
-        <img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-500/40" />
+        <img src="/albert.png" alt="Albert" className="h-10 w-10 rounded-full object-cover ring-2 ring-sky-500/40" />
         <h3 className="text-sm font-semibold text-white">Why the forecast changed</h3>
       </div>
       <p className="text-sm leading-relaxed text-slate-300">{bm.change_explanation}</p>

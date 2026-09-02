@@ -97,7 +97,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
       {!open && (
         <button onClick={() => setOpen(true)} title="Ask Albert"
           className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-full border border-sky-500/40 bg-gradient-to-r from-sky-500 to-violet-600 py-2 pl-2 pr-4 text-white shadow-lg shadow-violet-500/30 transition-transform hover:scale-105">
-          <img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-2 ring-white/30" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+          <img src="/albert.png" alt="Albert" className="h-10 w-10 rounded-full object-cover ring-2 ring-white/30" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
           <span className="text-sm font-semibold">Ask Albert</span>
         </button>
       )}
@@ -105,7 +105,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
       {open && (
         <div className="fixed bottom-5 right-5 z-50 flex h-[540px] w-[92vw] max-w-[400px] flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/50 ring-1 ring-slate-800">
           <div className="flex items-center gap-2.5 border-b border-slate-800 bg-slate-950/60 px-4 py-3">
-            <img src="/albert.png" alt="Albert" className="h-8 w-8 rounded-full object-cover ring-2 ring-sky-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+            <img src="/albert.png" alt="Albert" className="h-10 w-10 rounded-full object-cover ring-2 ring-sky-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-white">Ask Albert</p>
               <p className="truncate text-[10px] text-sky-400">{isOverview ? 'Talking about all things BTCIQ' : `Focused on: ${scopeLabel}`}</p>
@@ -116,7 +116,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
             {messages.length === 0 && (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-                <img src="/albert.png" alt="Albert" className="h-14 w-14 rounded-full object-cover ring-2 ring-sky-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                <img src="/albert.png" alt="Albert" className="h-16 w-16 rounded-full object-cover ring-2 ring-sky-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                 <p className="text-sm font-semibold text-slate-200">{isOverview ? "Hi, I'm Albert — ask me anything about Bitcoin" : `Ask me about the ${scopeLabel} screen`}</p>
                 <p className="max-w-[16rem] text-[11px] text-slate-500">Market mentor & sounding board — live dashboard + web. I won’t invent dashboard numbers.</p>
                 <div className="flex flex-col gap-1.5">
@@ -128,7 +128,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
             )}
             {messages.map((m, i) => (
               <div key={i} className={`flex items-end gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-6 w-6 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
+                {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
                 <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>
                   {m.role === 'assistant' ? <><AlbertText text={m.text} /><AlbertReplyMeta text={m.text} sources={m.sources} symbol={symbol} pid={pid} /></> : m.text}
                 </div>
@@ -136,7 +136,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
             ))}
             {loading && (
               <div className="flex items-end justify-start gap-2">
-                <img src="/albert.png" alt="Albert" className="h-6 w-6 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                <img src="/albert.png" alt="Albert" className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                 <div className="flex items-center gap-1.5 rounded-2xl bg-slate-950/60 px-3 py-2.5 ring-1 ring-slate-800">
                   <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400" style={{ animationDelay: '0ms' }} />
                   <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400" style={{ animationDelay: '150ms' }} />

@@ -358,7 +358,7 @@ function ScorecardSection({ d }) {
               <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={() => setModal(null)}>
                 <div className="w-full max-w-md rounded-xl border border-sky-500/25 bg-slate-900 p-5 shadow-2xl ring-1 ring-slate-800" onClick={(e) => e.stopPropagation()}>
                   <div className="mb-3 flex items-center gap-3">
-                    <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
+                    <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-sky-500/40" />
                     <div className="flex-1">
                       <h3 className="font-semibold text-white">{metricInfo[modal].title}</h3>
                       <p className="text-xs text-slate-400">Albert explains · current: <span className="font-mono text-sky-300">{metricInfo[modal].value}</span></p>
