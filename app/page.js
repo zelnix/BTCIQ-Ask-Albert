@@ -3100,6 +3100,7 @@ export default function DashboardPage() {
               <span className="bg-gradient-to-r from-amber-400 via-sky-400 to-violet-400 bg-clip-text text-transparent">BTCIQ</span>
               <span className="text-slate-500"> · Powered by BitCentAI</span>
             </p>
+            <PublishStamp />
           </div>
           <nav className="flex-1 space-y-1">
             {visibleSections.map((s) => {
@@ -3231,6 +3232,24 @@ export default function DashboardPage() {
   );
 }
 
+
+/* ===================== Live "published" date + time under the logo ===================== */
+function PublishStamp() {
+  const [now, setNow] = useState(null); // null on first render to avoid SSR hydration mismatch
+  useEffect(() => {
+    setNow(new Date());
+    const t = setInterval(() => setNow(new Date()), 60000);
+    return () => clearInterval(t);
+  }, []);
+  if (!now) return null;
+  const date = now.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+  const time = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  return (
+    <p className="pl-0.5 text-[10px] leading-tight text-slate-500" suppressHydrationWarning>
+      <span className="text-slate-400">Published</span> {date} · {time}
+    </p>
+  );
+}
 
 /* ===================== Albert bio popup (tap any Albert avatar) ===================== */
 function AlbertBioModal({ onClose }) {
