@@ -95,6 +95,15 @@ CHAT_MODEL = os.environ.get('CHAT_MODEL', 'gemini-3-flash-preview')
 # grounding (live web) via the Emergent gateway. Verified available 2026.
 ALBERT_CHAT_MODEL = os.environ.get('ALBERT_CHAT_MODEL', 'gemini-3.1-pro-preview')
 
+# ---- Google AI Studio Gemini TTS (Albert's spoken voice) ----
+# Uses a dedicated Google AI Studio API key (NOT the Emergent key). Key lives in
+# /app/.env and is never exposed to the browser (audio is generated backend-side).
+GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
+GEMINI_TTS_MODEL = os.environ.get('GEMINI_TTS_MODEL', 'gemini-2.5-flash-preview-tts')
+# Albert's prebuilt voice — "Charon" is a deep, informative male voice that suits a
+# seasoned professor. Overridable via env without a code change.
+GEMINI_TTS_VOICE = os.environ.get('GEMINI_TTS_VOICE', 'Charon')
+
 # ---- Resend transactional email (daily Alert Digest) ----
 # Key/from live in /app/.env; never exposed to the browser (all sending is backend-side).
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY')

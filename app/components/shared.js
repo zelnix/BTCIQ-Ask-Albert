@@ -6,7 +6,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { API_BASE } from '../lib/api';
 import { fmtUsd, fmtPct, scoreColor } from '../lib/format';
-import { applyAlbertVoice } from '../lib/albertVoice';
+import { speakAlbert, stopAlbert } from '../lib/albertVoice';
 import { SymbolContext } from '../lib/context';
 
 function CoinIcon({ symbol, size = 24, className = '' }) {
@@ -172,15 +172,10 @@ function AiReview({ text, voice = true, section, footer }) {
   })();
 
   const speak = () => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-    const synth = window.speechSynthesis;
-    if (synth.speaking) { synth.cancel(); setSpeaking(false); return; }
-    const u = new SpeechSynthesisUtterance(shown);
-    applyAlbertVoice(u, synth);
-    u.onend = () => setSpeaking(false);
-    u.onerror = () => setSpeaking(false);
+    if (speaking) { stopAlbert(); setSpeaking(false); return; }
+    if (!shown) return;
     setSpeaking(true);
-    synth.speak(u);
+    speakAlbert(shown, { onEnd: () => setSpeaking(false) });
   };
   return (
     <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-violet-500/[0.06] p-5 ring-1 ring-sky-500/25">

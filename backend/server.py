@@ -16,6 +16,9 @@ import time
 import uuid
 import math
 import json
+import base64
+import io
+import wave
 import asyncio
 import concurrent.futures
 _LLM_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix='albert-llm')
@@ -52,6 +55,7 @@ from config import (
     coin_news_col, coin_dom_col, markets_col, analogs_col, glassnode_col,
     onchain_col, lev_col, misc_col, usage_col, etf_col, whale_col, whale_hist_col, whale_tx_col,
     GLASSNODE_API_KEY, ADMIN_PASSCODE, EMERGENT_LLM_KEY, GEMINI_MODEL, CHAT_MODEL, ALBERT_CHAT_MODEL,
+    GEMINI_API_KEY, GEMINI_TTS_MODEL, GEMINI_TTS_VOICE,
     RESEND_API_KEY, RESEND_FROM, DIGEST_TZ, DIGEST_HOUR, DIGEST_MINUTE,
     email_recipients_col, email_log_col, email_settings_col,
     PUBLIC_BASE_URL, UNSUB_SECRET, WEEKLY_HOUR, WEEKLY_MINUTE, regime_col,
@@ -7479,6 +7483,75 @@ def _best_worst_calls(graded):
     if best.get('id') == worst.get('id'):
         worst = None  # only one gradeable call so far
     return best, worst
+
+
+_genai_client = None
+_TTS_CACHE = {}
+ALBERT_TTS_STYLE = ("Speak as Albert — a warm, well-aged scientific professor who is cool, hip and "
+                    "unhurried. Measured and confident, with clear diction, natural pauses and a "
+                    "touch of dry wit. Never rushed.")
+
+
+def _get_genai_client():
+    global _genai_client
+    if _genai_client is None:
+        from google import genai
+        _genai_client = genai.Client(api_key=GEMINI_API_KEY)
+    return _genai_client
+
+
+def _pcm_to_wav(pcm, rate=24000):
+    """Gemini TTS returns raw signed-16-bit mono PCM @24kHz; wrap it in a WAV header."""
+    buf = io.BytesIO()
+    with wave.open(buf, 'wb') as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm)
+    return buf.getvalue()
+
+
+@app.post('/api/v1/tts')
+def albert_tts(payload: dict = Body(...)):
+    """Generate Albert's spoken audio via Google AI Studio Gemini TTS (server-side).
+    Returns base64 WAV. Falls back gracefully (frontend uses browser TTS on failure)."""
+    text = (payload.get('text') or '').strip()
+    if not text:
+        return JSONResponse({'error': 'empty'}, status_code=400)
+    if not GEMINI_API_KEY:
+        return JSONResponse({'error': 'tts_unavailable'}, status_code=503)
+    text = text[:8000]
+    voice = payload.get('voice') or GEMINI_TTS_VOICE
+    style = payload.get('style') or ALBERT_TTS_STYLE
+    import hashlib
+    key = hashlib.md5(f'{GEMINI_TTS_MODEL}|{voice}|{style}|{text}'.encode('utf-8')).hexdigest()
+    cached = _TTS_CACHE.get(key)
+    if cached:
+        return {'audio_base64': cached, 'mime_type': 'audio/wav', 'cached': True}
+    try:
+        from google.genai import types
+        client = _get_genai_client()
+        prompt = f"{style}\n\nRead exactly the following, and nothing else:\n{text}"
+
+        def _gen():
+            return client.models.generate_content(
+                model=GEMINI_TTS_MODEL, contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_modalities=['AUDIO'],
+                    speech_config=types.SpeechConfig(
+                        voice_config=types.VoiceConfig(
+                            prebuilt_voice_config=types.PrebuiltVoiceConfig(voice_name=voice)))),
+            )
+        resp = _LLM_POOL.submit(_gen).result(timeout=45)
+        data = resp.candidates[0].content.parts[0].inline_data.data
+        wav_b64 = base64.b64encode(_pcm_to_wav(bytes(data))).decode('ascii')
+        if len(_TTS_CACHE) > 40:
+            _TTS_CACHE.clear()
+        _TTS_CACHE[key] = wav_b64
+        return {'audio_base64': wav_b64, 'mime_type': 'audio/wav', 'cached': False}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return JSONResponse({'error': 'tts_failed'}, status_code=502)
 
 
 @app.get('/api/v1/albert/track-record')

@@ -3,7 +3,7 @@
 import React from 'react';
 import { Volume2, VolumeX, ExternalLink, BellPlus, Check } from 'lucide-react';
 import { API_BASE } from '../lib/api';
-import { applyAlbertVoice } from '../lib/albertVoice';
+import { speakAlbert, stopAlbert } from '../lib/albertVoice';
 
 // Pull dollar levels Albert mentions (e.g. "$74,000", "$77411") so we can offer
 // one-tap price alerts for them.
@@ -24,24 +24,18 @@ export default function AlbertReplyMeta({ text, sources = [], symbol = 'BTC', pi
   const [alerted, setAlerted] = React.useState({});
   const levels = React.useMemo(() => extractLevels(text || ''), [text]);
 
-  React.useEffect(() => () => { try { window.speechSynthesis?.cancel(); } catch (e) { /* noop */ } }, []);
+  React.useEffect(() => () => { try { stopAlbert(); } catch (e) { /* noop */ } }, []);
   // Warm up the TTS voice list (some browsers load voices asynchronously).
   React.useEffect(() => {
     try { window.speechSynthesis?.getVoices(); } catch (e) { /* noop */ }
   }, []);
 
   const speak = () => {
-    if (typeof window === 'undefined' || !window.speechSynthesis) return;
-    const synth = window.speechSynthesis;
-    if (speaking) { synth.cancel(); setSpeaking(false); return; }
+    if (speaking) { stopAlbert(); setSpeaking(false); return; }
     const clean = String(text || '').replace(/[#*`_>]/g, '').replace(/\s+/g, ' ').trim();
     if (!clean) return;
-    const u = new SpeechSynthesisUtterance(clean.slice(0, 4000));
-    applyAlbertVoice(u, synth);
-    u.onend = () => setSpeaking(false);
-    u.onerror = () => setSpeaking(false);
-    try { synth.cancel(); synth.speak(u); } catch (e) { /* noop */ }
     setSpeaking(true);
+    speakAlbert(clean, { onEnd: () => setSpeaking(false) });
   };
 
   const setAlert = async (level) => {

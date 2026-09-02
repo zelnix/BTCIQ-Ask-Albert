@@ -32,7 +32,7 @@ import WeeklyRecap from './components/WeeklyRecap';
 
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
-import { applyAlbertVoice } from './lib/albertVoice';
+import { speakAlbert, stopAlbert } from './lib/albertVoice';
 import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, DemoBadge, Spark, LevGauge, ComingSoonSection } from './components/shared';
 import AnalogsSection from './components/Analogs';
 import CrossMarketSection from './components/CrossMarket';
@@ -1674,9 +1674,7 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
   }, []);
   const speakBrief = () => {
     try {
-      const synth = window.speechSynthesis;
-      if (!synth) return;
-      if (speaking) { synth.cancel(); setSpeaking(false); return; }
+      if (speaking) { stopAlbert(); setSpeaking(false); return; }
       const dec0 = d.decision || {};
       const re0 = dec0.regime_engine || {};
       const parts = [
@@ -1685,13 +1683,8 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
         re0.regime_label ? `Current regime: ${re0.regime_label}.` : '',
         dec0.summary || '',
       ].filter(Boolean).join(' ');
-      const u = new SpeechSynthesisUtterance(parts);
-      applyAlbertVoice(u, synth);
-      u.onend = () => setSpeaking(false);
-      u.onerror = () => setSpeaking(false);
-      synth.cancel();
-      synth.speak(u);
       setSpeaking(true);
+      speakAlbert(parts, { onEnd: () => setSpeaking(false) });
     } catch (e) { setSpeaking(false); }
   };
   const dec = d.decision || {};

@@ -15,3 +15,4 @@ feedparser
 emergentintegrations
 redis>=5.0.0
 faiss-cpu>=1.8.0
+google-genai>=2.16.0
