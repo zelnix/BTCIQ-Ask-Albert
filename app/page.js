@@ -2811,6 +2811,19 @@ export default function DashboardPage() {
   const [notif, setNotif] = useState(__notifCache);
   const [alertFilter, setAlertFilter] = useState('BTC');
   const [compareOpen, setCompareOpen] = useState(false);
+  const [albertBioOpen, setAlbertBioOpen] = useState(false);
+  React.useEffect(() => {
+    const onDocClick = (e) => {
+      const t = e.target;
+      if (t && t.tagName === 'IMG' && t.getAttribute('alt') === 'Albert') {
+        e.preventDefault();
+        e.stopPropagation();
+        setAlbertBioOpen(true);
+      }
+    };
+    document.addEventListener('click', onDocClick, true);
+    return () => document.removeEventListener('click', onDocClick, true);
+  }, []);
   const firstSym = React.useRef(true);
   const failCount = React.useRef(0);
 
@@ -3075,6 +3088,8 @@ export default function DashboardPage() {
   return (
     <SymbolContext.Provider value={symbol}>
     <div className="relative min-h-screen bg-slate-950 text-slate-100">
+      {albertBioOpen && <AlbertBioModal onClose={() => setAlbertBioOpen(false)} />}
+      <style>{`img[alt="Albert"]{cursor:pointer}`}</style>
       <div aria-hidden className="pointer-events-none fixed inset-0 bg-[radial-gradient(55rem_38rem_at_-8%_-12%,rgba(247,147,26,0.10),transparent_58%),radial-gradient(52rem_40rem_at_112%_6%,rgba(109,94,246,0.14),transparent_55%)]" />
       {compareOpen && symbol !== 'BTC' && d && (
         <CompareOverlay coinData={d} coinSymbol={symbol} coinName={(coins.find((c) => c.symbol === symbol) || {}).name || symbol} onClose={() => setCompareOpen(false)} />
@@ -3216,5 +3231,48 @@ export default function DashboardPage() {
     <WallAlertToaster />
     {showReport && <DailyReportModal d={d} onClose={() => setShowReport(false)} />}
     </SymbolContext.Provider>
+  );
+}
+
+
+/* ===================== Albert bio popup (tap any Albert avatar) ===================== */
+function AlbertBioModal({ onClose }) {
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute right-3 top-3 z-10 rounded-full bg-black/40 p-1.5 text-slate-300 backdrop-blur transition-colors hover:bg-black/60 hover:text-white">
+          <X className="h-4 w-4" />
+        </button>
+        <div className="relative">
+          <img src="/albert-full.png" alt="Albert portrait" className="w-full object-cover" />
+          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-900 via-slate-900/70 to-transparent p-4 pt-16">
+            <h2 className="text-2xl font-black text-white">Albert</h2>
+            <p className="flex items-center gap-1.5 text-sm font-semibold text-sky-300">
+              <Sparkles className="h-4 w-4" />BTCIQ HuCentAI Quant Analyst
+            </p>
+          </div>
+        </div>
+        <div className="space-y-3 p-5">
+          <p className="text-[14px] leading-relaxed text-slate-200">
+            Meet <span className="font-semibold text-white">Albert</span> — BTCIQ&apos;s resident quant analyst. He reads the live dashboard end to end (price action, on-chain flows, derivatives positioning, macro and sentiment) and turns it into plain-English calls you can actually act on.
+          </p>
+          <p className="text-[14px] leading-relaxed text-slate-300">
+            Ask him anything — &ldquo;Is it time to buy or sell?&rdquo;, &ldquo;Why did the score fall?&rdquo;, &ldquo;What could move Bitcoin next?&rdquo; He grounds every answer strictly in real dashboard numbers, logs his directional calls, and grades himself honestly so you can see his track record over time.
+          </p>
+          <ul className="space-y-1.5 text-[13px] text-slate-300">
+            <li className="flex gap-2"><span className="text-sky-400">•</span>Daily Morning Brief &amp; Weekly Recap in your own reading level</li>
+            <li className="flex gap-2"><span className="text-sky-400">•</span>Directional calls with entries, targets &amp; invalidation — auto-graded</li>
+            <li className="flex gap-2"><span className="text-sky-400">•</span>Live web-grounded deep dives on strategy, macro &amp; cycles</li>
+          </ul>
+          <button onClick={onClose}
+            className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-violet-500 py-2.5 text-sm font-bold text-white transition-opacity hover:opacity-90">
+            <MessageCircle className="h-4 w-4" />Got it
+          </button>
+          <p className="text-center text-[10px] leading-relaxed text-slate-500">
+            Albert is an original fictional BTCIQ HuCentAI Quant character and does not represent any real or other fictional person or character. Educational analysis — not financial advice.
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
