@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Target, TrendingUp, TrendingDown, CircleDot } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { API_BASE } from '../lib/api';
 
 export default function AlbertTrackRecord() {
@@ -21,6 +22,7 @@ export default function AlbertTrackRecord() {
   const nCalls = (data && data.n_calls) || 0;
   const open = (data && data.open) || [];
   const recent = (data && data.recent) || [];
+  const trend = (data && data.trend) || [];
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
@@ -50,6 +52,22 @@ export default function AlbertTrackRecord() {
               </div>
             )}
           </div>
+
+          {trend.length >= 2 && (
+            <div className="mb-3">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Confidence trend (cumulative hit-rate)</p>
+              <div className="h-24">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={trend} margin={{ top: 4, right: 8, left: -22, bottom: 0 }}>
+                    <XAxis dataKey="i" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} width={30} />
+                    <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 11 }} formatter={(v) => [`${v}%`, 'Hit rate']} labelFormatter={(l) => `Call #${l}`} />
+                    <Line type="monotone" dataKey="hit_rate" stroke="#a78bfa" strokeWidth={2} dot={{ r: 2 }} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
 
           {open.length > 0 && (
             <div className="space-y-1.5">

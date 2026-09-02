@@ -27,6 +27,7 @@ import AlbertText from './components/AlbertText';
 import AlbertReplyMeta from './components/AlbertReplyMeta';
 import PortfolioPanel from './components/PortfolioPanel';
 import AlbertTrackRecord from './components/AlbertTrackRecord';
+import AlertManager from './components/AlertManager';
 
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
@@ -2053,8 +2054,11 @@ function AskQuantSection({ d }) {
     <div className="space-y-5">
       <SectionHead icon={MessageCircle} title="Ask Albert" blurb={sec('ask').blurb} />
       <AlbertIntroCard />
-      <div className="grid gap-4 md:grid-cols-2">
-        <PortfolioPanel />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="space-y-4">
+          <PortfolioPanel />
+          <AlertManager />
+        </div>
         <AlbertTrackRecord />
       </div>
       <Card className="flex h-[560px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">

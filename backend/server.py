@@ -7233,11 +7233,12 @@ def create_price_alert(payload: dict = Body(...)):
 
 @app.get('/api/v1/price-alerts')
 def list_price_alerts(pid: str = ''):
-    q = {'triggered': False}
+    q = {}
     if pid:
         q['pid'] = pid.strip()[:80]
-    rows = list(price_watch_col.find(q, {'_id': 0}).sort('created_at', -1).limit(50))
-    return {'watches': rows}
+    active = list(price_watch_col.find({**q, 'triggered': False}, {'_id': 0}).sort('created_at', -1).limit(50))
+    triggered = list(price_watch_col.find({**q, 'triggered': True}, {'_id': 0}).sort('triggered_at', -1).limit(20))
+    return {'watches': active, 'triggered': triggered}
 
 
 @app.delete('/api/v1/price-alert/{wid}')
@@ -7365,6 +7366,15 @@ def albert_track_record(limit: int = 20):
         return {'status': 'ready', 'n_calls': 0, 'n_graded': 0, 'hit_rate': None, 'recent': [], 'open': []}
     n_graded = len(graded)
     n_correct = sum(1 for g in graded if g.get('outcome') == 'correct')
+    # Cumulative hit-rate over time (chronological) so the UI can chart whether
+    # Albert's calls are getting sharper.
+    chrono = sorted(graded, key=lambda g: g.get('eval_at') or '')
+    trend = []
+    run_correct = 0
+    for i, g in enumerate(chrono, 1):
+        if g.get('outcome') == 'correct':
+            run_correct += 1
+        trend.append({'i': i, 'date': (g.get('eval_at') or '')[:10], 'hit_rate': round(run_correct / i * 100, 1)})
     price_cache = {}
     open_out = []
     for c in open_calls[:limit]:
@@ -7382,6 +7392,7 @@ def albert_track_record(limit: int = 20):
         'status': 'ready', 'n_calls': total, 'n_graded': n_graded, 'n_correct': n_correct,
         'hit_rate': round(n_correct / n_graded * 100, 1) if n_graded else None,
         'avg_move': round(sum(g.get('pct_move', 0) for g in graded) / n_graded, 2) if n_graded else None,
+        'trend': trend,
         'recent': graded[:limit], 'open': open_out,
     }
 

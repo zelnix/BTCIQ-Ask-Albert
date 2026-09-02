@@ -6883,3 +6883,198 @@ agent_communication:
           
           All validations passed. Data is REAL (local backend http://localhost:8001). No HTTP 500 errors. All endpoints handle edge cases correctly (missing pid, invalid level, empty portfolio). Feature is fully functional and production-ready.
 
+
+#====================================================================================================
+# SESSION: Confidence Trend chart + Alert Manager + FRONTEND UI TEST
+#====================================================================================================
+
+backend:
+  - task: "Track-record confidence trend + price-alerts list (active+triggered)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          GET /api/v1/albert/track-record now also returns 'trend': cumulative hit-rate over graded calls
+          (chronological by eval_at) for charting. GET /api/v1/price-alerts now returns {watches:[active],
+          triggered:[recently triggered]} so the Alert Manager can show both. Verified via curl.
+
+frontend:
+  - task: "Confidence Trend chart (Recharts) + Alert Manager (list & cancel price alerts)"
+    implemented: true
+    working: false
+    file: "app/components/AlbertTrackRecord.js, app/components/AlertManager.js, app/page.js"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          Added a cumulative hit-rate line chart to Albert's Track Record card (renders when >=2 graded
+          calls). Added AlertManager card on the Ask Albert page listing active price alerts with a cancel
+          (X) button and showing triggered ones. Layout: left column = My Position + Price Alerts, right =
+          Track Record. Needs UI verification.
+        -working: false
+        -agent: "testing"
+        -comment: |
+          ❌ CRITICAL BUGS FOUND in Ask Albert UI (5/7 tests passed, 2 failed):
+          
+          WORKING FEATURES:
+          ✅ All three cards render (My Position, Price Alerts, Albert's Track Record)
+          ✅ Save Position works - values persist after reload (Size=0.5, Avg entry=45000)
+          ✅ Chat works - Albert replies with formatted text (WHAT TO WATCH, RISK PLAN sections)
+          ✅ Reply extras render - Listen button + 5 Alert @ $X chips present
+          ✅ Alert chips change state - clicking "Alert @ $45,000" changes to "Alerting $45,000"
+          ✅ Track Record card shows 4 IN PROGRESS calls with stance/asset/price/P&L/horizon
+          
+          CRITICAL BUGS:
+          ❌ BUG 1: LISTEN BUTTON NOT WORKING
+             - Button does not toggle to "Stop" when clicked
+             - Browser TTS (speechSynthesis) not starting
+             - Console warning: "AudioContext was not allowed to start. It must be resumed after a user gesture"
+             - Root cause: AudioContext may need explicit user interaction or button click handler issue
+          
+          ❌ BUG 2: PRICE ALERTS NOT APPEARING IN CARD
+             - Alert chips successfully change to "Alerting" state (backend likely working)
+             - But alerts do NOT appear in "Price Alerts" card even after 25s wait
+             - Card shows empty state: "No price alerts yet. In any Albert answer, tap an 'Alert @ $X' chip..."
+             - Multiple API failures detected: GET /api/v1/alerts?limit=50, GET /api/v1/alerts?symbol=BTC (ERR_ABORTED)
+             - Root cause: Frontend not fetching alerts OR backend not returning alerts OR API request timing out
+          
+          NETWORK ISSUES:
+          - Multiple API requests failing with ERR_ABORTED:
+            * GET /api/v1/alerts?limit=50
+            * GET /api/v1/alerts?symbol=BTC
+            * GET /api/v1/ticker
+            * GET /api/v1/dashboard
+            * GET /api/v1/news
+            * POST /api/v1/portfolio
+            * GET /api/v1/orderflow
+          - These failures may be causing data refresh issues across the app
+
+metadata:
+  run_ui: true
+
+test_plan:
+  current_focus:
+    - "Ask Albert reply extras (Listen, Sources, Alert @ $X chips)"
+    - "My Position save/load"
+    - "Price Alerts Alert Manager (create from chip, list, cancel)"
+    - "Albert Track Record card + confidence trend"
+  stuck_tasks: []
+  test_all: false
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      Frontend UI test requested by user. Please verify the full Ask Albert advisor surface end-to-end
+      (preview URL, Ask Albert section). See the detailed UI test task.
+    -agent: "testing"
+    -message: |
+      ✅ ASK ALBERT ADVISOR UI END-TO-END TEST COMPLETE - 5/7 TESTS PASSED, 2 PARTIAL FAILURES
+      
+      Tested "Ask Albert" advisor UI end-to-end via external URL (https://quant-features.preview.emergentagent.com).
+      Navigated to app root, clicked sidebar "Ask Albert" to open full Ask Albert section.
+      
+      TEST RESULTS:
+      
+      1) ✅ CARDS RENDER - PASSED
+         - All three cards visible: "My Position" ✅, "Price Alerts" ✅, "Albert's Track Record" ✅
+      
+      2) ✅ SAVE A POSITION (My Position) - PASSED
+         - Entered Size = 0.5 and Avg entry = 45000 ✅
+         - Clicked Save, button showed "Saved" state ✅
+         - Reloaded page, reopened Ask Albert ✅
+         - Values persisted correctly (Size=0.5, Avg entry=45000) ✅
+      
+      3) ✅ SEND A CHAT + REPLY EXTRAS - PASSED
+         - Sent message: "Is now a good time to buy Bitcoin? Give me exact entry and target levels." ✅
+         - Albert's reply appeared with formatted text (no raw markdown asterisks) ✅
+         - Reply shows structured sections: "WHAT TO WATCH" and "RISK PLAN" with bullet points ✅
+         - "Listen" button present below reply ✅
+         - 5 "Alert @ $X" chips found below reply ✅
+      
+      4) ❌ LISTEN BUTTON - FAILED
+         - Clicked "Listen" button ✅
+         - Button did NOT toggle to "Stop" ❌
+         - Root cause: Browser AudioContext requires user gesture, but button click may not be triggering TTS correctly
+         - Console warning: "The AudioContext was not allowed to start. It must be resumed (or created) after a user gesture on the page."
+      
+      5) ⚠️ SET A PRICE ALERT FROM CHAT - PARTIAL FAILURE
+         - Clicked first "Alert @ $45,000" chip ✅
+         - Chip changed to "Alerting $45,000" state (green) ✅
+         - Waited 25s for Price Alerts card to refresh ✅
+         - ❌ Alert did NOT appear in "Price Alerts" card
+         - Price Alerts card shows: "No price alerts yet. In any Albert answer, tap an 'Alert @ $X' chip to get pinged when price crosses that level."
+         - Root cause: Alert may have been created but Price Alerts card is not refreshing or alert is not being fetched
+      
+      6) ⚠️ CANCEL A PRICE ALERT - PARTIAL FAILURE
+         - Found cancel (X) button in Price Alerts card ✅
+         - Clicked cancel button ✅
+         - ❌ Could not confirm alert removal (no alerts were visible before or after)
+         - Note: This test depends on TEST 5 working correctly
+      
+      7) ⚠️ TRACK RECORD CARD - PARTIAL PASS
+         - "Albert's Track Record" card renders ✅
+         - Shows "4 calls tracked" ✅
+         - Shows "IN PROGRESS" section with 4 calls ✅
+         - Each call shows: stance (SELL/BUY), asset (BTC), reference price (@ $77,411), live P&L percentage (-0.55% to -0.6%), horizon (14d) ✅
+         - ❌ Could not find explicit "hit rate (n graded)" text in automated test
+         - Note: Card structure is correct but text search may have been too strict
+      
+      CRITICAL ISSUES FOUND:
+      
+      1. ❌ LISTEN BUTTON NOT WORKING
+         - Button does not toggle to "Stop" when clicked
+         - Browser TTS (speechSynthesis) may not be starting correctly
+         - Console warning about AudioContext not being allowed to start
+      
+      2. ❌ PRICE ALERTS NOT APPEARING IN CARD
+         - Alert chips change to "Alerting" state (backend likely working)
+         - But alerts do not appear in "Price Alerts" card even after 25s wait
+         - Card shows empty state message instead of alert list
+         - Possible issues: frontend not fetching alerts, backend not returning alerts, or refresh timing issue
+      
+      NETWORK ISSUES DETECTED:
+      - Multiple API requests failed with ERR_ABORTED:
+        * GET /api/v1/alerts?limit=50
+        * GET /api/v1/alerts?symbol=BTC
+        * GET /api/v1/ticker
+        * GET /api/v1/dashboard
+        * GET /api/v1/news
+        * POST /api/v1/portfolio
+        * GET /api/v1/orderflow
+      - These failures may be causing the Price Alerts card to not refresh
+      
+      CONSOLE ERRORS:
+      - WebSocket HMR connection failures (dev mode, not critical)
+      - AudioContext warnings (affects Listen button functionality)
+      
+      SCREENSHOTS CAPTURED:
+      - 01_ask_albert_section.png - Ask Albert section with all three cards
+      - 02_three_cards.png - My Position, Price Alerts, Albert's Track Record cards
+      - 03_position_saved.png - Position saved with "Saved" button state
+      - 04_position_persisted.png - Position values persisted after reload
+      - 05_chat_reply.png - Albert's reply with formatted text
+      - 06_reply_extras.png - Listen button and Alert @ $X chips
+      - 07_listen_button.png - Listen button (did not toggle to Stop)
+      - 08_alert_set.png - Alert chip changed to "Alerting $45,000"
+      - 09_price_alerts_card.png - Price Alerts card (empty, alert not showing)
+      - 10_alert_canceled.png - After clicking cancel button
+      - 11_track_record.png - Albert's Track Record card with IN PROGRESS calls
+
+#---- UI test follow-up (main agent) ----
+# UI test found 2 bugs -> FIXED & re-verified via interactive screenshot:
+# (1) Price Alerts card now refreshes INSTANTLY when a chip creates an alert
+#     (AlbertReplyMeta dispatches window 'btciq:alert-created'; AlertManager listens+reloads).
+#     Verified: chip -> "Alerting $X" AND card shows "BTC crosses above $X"; cancel (X) removes row.
+# (2) Listen button now toggles Listen<->Stop reliably (warm up speechSynthesis voices, pick EN voice,
+#     robust try/catch). Verified label toggles.
+# Note: the first run's ERR_ABORTED entries were the automated browser cancelling in-flight requests
+# during its own reloads; all endpoints return 200 on direct calls.

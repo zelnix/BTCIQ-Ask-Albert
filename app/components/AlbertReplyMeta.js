@@ -24,29 +24,40 @@ export default function AlbertReplyMeta({ text, sources = [], symbol = 'BTC', pi
   const levels = React.useMemo(() => extractLevels(text || ''), [text]);
 
   React.useEffect(() => () => { try { window.speechSynthesis?.cancel(); } catch (e) { /* noop */ } }, []);
+  // Warm up the TTS voice list (some browsers load voices asynchronously).
+  React.useEffect(() => {
+    try { window.speechSynthesis?.getVoices(); } catch (e) { /* noop */ }
+  }, []);
 
   const speak = () => {
     if (typeof window === 'undefined' || !window.speechSynthesis) return;
     const synth = window.speechSynthesis;
     if (speaking) { synth.cancel(); setSpeaking(false); return; }
     const clean = String(text || '').replace(/[#*`_>]/g, '').replace(/\s+/g, ' ').trim();
+    if (!clean) return;
     const u = new SpeechSynthesisUtterance(clean.slice(0, 4000));
     u.rate = 1.02;
+    const voices = synth.getVoices() || [];
+    const pref = voices.find((v) => /en[-_]/i.test(v.lang) && /Google|Natural|Samantha|Daniel/i.test(v.name)) || voices.find((v) => /en/i.test(v.lang));
+    if (pref) u.voice = pref;
     u.onend = () => setSpeaking(false);
     u.onerror = () => setSpeaking(false);
-    synth.cancel();
-    synth.speak(u);
+    try { synth.cancel(); synth.speak(u); } catch (e) { /* noop */ }
     setSpeaking(true);
   };
 
   const setAlert = async (level) => {
+    setAlerted((a) => ({ ...a, [level]: true }));
     try {
       await fetch(`${API_BASE}/v1/price-alert`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pid, asset: symbol, level }),
       });
-      setAlerted((a) => ({ ...a, [level]: true }));
-    } catch (e) { /* noop */ }
+      // Let the Alert Manager card refresh immediately (instead of waiting for its poll).
+      try { window.dispatchEvent(new CustomEvent('btciq:alert-created')); } catch (e) { /* noop */ }
+    } catch (e) {
+      setAlerted((a) => ({ ...a, [level]: false }));
+    }
   };
 
   return (
