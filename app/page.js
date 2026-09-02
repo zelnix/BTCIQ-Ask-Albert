@@ -3244,7 +3244,7 @@ function AlbertBioModal({ onClose }) {
           <X className="h-4 w-4" />
         </button>
         <div className="px-5 pt-8">
-          <img src="/albert-full.png" alt="Albert portrait" className="mx-auto w-[63%] aspect-[4/3] rounded-xl object-cover object-top" />
+          <img src="/albert-full.png" alt="Albert portrait" className="mx-auto w-[60%] rounded-xl object-cover" />
           <div className="mt-3 text-center">
             <h2 className="text-2xl font-black text-white">Albert</h2>
             <p className="flex items-center justify-center gap-1.5 text-sm font-semibold text-sky-300">
