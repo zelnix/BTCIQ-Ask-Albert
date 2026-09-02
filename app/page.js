@@ -3243,11 +3243,11 @@ function AlbertBioModal({ onClose }) {
         <button onClick={onClose} className="absolute right-3 top-3 z-10 rounded-full bg-black/40 p-1.5 text-slate-300 backdrop-blur transition-colors hover:bg-black/60 hover:text-white">
           <X className="h-4 w-4" />
         </button>
-        <div className="relative">
-          <img src="/albert-full.png" alt="Albert portrait" className="w-full object-cover" />
-          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-slate-900 via-slate-900/70 to-transparent p-4 pt-16">
+        <div className="px-5 pt-8">
+          <img src="/albert-full.png" alt="Albert portrait" className="mx-auto w-1/2 rounded-xl object-cover" />
+          <div className="mt-3 text-center">
             <h2 className="text-2xl font-black text-white">Albert</h2>
-            <p className="flex items-center gap-1.5 text-sm font-semibold text-sky-300">
+            <p className="flex items-center justify-center gap-1.5 text-sm font-semibold text-sky-300">
               <Sparkles className="h-4 w-4" />BTCIQ HuCentAI Quant Analyst
             </p>
           </div>
