@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 
 const SECTIONS = [
-  { id: 'briefing', label: 'Morning Brief', icon: Sparkles,
+  { id: 'briefing', label: 'Albert\u2019s Morning Brief', icon: Sparkles,
     blurb: 'Your one-screen executive briefing: market bias, price, Albert’s read, the levels that matter, live sentiment and the decision engine — each card drills into the full analysis.' },
   { id: 'ask', label: 'Ask Albert', icon: MessageCircle,
     blurb: 'Chat with Albert, BTCIQ’s HuCentAI Quant Analyst, in plain English — "Why did the score fall?", "What could move Bitcoin next?" — grounded strictly in the live dashboard numbers. He never invents data.' },
