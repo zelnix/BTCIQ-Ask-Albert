@@ -18,7 +18,7 @@ import {
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { API_BASE, getPid } from './lib/api';
+import { API_BASE, getPid, getReadingLevel, setReadingLevel } from './lib/api';
 import { fmtUsd, fmtAud, fmtPct, CAT_COLORS, BAR_COLORS, scoreColor, signalText, TF_TOUCH, sigHex, sigColor, shortDate, riskColor, countdown, f24, fBy, DIR_COLOR, corrColor } from './lib/format';
 import { SymbolContext } from './lib/context';
 import { useFetch } from './lib/useFetch';
@@ -498,6 +498,19 @@ function ModelConfidenceChip({ fallback }) {
   return null;
 }
 
+// Global Simple/Pro reading-level switch (persists to localStorage, broadcasts a window event).
+function ReadingLevelToggle() {
+  const [level, setLevel] = React.useState('simple');
+  React.useEffect(() => { setLevel(getReadingLevel()); }, []);
+  const choose = (v) => { setLevel(v); setReadingLevel(v); };
+  return (
+    <div className="flex items-center rounded-full bg-slate-800 p-0.5 text-[10px] font-semibold" title="Reading level for Albert's briefs & insights">
+      <button onClick={() => choose('simple')} className={`rounded-full px-2 py-0.5 transition-colors ${level !== 'pro' ? 'bg-sky-500 text-white' : 'text-slate-400 hover:text-slate-200'}`}>Simple</button>
+      <button onClick={() => choose('pro')} className={`rounded-full px-2 py-0.5 transition-colors ${level === 'pro' ? 'bg-violet-500 text-white' : 'text-slate-400 hover:text-slate-200'}`}>Pro</button>
+    </div>
+  );
+}
+
 // Play a short, pleasant two-note chime via the Web Audio API (no asset needed).
 function playAlertChime() {
   try {
@@ -604,6 +617,7 @@ function NotificationBell({ alertsData, onAck, onViewAll }) {
             <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
               <span className="text-sm font-semibold text-white">Notifications</span>
               <div className="flex items-center gap-2">
+                <ReadingLevelToggle />
                 <button onClick={toggleSound} title={soundOn ? 'Mute alert sound' : 'Unmute alert sound'}
                   className={`rounded-md p-1 transition-colors ${soundOn ? 'text-sky-400 hover:text-sky-300' : 'text-slate-500 hover:text-slate-300'}`}>
                   {soundOn ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
@@ -1652,6 +1666,12 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
   const [speaking, setSpeaking] = useState(false);
   const [brief] = useFetch(`${API_BASE}/v1/albert/brief`);
   const [techOpen, setTechOpen] = useState(false);
+  React.useEffect(() => {
+    const apply = () => setTechOpen(getReadingLevel() === 'pro');
+    apply();
+    window.addEventListener('btciq:reading-level', apply);
+    return () => window.removeEventListener('btciq:reading-level', apply);
+  }, []);
   const speakBrief = () => {
     try {
       const synth = window.speechSynthesis;
@@ -2235,6 +2255,13 @@ function MorningBriefCard() {
   };
   const techObs = (tech && tech.observations) || [];
   const hasBrief = obs.length || (d && d.take);
+  React.useEffect(() => {
+    const apply = () => { if (getReadingLevel() === 'pro') openTech(); };
+    apply();
+    window.addEventListener('btciq:reading-level', apply);
+    return () => window.removeEventListener('btciq:reading-level', apply);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <Card className="border-0 bg-gradient-to-br from-sky-950/40 to-slate-900 p-6 ring-1 ring-sky-900/50">
       <div className="mb-3 flex items-center gap-2">

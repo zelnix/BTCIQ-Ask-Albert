@@ -27,6 +27,7 @@ export default function AlbertTrackRecord() {
   const open = (data && data.open) || [];
   const recent = (data && data.recent) || [];
   const trend = (data && data.trend) || [];
+  const byCoin = (data && data.by_coin) || [];
   const coins = Array.from(new Set([...open, ...recent].map((c) => c.asset).filter(Boolean)));
   const applyF = (arr) => arr.filter((c) => (coinFilter === 'ALL' || c.asset === coinFilter) && (sideFilter === 'ALL' || c.stance === sideFilter));
   const openF = applyF(open);
@@ -76,6 +77,21 @@ export default function AlbertTrackRecord() {
                     <Line type="monotone" dataKey="hit_rate" stroke="#a78bfa" strokeWidth={2} dot={{ r: 2 }} />
                   </LineChart>
                 </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {byCoin.length > 0 && (
+            <div className="mb-3">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Win-rate by coin</p>
+              <div className="flex flex-wrap gap-1.5">
+                {byCoin.map((c) => (
+                  <span key={c.asset} className="inline-flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-950/40 px-2 py-1 text-[11px]">
+                    <span className="font-semibold text-slate-200">{c.asset}</span>
+                    <span className={`font-bold ${c.hit_rate >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>{c.hit_rate}%</span>
+                    <span className="text-slate-600">({c.n})</span>
+                  </span>
+                ))}
               </div>
             </div>
           )}

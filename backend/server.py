@@ -4978,6 +4978,8 @@ def _startup():
         scheduler.add_job(_grade_albert_calls, 'interval', minutes=30, id='albert_call_grade')
         # Weekly recap auto-post: drop Albert's recap into the notification bell every Monday.
         scheduler.add_job(_weekly_recap_autopost, 'cron', day_of_week='mon', hour=13, minute=30, id='weekly_recap_autopost')
+        # Daily plain-English morning brief pushed to the notification bell.
+        scheduler.add_job(_daily_brief_autopost, 'cron', hour=13, minute=0, id='daily_brief_autopost')
         # Daily Alert Digest email (Resend). Per-job timezone so it fires at local send time.
         try:
             scheduler.add_job(send_daily_digest_bg, 'cron', hour=DIGEST_HOUR, minute=DIGEST_MINUTE,
@@ -7369,6 +7371,17 @@ def albert_track_record(limit: int = 20):
         return {'status': 'ready', 'n_calls': 0, 'n_graded': 0, 'hit_rate': None, 'recent': [], 'open': []}
     n_graded = len(graded)
     n_correct = sum(1 for g in graded if g.get('outcome') == 'correct')
+    # Per-coin win-rate so the UI can show where Albert is strongest.
+    by_coin_map = {}
+    for g in graded:
+        a = g.get('asset') or '?'
+        s = by_coin_map.setdefault(a, {'asset': a, 'n': 0, 'correct': 0})
+        s['n'] += 1
+        if g.get('outcome') == 'correct':
+            s['correct'] += 1
+    by_coin = sorted(
+        [{'asset': v['asset'], 'n': v['n'], 'hit_rate': round(v['correct'] / v['n'] * 100, 1)} for v in by_coin_map.values()],
+        key=lambda x: (-x['hit_rate'], -x['n']))
     # Cumulative hit-rate over time (chronological) so the UI can chart whether
     # Albert's calls are getting sharper.
     chrono = sorted(graded, key=lambda g: g.get('eval_at') or '')
@@ -7395,7 +7408,7 @@ def albert_track_record(limit: int = 20):
         'status': 'ready', 'n_calls': total, 'n_graded': n_graded, 'n_correct': n_correct,
         'hit_rate': round(n_correct / n_graded * 100, 1) if n_graded else None,
         'avg_move': round(sum(g.get('pct_move', 0) for g in graded) / n_graded, 2) if n_graded else None,
-        'trend': trend,
+        'trend': trend, 'by_coin': by_coin,
         'recent': graded[:limit], 'open': open_out,
     }
 
@@ -7462,6 +7475,42 @@ def _weekly_recap_autopost():
             push_alert('weekly_recap', 'info', "Albert's Weekly Recap is ready",
                        "How Albert's calls did this week + what he's watching next week — open Ask Albert to read it.",
                        f"recap-{datetime.date.today().isoformat()}")
+    except Exception:  # noqa
+        traceback.print_exc()
+
+
+def _daily_brief_autopost():
+    """Scheduler (daily): ensure today's plain-English brief exists, then push it to the bell."""
+    try:
+        today = datetime.date.today().isoformat()
+        cache_id = f'brief:{today}:plain'
+        doc = insights_col.find_one({'_id': cache_id}, {'_id': 0})
+        take = (doc or {}).get('take') or ''
+        if not doc and EMERGENT_LLM_KEY and _HAS_LLM:
+            ctx, as_of = _brief_context()
+            if ctx.strip():
+                def _call():
+                    async def _go():
+                        chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'brief-{uuid.uuid4().hex[:8]}',
+                                        system_message=ALBERT_BRIEF_SYSTEM.format(ctx=ctx))
+                                .with_model('gemini', CHAT_MODEL).with_params(temperature=0.4, max_tokens=6000))
+                        return await chat.send_message(UserMessage(text="Write today's market brief now."))
+                    return asyncio.run(_go())
+                reply = _LLM_POOL.submit(_call).result(timeout=45)
+                text = (reply if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '')).strip()
+                obs = []
+                for ln in text.split('\n'):
+                    ln = ln.strip()
+                    if ln.upper().startswith('TAKE:'):
+                        take = ln[5:].strip()
+                    elif ln.startswith('-'):
+                        obs.append(ln.lstrip('-').strip())
+                insights_col.update_one({'_id': cache_id}, {'$set': {
+                    '_id': cache_id, 'kind': 'brief', 'text': text, 'observations': obs, 'take': take,
+                    'as_of': as_of, 'mode': 'plain', 'generated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+        push_alert('daily_brief', 'info', "Albert's Morning Brief is ready",
+                   take or "Your plain-English market brief for today is ready — open the dashboard to read it.",
+                   f"brief-{today}")
     except Exception:  # noqa
         traceback.print_exc()
 

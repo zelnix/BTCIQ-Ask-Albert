@@ -3,6 +3,18 @@
 // ever moves, change it here (or set NEXT_PUBLIC_API_BASE at build time).
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || '/api';
 
+// Global "reading level" preference: 'simple' (plain English, default) or 'pro' (technical).
+export function getReadingLevel() {
+  if (typeof window === 'undefined') return 'simple';
+  try { return window.localStorage.getItem('btciq_reading_level') || 'simple'; } catch (e) { return 'simple'; }
+}
+export function setReadingLevel(v) {
+  try {
+    window.localStorage.setItem('btciq_reading_level', v);
+    window.dispatchEvent(new CustomEvent('btciq:reading-level', { detail: v }));
+  } catch (e) { /* noop */ }
+}
+
 // Stable per-device client id used to persist the user's portfolio server-side
 // and to scope their price-alert watches.
 export function getPid() {

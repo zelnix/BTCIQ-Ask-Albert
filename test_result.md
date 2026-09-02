@@ -7163,3 +7163,42 @@ frontend:
           per-coin filter chips that filter both in-progress and graded lists. Verified via screenshots:
           plain bullets show, technical link expands the quantitative version, Sell filter shows only SELL
           calls.
+
+#====================================================================================================
+# SESSION: Reading-level toggle + per-coin hit-rate + daily brief notification
+#====================================================================================================
+
+backend:
+  - task: "Track-record per-coin win-rate + daily plain-brief auto-post"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          GET /api/v1/albert/track-record now returns 'by_coin': [{asset, n, hit_rate}] sorted by hit_rate
+          (verified key present). Added scheduler cron _daily_brief_autopost (daily 13:00 UTC): ensures
+          today's PLAIN brief is generated/cached then pushes it to the notification bell (category
+          'daily_brief') with the Take as the message. Backend boots clean, jobs registered.
+
+frontend:
+  - task: "Simple/Pro reading-level toggle (persisted) + per-coin win-rate chips"
+    implemented: true
+    working: true
+    file: "app/lib/api.js, app/page.js, app/components/AlbertTrackRecord.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          getReadingLevel/setReadingLevel in lib/api.js persist 'btciq_reading_level' (simple|pro) and
+          broadcast a 'btciq:reading-level' window event. A "Simple | Pro" segmented toggle sits in the
+          notification dropdown. ExecutiveSummary hero + MorningBriefCard listen and default to the technical
+          briefing when Pro is selected (verified: selecting Pro auto-expanded the technical brief). Track
+          Record shows "Win-rate by coin" chips (asset + hit% + n) from by_coin.
