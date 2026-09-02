@@ -3,6 +3,7 @@
 import React from 'react';
 import { Volume2, VolumeX, ExternalLink, BellPlus, Check } from 'lucide-react';
 import { API_BASE } from '../lib/api';
+import { applyAlbertVoice } from '../lib/albertVoice';
 
 // Pull dollar levels Albert mentions (e.g. "$74,000", "$77411") so we can offer
 // one-tap price alerts for them.
@@ -36,10 +37,7 @@ export default function AlbertReplyMeta({ text, sources = [], symbol = 'BTC', pi
     const clean = String(text || '').replace(/[#*`_>]/g, '').replace(/\s+/g, ' ').trim();
     if (!clean) return;
     const u = new SpeechSynthesisUtterance(clean.slice(0, 4000));
-    u.rate = 1.02;
-    const voices = synth.getVoices() || [];
-    const pref = voices.find((v) => /en[-_]/i.test(v.lang) && /Google|Natural|Samantha|Daniel/i.test(v.name)) || voices.find((v) => /en/i.test(v.lang));
-    if (pref) u.voice = pref;
+    applyAlbertVoice(u, synth);
     u.onend = () => setSpeaking(false);
     u.onerror = () => setSpeaking(false);
     try { synth.cancel(); synth.speak(u); } catch (e) { /* noop */ }

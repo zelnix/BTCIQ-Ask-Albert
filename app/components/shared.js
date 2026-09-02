@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { API_BASE } from '../lib/api';
 import { fmtUsd, fmtPct, scoreColor } from '../lib/format';
+import { applyAlbertVoice } from '../lib/albertVoice';
 import { SymbolContext } from '../lib/context';
 
 function CoinIcon({ symbol, size = 24, className = '' }) {
@@ -175,12 +176,7 @@ function AiReview({ text, voice = true, section, footer }) {
     const synth = window.speechSynthesis;
     if (synth.speaking) { synth.cancel(); setSpeaking(false); return; }
     const u = new SpeechSynthesisUtterance(shown);
-    const vs = synth.getVoices();
-    const pick = vs.find((v) => /daniel|google uk english male|arthur|male/i.test(v.name) && /en/i.test(v.lang))
-      || vs.find((v) => /google us english|english/i.test(v.name) && /en/i.test(v.lang))
-      || vs.find((v) => /en/i.test(v.lang));
-    if (pick) u.voice = pick;
-    u.rate = 0.96; u.pitch = 1.05; u.volume = 1;
+    applyAlbertVoice(u, synth);
     u.onend = () => setSpeaking(false);
     u.onerror = () => setSpeaking(false);
     setSpeaking(true);

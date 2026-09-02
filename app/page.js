@@ -32,6 +32,7 @@ import WeeklyRecap from './components/WeeklyRecap';
 
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
+import { applyAlbertVoice } from './lib/albertVoice';
 import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, DemoBadge, Spark, LevGauge, ComingSoonSection } from './components/shared';
 import AnalogsSection from './components/Analogs';
 import CrossMarketSection from './components/CrossMarket';
@@ -1685,7 +1686,7 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
         dec0.summary || '',
       ].filter(Boolean).join(' ');
       const u = new SpeechSynthesisUtterance(parts);
-      u.rate = 1.02; u.pitch = 1.0;
+      applyAlbertVoice(u, synth);
       u.onend = () => setSpeaking(false);
       u.onerror = () => setSpeaking(false);
       synth.cancel();
