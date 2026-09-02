@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Volume2, VolumeX, ExternalLink, BellPlus, Check } from 'lucide-react';
+import { Volume2, VolumeX, ExternalLink, BellPlus, Check, Loader2 } from 'lucide-react';
 import { API_BASE } from '../lib/api';
 import { speakAlbert, stopAlbert } from '../lib/albertVoice';
 
@@ -21,6 +21,7 @@ function extractLevels(text) {
 
 export default function AlbertReplyMeta({ text, sources = [], symbol = 'BTC', pid = '' }) {
   const [speaking, setSpeaking] = React.useState(false);
+  const [warming, setWarming] = React.useState(false);
   const [alerted, setAlerted] = React.useState({});
   const levels = React.useMemo(() => extractLevels(text || ''), [text]);
 
@@ -31,11 +32,14 @@ export default function AlbertReplyMeta({ text, sources = [], symbol = 'BTC', pi
   }, []);
 
   const speak = () => {
-    if (speaking) { stopAlbert(); setSpeaking(false); return; }
+    if (speaking || warming) { stopAlbert(); setSpeaking(false); setWarming(false); return; }
     const clean = String(text || '').replace(/[#*`_>]/g, '').replace(/\s+/g, ' ').trim();
     if (!clean) return;
-    setSpeaking(true);
-    speakAlbert(clean, { onEnd: () => setSpeaking(false) });
+    setWarming(true);
+    speakAlbert(clean, {
+      onStart: () => { setWarming(false); setSpeaking(true); },
+      onEnd: () => { setSpeaking(false); setWarming(false); },
+    });
   };
 
   const setAlert = async (level) => {
@@ -56,8 +60,8 @@ export default function AlbertReplyMeta({ text, sources = [], symbol = 'BTC', pi
     <div className="mt-2 space-y-1.5">
       <div className="flex flex-wrap items-center gap-1.5">
         <button onClick={speak}
-          className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-800/60 px-2 py-0.5 text-[11px] font-medium text-slate-300 transition-colors hover:text-white">
-          {speaking ? <><VolumeX className="h-3 w-3" />Stop</> : <><Volume2 className="h-3 w-3" />Listen</>}
+          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${warming ? 'border-amber-500/50 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:text-white'}`}>
+          {warming ? <><Loader2 className="h-3 w-3 animate-spin" />Warming up…</> : speaking ? <><VolumeX className="h-3 w-3" />Stop</> : <><Volume2 className="h-3 w-3" />Listen</>}
         </button>
         {levels.map((lv) => (
           <button key={lv} onClick={() => setAlert(lv)} disabled={!!alerted[lv]}

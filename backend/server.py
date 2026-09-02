@@ -7487,9 +7487,10 @@ def _best_worst_calls(graded):
 
 _genai_client = None
 _TTS_CACHE = {}
-ALBERT_TTS_STYLE = ("Speak as Albert — a warm, well-aged scientific professor who is cool, hip and "
-                    "unhurried. Measured and confident, with clear diction, natural pauses and a "
-                    "touch of dry wit. Never rushed.")
+ALBERT_TTS_STYLE = ("Speak as Albert — a brilliant, delightfully eccentric professor who is absolutely "
+                    "THRILLED to share what he knows. Energetic and animated, bursting with contagious "
+                    "enthusiasm and childlike wonder, with lively pace, dramatic emphasis on key ideas and "
+                    "a playful spark. Warm, clever and a little theatrical — never flat or monotone.")
 
 
 def _get_genai_client():

@@ -34,8 +34,8 @@ export function applyAlbertVoice(u, synth) {
     const v = pickAlbertVoice(synth);
     if (v) u.voice = v;
   } catch (e) { /* noop */ }
-  u.rate = 0.93;
-  u.pitch = 0.88;
+  u.rate = 1.05;   // lively, animated — an excited professor
+  u.pitch = 1.0;   // energetic but still warm
   u.volume = 1;
   return u;
 }
@@ -54,24 +54,27 @@ export function stopAlbert() {
   _usingBrowser = false;
 }
 
-function browserSpeak(text, onEnd) {
+function browserSpeak(text, onStart, onEnd) {
   try {
     if (typeof window === 'undefined' || !window.speechSynthesis) { onEnd && onEnd(); return; }
     const synth = window.speechSynthesis;
     const u = new SpeechSynthesisUtterance(stripMarkup(text).slice(0, 4000));
     applyAlbertVoice(u, synth);
+    u.onstart = () => { onStart && onStart(); };
     u.onend = () => { _usingBrowser = false; onEnd && onEnd(); };
     u.onerror = () => { _usingBrowser = false; onEnd && onEnd(); };
     _usingBrowser = true;
     synth.cancel();
     synth.speak(u);
+    // Safari sometimes fires no onstart; nudge the start signal shortly after.
+    setTimeout(() => { if (_usingBrowser) onStart && onStart(); }, 400);
   } catch (e) { _usingBrowser = false; onEnd && onEnd(); }
 }
 
 // Speak `text` as Albert. Tries Gemini TTS first, falls back to the browser voice.
-// Returns nothing; call stopAlbert() to stop. onEnd fires when playback finishes
-// (or immediately if nothing could play).
-export async function speakAlbert(text, { onEnd } = {}) {
+// onStart fires when audio actually begins playing (use it to clear a "warming up"
+// state); onEnd fires when playback finishes (or immediately if nothing could play).
+export async function speakAlbert(text, { onStart, onEnd } = {}) {
   stopAlbert();
   const clean = stripMarkup(text);
   if (!clean) { onEnd && onEnd(); return; }
@@ -86,15 +89,14 @@ export async function speakAlbert(text, { onEnd } = {}) {
     if (!data || !data.audio_base64) throw new Error('no audio');
     const audio = new Audio(`data:${data.mime_type || 'audio/wav'};base64,${data.audio_base64}`);
     _audio = audio;
+    audio.onplaying = () => { onStart && onStart(); };
     audio.onended = () => { if (_audio === audio) _audio = null; onEnd && onEnd(); };
     audio.onerror = () => {
       if (_audio === audio) _audio = null;
-      // Fall back to the browser voice if the data URL fails to play.
-      browserSpeak(clean, onEnd);
+      browserSpeak(clean, onStart, onEnd);
     };
     await audio.play();
   } catch (e) {
-    // Any network/API failure → browser fallback so "Listen" always works.
-    browserSpeak(clean, onEnd);
+    browserSpeak(clean, onStart, onEnd);
   }
 }

@@ -13,7 +13,7 @@ import {
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
   Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet, Plus, Clock,
-  ChevronDown, Coins, Fish, Zap,
+  ChevronDown, Coins, Fish, Zap, Loader2,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -1664,6 +1664,7 @@ function ScenarioSimulator({ d, onNav }) {
 
 function ExecutiveSummary({ d, ticker, news, onNav }) {
   const [speaking, setSpeaking] = useState(false);
+  const [warming, setWarming] = useState(false);
   const [brief] = useFetch(`${API_BASE}/v1/albert/brief`);
   const [techOpen, setTechOpen] = useState(false);
   React.useEffect(() => {
@@ -1674,18 +1675,20 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
   }, []);
   const speakBrief = () => {
     try {
-      if (speaking) { stopAlbert(); setSpeaking(false); return; }
-      const dec0 = d.decision || {};
-      const re0 = dec0.regime_engine || {};
-      const parts = [
-        'Bitcoin morning brief.',
-        `Market bias ${biasMeta(dec0.overall_score).label}, conviction ${dec0.overall_score} out of 100.`,
-        re0.regime_label ? `Current regime: ${re0.regime_label}.` : '',
-        dec0.summary || '',
-      ].filter(Boolean).join(' ');
-      setSpeaking(true);
-      speakAlbert(parts, { onEnd: () => setSpeaking(false) });
-    } catch (e) { setSpeaking(false); }
+      if (speaking || warming) { stopAlbert(); setSpeaking(false); setWarming(false); return; }
+      // Read the MAIN brief that's shown on screen (Albert's plain observations + take),
+      // not the technical decision summary.
+      const obs = (brief && brief.observations) || [];
+      const take = (brief && brief.take) || (d.decision && d.decision.summary) || '';
+      const parts = ['Good morning! Here is your Bitcoin brief.', ...obs, take ? `My take: ${take}` : '']
+        .filter(Boolean).join(' ');
+      if (!parts.trim()) return;
+      setWarming(true);
+      speakAlbert(parts, {
+        onStart: () => { setWarming(false); setSpeaking(true); },
+        onEnd: () => { setSpeaking(false); setWarming(false); },
+      });
+    } catch (e) { setSpeaking(false); setWarming(false); }
   };
   const dec = d.decision || {};
   const bias = biasMeta(dec.overall_score);
@@ -1747,8 +1750,8 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
             return <span className="rounded-full border px-2 py-0.5 text-[11px] font-bold" style={{ borderColor: m.c + '55', color: m.c }} title={`Ensemble health ${Math.round(h0 * 100)}%`}>Model health: {m.t}</span>;
           })()}
           <div className="ml-auto flex items-center gap-2">
-            <button onClick={speakBrief} className={`flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${speaking ? 'border-amber-500/50 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:border-amber-500/50 hover:text-amber-200'}`}>
-              {speaking ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}{speaking ? 'Stop' : 'Listen'}
+            <button onClick={speakBrief} className={`flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${(speaking || warming) ? 'border-amber-500/50 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:border-amber-500/50 hover:text-amber-200'}`}>
+              {warming ? <><Loader2 className="h-4 w-4 animate-spin" />Albert is warming up…</> : speaking ? <><VolumeX className="h-4 w-4" />Stop</> : <><Volume2 className="h-4 w-4" />Listen</>}
             </button>
             <button onClick={() => onNav('ask')} className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-sky-500/50 hover:text-sky-200"><MessageCircle className="h-4 w-4" />Ask Albert</button>
           </div>

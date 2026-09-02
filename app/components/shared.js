@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { RefreshCw, Sparkles, Info, Brain, Volume2, VolumeX, Clock, X } from 'lucide-react';
+import { RefreshCw, Sparkles, Info, Brain, Volume2, VolumeX, Clock, X, Loader2 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { API_BASE } from '../lib/api';
@@ -127,6 +127,7 @@ function TapInfo({ text, className = '', below = true, children }) {
 function AiReview({ text, voice = true, section, footer }) {
   const symbol = React.useContext(SymbolContext);
   const [speaking, setSpeaking] = React.useState(false);
+  const [warming, setWarming] = React.useState(false);
   const [techOpen, setTechOpen] = React.useState(false);
   const [cache, setCache] = React.useState({ plain: null, technical: null });
   const [genAt, setGenAt] = React.useState({ plain: null, technical: null });
@@ -172,10 +173,13 @@ function AiReview({ text, voice = true, section, footer }) {
   })();
 
   const speak = () => {
-    if (speaking) { stopAlbert(); setSpeaking(false); return; }
+    if (speaking || warming) { stopAlbert(); setSpeaking(false); setWarming(false); return; }
     if (!shown) return;
-    setSpeaking(true);
-    speakAlbert(shown, { onEnd: () => setSpeaking(false) });
+    setWarming(true);
+    speakAlbert(shown, {
+      onStart: () => { setWarming(false); setSpeaking(true); },
+      onEnd: () => { setSpeaking(false); setWarming(false); },
+    });
   };
   return (
     <Card className="border-0 bg-gradient-to-br from-sky-500/10 to-violet-500/[0.06] p-5 ring-1 ring-sky-500/25">
@@ -196,8 +200,8 @@ function AiReview({ text, voice = true, section, footer }) {
             </button>
           )}
           {voice && (
-            <button onClick={speak} className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${speaking ? 'border-sky-400 bg-sky-500/20 text-sky-200' : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-sky-500/40 hover:text-sky-300'}`}>
-              {speaking ? <><VolumeX className="h-3.5 w-3.5" />Stop</> : <><Volume2 className="h-3.5 w-3.5" />Listen</>}
+            <button onClick={speak} className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold transition-colors ${(speaking || warming) ? 'border-sky-400 bg-sky-500/20 text-sky-200' : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:border-sky-500/40 hover:text-sky-300'}`}>
+              {warming ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Warming up…</> : speaking ? <><VolumeX className="h-3.5 w-3.5" />Stop</> : <><Volume2 className="h-3.5 w-3.5" />Listen</>}
             </button>
           )}
         </div>
