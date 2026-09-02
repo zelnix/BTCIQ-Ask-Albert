@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { CalendarDays, RefreshCw, History, ChevronDown, GitCompare, X, Check, LineChart as LineChartIcon } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea } from 'recharts';
 import { API_BASE } from '../lib/api';
 import AlbertText from './AlbertText';
 
@@ -103,6 +103,8 @@ export default function WeeklyRecap() {
               <LineChart data={rangedTimeline} margin={{ top: 6, right: 8, left: -24, bottom: 0 }}>
                 <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
                 <YAxis domain={[0, 100]} ticks={[0, 50, 100]} tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} width={30} />
+                <ReferenceArea y1={50} y2={100} fill="#10b981" fillOpacity={0.08} />
+                <ReferenceArea y1={0} y2={50} fill="#ef4444" fillOpacity={0.08} />
                 <ReferenceLine y={50} stroke="#334155" strokeDasharray="3 3" />
                 <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 11 }}
                   formatter={(v, _n, p) => [`${v}% (${(p && p.payload && p.payload.n) || 0} graded)`, 'Hit rate']}
