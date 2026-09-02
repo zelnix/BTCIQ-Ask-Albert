@@ -114,8 +114,8 @@ function browserSpeak(text, onStart, onEnd) {
   } catch (e) { _usingBrowser = false; onEnd && onEnd(); }
 }
 
-// Speak `text` as Albert. Generates the first sentence fast, starts playing, and
-// prefetches the remaining chunks in the background for a near-instant start.
+// Speak `text` as Albert. Generates the first sentence fast to start quickly, and
+// fires ALL remaining chunks in parallel so playback is gapless (no mid-text pause).
 // onStart fires when audio actually begins; onEnd when everything finishes.
 export async function speakAlbert(text, { onStart, onEnd } = {}) {
   stopAlbert();
@@ -125,14 +125,12 @@ export async function speakAlbert(text, { onStart, onEnd } = {}) {
   const chunks = chunkText(clean);
   let started = false;
   const fireStart = () => { if (!started) { started = true; onStart && onStart(); } };
+  // Kick off every chunk's generation at once so later chunks are ready in time.
+  const jobs = chunks.map((c) => fetchTTS(c).catch(() => null));
   try {
-    let nextP = fetchTTS(chunks[0]);
     for (let i = 0; i < chunks.length; i++) {
-      let url;
-      try { url = await nextP; } catch (e) { url = null; }
+      const url = await jobs[i];
       if (_stopFlag) return;
-      // Kick off the next chunk's generation while the current one plays.
-      if (i + 1 < chunks.length) nextP = fetchTTS(chunks[i + 1]).catch(() => null);
       if (!url) { browserSpeak(chunks.slice(i).join(' '), started ? null : fireStart, onEnd); return; }
       try {
         await playUrl(url, fireStart);

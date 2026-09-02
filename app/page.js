@@ -3101,6 +3101,7 @@ export default function DashboardPage() {
               <span className="text-slate-500"> · Powered by BitCentAI</span>
             </p>
             <PublishStamp />
+            <EnvBadge />
           </div>
           <nav className="flex-1 space-y-1">
             {visibleSections.map((s) => {
@@ -3232,6 +3233,25 @@ export default function DashboardPage() {
   );
 }
 
+
+/* ===================== Preview vs Production environment marker ===================== */
+function EnvBadge() {
+  const [env, setEnv] = useState(null); // null on first render (avoid SSR mismatch)
+  useEffect(() => {
+    const host = (typeof window !== 'undefined' && window.location.hostname) || '';
+    const isProd = /(^|\.)btciq\.app$/i.test(host);
+    setEnv(isProd ? 'production' : 'preview');
+  }, []);
+  if (!env) return null;
+  const prod = env === 'production';
+  return (
+    <span suppressHydrationWarning
+      className={`mt-1 inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide ${prod ? 'bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30' : 'bg-amber-500/15 text-amber-300 ring-1 ring-amber-500/30'}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${prod ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+      {prod ? 'Production' : 'Preview'}
+    </span>
+  );
+}
 
 /* ===================== Live "published" date + time under the logo ===================== */
 function PublishStamp() {
