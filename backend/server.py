@@ -55,7 +55,7 @@ from config import (
     RESEND_API_KEY, RESEND_FROM, DIGEST_TZ, DIGEST_HOUR, DIGEST_MINUTE,
     email_recipients_col, email_log_col, email_settings_col,
     PUBLIC_BASE_URL, UNSUB_SECRET, WEEKLY_HOUR, WEEKLY_MINUTE, regime_col,
-    portfolio_col, price_watch_col, albert_calls_col,
+    portfolio_col, price_watch_col, albert_calls_col, recap_col,
 )
 from email_service import send_email, resend_configured
 import regime_engine
@@ -7319,6 +7319,7 @@ def _log_albert_call(session_id, symbol, question, answer):
             'invalidation': _num(data.get('invalidation')),
             'conviction': str(data.get('conviction') or 'medium').lower(),
             'summary': str(data.get('summary') or '')[:200], 'question': (question or '')[:200],
+            'reasoning': (answer or '')[:1800],
             'horizon_days': horizon, 'created_at': datetime.datetime.utcnow().isoformat(),
             'status': 'open', 'outcome': None,
         })
@@ -7395,6 +7396,60 @@ def albert_track_record(limit: int = 20):
         'trend': trend,
         'recent': graded[:limit], 'open': open_out,
     }
+
+
+@app.get('/api/v1/albert/weekly-recap')
+def albert_weekly_recap(refresh: bool = False):
+    """Albert's short weekly note: how his calls performed + what he's watching next.
+    Cached for ~24h (regenerate with ?refresh=true) to keep it cheap and fast."""
+    now = datetime.datetime.utcnow()
+    try:
+        cached = recap_col.find_one({'_id': 'weekly'})
+    except Exception:  # noqa
+        cached = None
+    if cached and not refresh:
+        try:
+            ts = datetime.datetime.fromisoformat(cached.get('created_at'))
+            if (now - ts).total_seconds() < 24 * 3600:
+                return {'status': 'ready', 'text': cached.get('text', ''), 'created_at': cached.get('created_at'), 'cached': True}
+        except Exception:  # noqa
+            pass
+    if not (EMERGENT_LLM_KEY and _HAS_LLM):
+        return {'status': 'unavailable', 'text': ''}
+    # Build a compact performance digest from the last 7 days of calls.
+    wk_ago = (now - datetime.timedelta(days=7)).isoformat()
+    try:
+        graded = list(albert_calls_col.find({'status': 'graded', 'eval_at': {'$gte': wk_ago}}, {'_id': 0}))
+        open_calls = list(albert_calls_col.find({'status': 'open'}, {'_id': 0}).sort('created_at', -1).limit(10))
+    except Exception:  # noqa
+        graded, open_calls = [], []
+    n_g = len(graded)
+    n_c = sum(1 for g in graded if g.get('outcome') == 'correct')
+    digest = f"Graded calls last 7d: {n_g} ({n_c} correct" + (f", {round(n_c / n_g * 100)}% hit rate)" if n_g else ")")
+    for g in graded[:8]:
+        digest += f"\n- {g.get('stance', '').upper()} {g.get('asset')} @ ${g.get('ref_price')}: {g.get('outcome')} ({g.get('pct_move')}% move)"
+    if open_calls:
+        digest += "\nStill open: " + ", ".join(f"{c.get('stance','').upper()} {c.get('asset')} @ ${c.get('ref_price')}" for c in open_calls[:6])
+    ctx = build_chat_context('BTC')
+    prompt = (
+        "Write Albert's WEEKLY RECAP as a short, punchy note (max ~180 words). Two clearly-labelled parts:\n"
+        "**How my calls did** — honestly summarise the graded results below (own the misses, celebrate the hits); "
+        "if there are no graded calls yet, say the current open calls are still playing out.\n"
+        "**What I'm watching next week** — 3 concrete catalysts / levels / metrics to watch (use the live dashboard "
+        "data and a quick web search for next week's macro/crypto calendar).\n"
+        "Use **bold** labels and tight bullets. No greeting, no disclaimer.\n\n"
+        f"=== MY CALL PERFORMANCE (last 7 days) ===\n{digest}\n"
+    )
+    try:
+        text, _model, _src = _albert_answer(ctx, prompt, 'weekly-recap', deep=False)
+    except Exception:  # noqa
+        text = ''
+    if not text:
+        return {'status': 'unavailable', 'text': ''}
+    recap_col.update_one({'_id': 'weekly'},
+                         {'$set': {'text': text, 'created_at': now.isoformat(),
+                                   'stats': {'n_graded': n_g, 'n_correct': n_c}}}, upsert=True)
+    return {'status': 'ready', 'text': text, 'created_at': now.isoformat(), 'cached': False}
 
 
 # =====================================================================

@@ -6,7 +6,7 @@ import { ComposedChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, Refere
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { API_BASE } from '../lib/api';
+import { API_BASE, getPid } from '../lib/api';
 import { fmtUsd, f24, fBy, DIR_COLOR } from '../lib/format';
 import { SymbolContext } from '../lib/context';
 import { sec, SECTIONS } from '../lib/sections';
@@ -144,10 +144,13 @@ function ForecastCard({ f }) {
 }
 
 function ProjectionChart({ d }) {
+  const sym = React.useContext(SymbolContext);
   const [showCone, setShowCone] = React.useState(true);
   const [showPivots, setShowPivots] = React.useState(true);
   const [showBasis, setShowBasis] = React.useState(true);
   const [showRhyme, setShowRhyme] = React.useState(true);
+  const [showAlerts, setShowAlerts] = React.useState(true);
+  const [alerts, setAlerts] = React.useState([]);
   const [analog, setAnalog] = React.useState(null);
   const [analogs, setAnalogs] = React.useState([]);
   React.useEffect(() => {
@@ -156,6 +159,22 @@ function ProjectionChart({ d }) {
         if (j.status === 'ready' && (j.analogs || []).length) { setAnalog(j.analogs[0]); setAnalogs(j.analogs); }
       }).catch(() => {});
   }, []);
+  // Your active price alerts for this coin, drawn as dashed lines so you can see
+  // how close price is to each one. Refreshes when a new alert is set from chat.
+  React.useEffect(() => {
+    const pid = getPid();
+    const load = () => {
+      fetch(`${API_BASE}/v1/price-alerts?pid=${encodeURIComponent(pid)}`, { cache: 'no-store' })
+        .then((r) => r.json())
+        .then((j) => setAlerts((j.watches || []).filter((w) => (w.asset || 'BTC') === sym)))
+        .catch(() => {});
+    };
+    load();
+    const id = setInterval(load, 20000);
+    const onCreated = () => load();
+    window.addEventListener('btciq:alert-created', onCreated);
+    return () => { clearInterval(id); window.removeEventListener('btciq:alert-created', onCreated); };
+  }, [sym]);
 
   const last = d.last_close;
   const hist = (d.performance || []).slice(-60).map((p, i, arr) => ({ x: i - (arr.length - 1), price: p.btcPrice, label: p.date }));
@@ -207,6 +226,7 @@ function ProjectionChart({ d }) {
           <Chip on={showPivots} set={setShowPivots} color="border-emerald-500/50 bg-emerald-500/70">TP / invalidation</Chip>
           <Chip on={showBasis} set={setShowBasis} color="border-amber-500/50 bg-amber-500/70">Cost basis</Chip>
           {analog && <Chip on={showRhyme} set={setShowRhyme} color="border-violet-500/50 bg-violet-500/70">Analog rhyme</Chip>}
+          {alerts.length > 0 && <Chip on={showAlerts} set={setShowAlerts} color="border-amber-400/50 bg-amber-400/70">My alerts</Chip>}
         </div>
       </div>
       <div className="h-72 w-full">
@@ -246,6 +266,10 @@ function ProjectionChart({ d }) {
             {showPivots && fcs.map((f) => (
               <ReferenceLine key={`tp-${f.horizon}`} y={f.bull} stroke="#34d399" strokeOpacity={0.45} strokeDasharray="3 3"
                 label={{ value: `${f.horizon} TP`, position: 'right', fill: '#34d399', fontSize: 9 }} />
+            ))}
+            {showAlerts && alerts.map((w) => (
+              <ReferenceLine key={`al-${w.id}`} y={w.level} stroke="#fbbf24" strokeWidth={1.5} strokeDasharray="2 2"
+                label={{ value: `Alert ${fmtK(w.level)}`, position: 'insideLeft', fill: '#fbbf24', fontSize: 9 }} />
             ))}
           </ComposedChart>
         </ResponsiveContainer>

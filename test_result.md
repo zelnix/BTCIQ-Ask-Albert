@@ -7078,3 +7078,45 @@ agent_communication:
 #     robust try/catch). Verified label toggles.
 # Note: the first run's ERR_ABORTED entries were the automated browser cancelling in-flight requests
 # during its own reloads; all endpoints return 200 on direct calls.
+
+#====================================================================================================
+# SESSION: Alert Preview Lines + Call Detail View + Weekly Recap
+#====================================================================================================
+
+backend:
+  - task: "Weekly recap endpoint + call reasoning storage"
+    implemented: true
+    working: true
+    file: "backend/server.py, backend/config.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          GET /api/v1/albert/weekly-recap generates a short note ("How my calls did" from last-7d graded
+          results + "What I'm watching next week" via dashboard ctx + web search), cached ~24h in new
+          recap_col (regenerate with ?refresh=true). _log_albert_call now also stores 'reasoning' (Albert's
+          answer text) so the Call Detail view can show his original rationale. Verified via curl (~7s).
+
+frontend:
+  - task: "Alert preview lines on projection chart + Call Detail modal + Weekly Recap card"
+    implemented: true
+    working: true
+    file: "app/components/Forecasts.js, AlbertTrackRecord.js, WeeklyRecap.js, app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          (1) Forecasts ProjectionChart: fetches active price alerts for the current coin+pid and draws each
+              as a dashed amber ReferenceLine ("Alert $Xk"), with a "My alerts" toggle chip; refreshes on the
+              'btciq:alert-created' event. Verified the chip appears in-session when an alert exists.
+          (2) AlbertTrackRecord: call rows (in-progress + graded) are now clickable -> CallDetailModal showing
+              a price ladder (target / reference-entry / invalidation / current), move-since-call, the original
+              question and Albert's reasoning (AlbertText). Verified modal renders with all fields.
+          (3) WeeklyRecap card added to the Ask Albert page with a regenerate button. Verified it renders the
+              two-part recap.

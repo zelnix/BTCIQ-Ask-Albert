@@ -28,6 +28,7 @@ import AlbertReplyMeta from './components/AlbertReplyMeta';
 import PortfolioPanel from './components/PortfolioPanel';
 import AlbertTrackRecord from './components/AlbertTrackRecord';
 import AlertManager from './components/AlertManager';
+import WeeklyRecap from './components/WeeklyRecap';
 
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
@@ -2061,6 +2062,7 @@ function AskQuantSection({ d }) {
         </div>
         <AlbertTrackRecord />
       </div>
+      <WeeklyRecap />
       <Card className="flex h-[560px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
         <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3">
           <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />

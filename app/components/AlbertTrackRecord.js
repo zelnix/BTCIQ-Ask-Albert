@@ -1,12 +1,14 @@
 'use client';
 
 import React from 'react';
-import { Target, TrendingUp, TrendingDown, CircleDot } from 'lucide-react';
+import { Target, TrendingUp, TrendingDown, CircleDot, X } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { API_BASE } from '../lib/api';
+import AlbertText from './AlbertText';
 
 export default function AlbertTrackRecord() {
   const [data, setData] = React.useState(null);
+  const [selected, setSelected] = React.useState(null);
 
   const load = React.useCallback(async () => {
     try {
@@ -73,7 +75,7 @@ export default function AlbertTrackRecord() {
             <div className="space-y-1.5">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">In progress</p>
               {open.map((c) => (
-                <div key={c.id} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-1.5 text-xs">
+                <button key={c.id} onClick={() => setSelected(c)} className="flex w-full items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-1.5 text-left text-xs transition-colors hover:border-slate-700 hover:bg-slate-900">
                   <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${c.stance === 'buy' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}`}>{c.stance}</span>
                   <span className="font-semibold text-slate-200">{c.asset}</span>
                   <span className="text-slate-500">@ ${Number(c.ref_price).toLocaleString()}</span>
@@ -83,7 +85,7 @@ export default function AlbertTrackRecord() {
                     {c.live_pct != null && <span className={c.live_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}>{c.live_pct > 0 ? '+' : ''}{c.live_pct}%</span>}
                     <span className="text-[10px] text-slate-600">{c.horizon_days}d</span>
                   </span>
-                </div>
+                </button>
               ))}
             </div>
           )}
@@ -92,17 +94,81 @@ export default function AlbertTrackRecord() {
             <div className="mt-2 space-y-1.5">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Graded</p>
               {recent.map((c) => (
-                <div key={c.id} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-1.5 text-xs">
+                <button key={c.id} onClick={() => setSelected(c)} className="flex w-full items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-1.5 text-left text-xs transition-colors hover:border-slate-700 hover:bg-slate-900">
                   <CircleDot className={`h-3 w-3 ${c.outcome === 'correct' ? 'text-emerald-400' : 'text-red-400'}`} />
                   <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${c.stance === 'buy' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}`}>{c.stance}</span>
                   <span className="font-semibold text-slate-200">{c.asset}</span>
                   <span className={`ml-auto font-semibold ${c.outcome === 'correct' ? 'text-emerald-400' : 'text-red-400'}`}>{c.outcome === 'correct' ? 'Correct' : 'Missed'} · {c.pct_move > 0 ? '+' : ''}{c.pct_move}%</span>
-                </div>
+                </button>
               ))}
             </div>
           )}
         </>
       )}
+      {selected && <CallDetailModal call={selected} onClose={() => setSelected(null)} />}
+    </div>
+  );
+}
+
+function PriceRung({ label, value, color }) {
+  if (value == null) return null;
+  return (
+    <div className="flex items-center justify-between rounded-md bg-slate-950/50 px-2.5 py-1.5">
+      <span className={`text-[11px] font-semibold ${color}`}>{label}</span>
+      <span className="text-xs font-semibold text-slate-200">${Number(value).toLocaleString()}</span>
+    </div>
+  );
+}
+
+function CallDetailModal({ call, onClose }) {
+  const c = call || {};
+  const current = c.spot != null ? c.spot : c.eval_price;
+  const graded = c.status === 'graded';
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <span className={`rounded px-2 py-0.5 text-[11px] font-bold uppercase ${c.stance === 'buy' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}`}>{c.stance}</span>
+            <span className="text-base font-bold text-white">{c.asset}</span>
+            {c.conviction && <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[10px] text-slate-400">{c.conviction} conviction</span>}
+            {graded ? (
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${c.outcome === 'correct' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}`}>{c.outcome === 'correct' ? 'Correct' : 'Missed'}</span>
+            ) : (
+              <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-300">In progress · {c.horizon_days}d</span>
+            )}
+          </div>
+          <button onClick={onClose} className="rounded-md p-1 text-slate-400 hover:text-white"><X className="h-4 w-4" /></button>
+        </div>
+
+        <div className="mb-3 grid grid-cols-2 gap-1.5">
+          <PriceRung label="Take-profit / target" value={c.target} color="text-emerald-400" />
+          <PriceRung label="Reference (entry)" value={c.ref_price} color="text-sky-300" />
+          <PriceRung label="Invalidation / stop" value={c.invalidation} color="text-red-400" />
+          <PriceRung label={graded ? 'Price at grading' : 'Current price'} value={current} color="text-amber-300" />
+        </div>
+        {(c.live_pct != null || c.pct_move != null) && (
+          <p className="mb-3 text-xs text-slate-400">Move since call:{' '}
+            <span className={`font-semibold ${((graded ? c.pct_move : c.live_pct) || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {(graded ? c.pct_move : c.live_pct) > 0 ? '+' : ''}{graded ? c.pct_move : c.live_pct}%
+            </span>
+          </p>
+        )}
+
+        {c.question && (
+          <div className="mb-2">
+            <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">You asked</p>
+            <p className="text-xs italic text-slate-400">&ldquo;{c.question}&rdquo;</p>
+          </div>
+        )}
+        <div>
+          <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Albert&apos;s reasoning</p>
+          <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-[13px] leading-relaxed text-slate-200">
+            {c.reasoning ? <AlbertText text={c.reasoning} /> : <p className="text-slate-500">{c.summary || 'No reasoning captured for this call.'}</p>}
+          </div>
+        </div>
+        {c.created_at && <p className="mt-3 text-center text-[10px] text-slate-600">Logged {new Date(c.created_at).toLocaleString()}</p>}
+      </div>
     </div>
   );
 }

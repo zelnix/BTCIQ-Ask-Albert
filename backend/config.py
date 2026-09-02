@@ -79,6 +79,7 @@ regime_col = db['regime_state']  # Dynamic Regime-Switching HMM: persisted model
 portfolio_col = db['user_portfolios']  # server-side per-client portfolio (holdings + avg entry)
 price_watch_col = db['price_watches']  # "alert me at $X" watches created from Albert chat
 albert_calls_col = db['albert_calls']  # Albert's self-logged buy/sell calls + graded outcomes (track record)
+recap_col = db['albert_recap']  # cached weekly recap note
 
 # Glassnode on-chain data (Smart Money panel). Advanced Light tier: 14d daily history, low call budget.
 GLASSNODE_API_KEY = os.environ.get('GLASSNODE_API_KEY')
