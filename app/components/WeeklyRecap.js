@@ -15,6 +15,7 @@ export default function WeeklyRecap() {
   const [compareMode, setCompareMode] = React.useState(false);
   const [picked, setPicked] = React.useState([]); // recap objects chosen to compare
   const [showCompare, setShowCompare] = React.useState(false);
+  const [rangeW, setRangeW] = React.useState('all'); // 4 | 12 | all weeks on the season chart
 
   const loadHistory = React.useCallback(async () => {
     try {
@@ -46,6 +47,11 @@ export default function WeeklyRecap() {
       label: h.week_label ? h.week_label.replace(/, \d+$/, '') : new Date(h.created_at).toLocaleDateString(),
       n: (h.stats && h.stats.n_graded) || 0 }));
   const avgHr = timeline.length ? Math.round(timeline.reduce((s, t) => s + t.hr, 0) / timeline.length) : null;
+  const rangedTimeline = rangeW === 'all' ? timeline : timeline.slice(-Number(rangeW));
+  const shownAvg = rangedTimeline.length ? Math.round(rangedTimeline.reduce((s, t) => s + t.hr, 0) / rangedTimeline.length) : null;
+  const RangeBtn = ({ v, children }) => (
+    <button onClick={() => setRangeW(v)} className={`rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors ${String(rangeW) === String(v) ? 'bg-violet-500/20 text-violet-200 ring-1 ring-violet-500/40' : 'text-slate-500 hover:text-slate-300'}`}>{children}</button>
+  );
 
   const keyOf = (h) => h.week_label || h.created_at;
   const isPicked = (h) => picked.some((p) => keyOf(p) === keyOf(h));
@@ -83,11 +89,18 @@ export default function WeeklyRecap() {
           <div className="mb-1 flex items-center gap-1.5">
             <LineChartIcon className="h-3.5 w-3.5 text-violet-400" />
             <p className="text-[11px] font-semibold text-slate-300">Season hit-rate</p>
-            {avgHr != null && <span className="ml-auto text-[10px] text-slate-500">avg {avgHr}%</span>}
+            {timeline.length > 4 && (
+              <div className="ml-auto flex items-center gap-0.5">
+                <RangeBtn v="4">4w</RangeBtn>
+                <RangeBtn v="12">12w</RangeBtn>
+                <RangeBtn v="all">All</RangeBtn>
+              </div>
+            )}
+            {shownAvg != null && <span className={`${timeline.length > 4 ? '' : 'ml-auto'} text-[10px] text-slate-500`}>avg {shownAvg}%</span>}
           </div>
           <div className="h-28">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={timeline} margin={{ top: 6, right: 8, left: -24, bottom: 0 }}>
+              <LineChart data={rangedTimeline} margin={{ top: 6, right: 8, left: -24, bottom: 0 }}>
                 <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
                 <YAxis domain={[0, 100]} ticks={[0, 50, 100]} tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} width={30} />
                 <ReferenceLine y={50} stroke="#334155" strokeDasharray="3 3" />
