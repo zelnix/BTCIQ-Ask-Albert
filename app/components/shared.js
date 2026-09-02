@@ -240,7 +240,7 @@ function AiReview({ text, voice = true, section, footer }) {
                 <span className="h-2 w-2 animate-pulse rounded-full bg-violet-400" />Albert is writing the technical briefing…
               </div>
             )}
-            <p className="mt-4 border-t border-slate-800 pt-3 text-[11px] italic text-slate-500">Educational analysis of Bitcoin market data — not financial advice. Albert is an AI quant persona, not Albert Einstein.</p>
+            <p className="mt-4 border-t border-slate-800 pt-3 text-[11px] italic text-slate-500">Educational analysis of Bitcoin market data — not financial advice. Albert is an original fictional AI quant persona and does not represent any real or other fictional person or character.</p>
           </div>
         </div>
       )}

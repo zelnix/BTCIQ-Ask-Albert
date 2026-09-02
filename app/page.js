@@ -830,7 +830,7 @@ function AlbertIntroCard() {
           <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-300">Quant Analyst · Market Mentor</span>
         </div>
         <p className="mt-1 text-sm text-slate-300">Albert blends BitMarkAI’s live numbers with 100+ years of market wisdom — macro, cycles, on-chain and strategy — and live web search, to be your candid trading companion and sounding board. “Let us examine the evidence — probability is not certainty, and capital preservation comes first.”</p>
-        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Albert is an original fictional BTCIQ HuCentAI Quant character inspired by the spirit of scientific curiosity. He is not Albert Einstein and does not represent Einstein’s real opinions.</p>
+        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Albert is an original fictional BTCIQ HuCentAI Quant character. He is not based on, and does not represent, any real or other fictional person or character.</p>
       </div>
     </Card>
   );
@@ -2499,7 +2499,7 @@ function SettingsSection({ onManualRun }) {
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
         <p className="text-xs leading-relaxed text-slate-400">BTCIQ — Bitcoin Market Analysis, powered by BitCentAI, our Bitcoin-Centred Intelligence Engine. BitMarkAI measures the market and produces probability-based forecasts. Albert is BTCIQ’s HuCentAI Quant Analyst.</p>
-        <p className="mt-3 text-[11px] leading-relaxed text-slate-500">BTCIQ provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes. Albert is an original fictional BTCIQ HuCentAI Quant character and is not Albert Einstein.</p>
+        <p className="mt-3 text-[11px] leading-relaxed text-slate-500">BTCIQ provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes. Albert is an original fictional BTCIQ HuCentAI Quant character and does not represent any real or other fictional person or character.</p>
         <a href="https://btciq.app" target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300"><Globe className="h-3 w-3" />btciq.app</a>
       </Card>
     </div>
