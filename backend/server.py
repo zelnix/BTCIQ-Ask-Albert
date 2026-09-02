@@ -913,10 +913,16 @@ def fetch_news():
         fire_news_alerts(cards)
     except Exception:  # noqa
         traceback.print_exc()
-    # Keep only the latest news doc, but insert BEFORE trimming so there is never an
-    # empty window and we never wipe the whole collection on a managed DB (idempotent-safe).
+    # Keep only the most-recent news snapshots. Insert BEFORE trimming (so there is
+    # never an empty window) and only ever trim OLDER docs beyond a small retention
+    # window — a bounded cleanup, never a full-collection wipe on a managed DB.
     news_col.insert_one({**doc, '_id': doc['id']})
-    news_col.delete_many({'_id': {'$ne': doc['id']}})
+    try:
+        keep_ids = [d['_id'] for d in news_col.find({}, {'_id': 1}).sort('created_at', -1).limit(5)]
+        if keep_ids:
+            news_col.delete_many({'_id': {'$nin': keep_ids}})
+    except Exception:  # noqa
+        traceback.print_exc()
     return doc
 
 
