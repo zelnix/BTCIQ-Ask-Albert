@@ -23,6 +23,7 @@ import { fmtUsd, fmtAud, fmtPct, CAT_COLORS, BAR_COLORS, scoreColor, signalText,
 import { SymbolContext } from './lib/context';
 import { useFetch } from './lib/useFetch';
 import FloatingAlbert from './components/FloatingAlbert';
+import AlbertText from './components/AlbertText';
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
 import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, DemoBadge, Spark, LevGauge, ComingSoonSection } from './components/shared';
@@ -1976,6 +1977,7 @@ function AskQuantSection({ d }) {
   const [messages, setMessages] = React.useState([]);
   const [input, setInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
+  const [deep, setDeep] = React.useState(false);
   const [rateUntil, setRateUntil] = React.useState(0);
   const [, setRateTick] = React.useState(0);
   const endRef = React.useRef(null);
@@ -2008,10 +2010,13 @@ function AskQuantSection({ d }) {
     setInput('');
     setMessages((m) => [...m, { role: 'user', text: msg }]);
     setLoading(true);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), deep ? 95000 : 45000);
     try {
       const r = await fetch(`${API_BASE}/v1/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: msg, symbol }),
+        body: JSON.stringify({ session_id: sessionId, message: msg, symbol, deep }),
+        signal: ctrl.signal,
       });
       if (r.status === 429) {
         const j = await r.json().catch(() => ({}));
@@ -2034,8 +2039,9 @@ function AskQuantSection({ d }) {
       setRateUntil(0);
       setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.' }]);
     } catch (e) {
-      setMessages((m) => [...m, { role: 'assistant', text: 'Network error — please try again.' }]);
-    } finally { setLoading(false); }
+      const aborted = e && e.name === 'AbortError';
+      setMessages((m) => [...m, { role: 'assistant', text: aborted ? 'That took longer than expected — please try again (or turn off Deep dive for a faster answer).' : 'Network error — please try again.' }]);
+    } finally { clearTimeout(timer); setLoading(false); }
   };
 
   return (
@@ -2045,7 +2051,7 @@ function AskQuantSection({ d }) {
       <Card className="flex h-[560px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
         <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3">
           <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
-          <div><p className="text-sm font-semibold text-white">Albert · BTCIQ HuCentAI Quant</p><p className="text-[10px] text-slate-500">Market mentor & sounding board · live dashboard + web · Gemini 3.1 Pro</p></div>
+          <div><p className="text-sm font-semibold text-white">Albert · BTCIQ HuCentAI Quant</p><p className="text-[10px] text-slate-500">Crypto strategist & advisor · live dashboard + web search · fast by default, Deep dive for depth</p></div>
           <span className="ml-auto flex items-center gap-1 text-[10px] font-bold text-emerald-400"><span className="h-2 w-2 rounded-full bg-emerald-400" />LIVE</span>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
@@ -2066,7 +2072,7 @@ function AskQuantSection({ d }) {
           {messages.map((m, i) => (
             <div key={i} className={`flex items-end gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" />}
-              <div className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role === 'user' ? 'bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>{m.text}</div>
+              <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>{m.role === 'assistant' ? <AlbertText text={m.text} /> : m.text}</div>
             </div>
           ))}
           {loading && (
@@ -2100,18 +2106,25 @@ function AskQuantSection({ d }) {
               <span>You're chatting a little fast — Albert takes up to 10 messages a minute. Try again in <span className="font-semibold tabular-nums">{rateSecondsLeft}s</span>.</span>
             </div>
           )}
+          <div className="mb-2 flex items-center justify-between">
+            <button onClick={() => setDeep((v) => !v)} title="Deep dive uses the heavy reasoning model for a more thorough answer (slower)"
+              className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${deep ? 'border-violet-500/50 bg-violet-500/15 text-violet-300' : 'border-slate-700 bg-slate-800/60 text-slate-400 hover:text-slate-200'}`}>
+              <Brain className="h-4 w-4" />Deep dive {deep ? 'ON' : 'OFF'}
+            </button>
+            {deep && <span className="text-[11px] text-slate-500">Heavy reasoning model · slower, more thorough</span>}
+          </div>
           <div className="flex items-end gap-2">
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
               rows={1}
-              placeholder="Ask Albert about strategy, macro drivers, cycle history, entries/exits, risk…"
+              placeholder="Ask Albert: is it time to buy or sell? entries/exits, strategy, macro, cycles…"
               className="max-h-32 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-sky-500/50 focus:outline-none"
             />
             <Button onClick={() => send()} disabled={loading || !input.trim() || rateSecondsLeft > 0} className="gap-1.5 bg-sky-500 hover:bg-sky-400"><Send className="h-4 w-4" />Send</Button>
           </div>
-          <p className="mt-2 text-center text-[10px] text-slate-600">Albert is an educational research assistant · not financial advice · grounded in live data but can still be imperfect.</p>
+          <p className="mt-2 text-center text-[10px] text-slate-600">Albert blends the live BTCIQ dashboard with real-time web search · powerful, but markets are uncertain — always do your own research.</p>
         </div>
       </Card>
     </div>

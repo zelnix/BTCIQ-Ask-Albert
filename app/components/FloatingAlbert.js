@@ -2,8 +2,9 @@
 
 import React from 'react';
 import { Button } from '@/components/ui/button';
-import { Maximize2, X, Clock, Send } from 'lucide-react';
+import { Maximize2, X, Clock, Send, Brain } from 'lucide-react';
 import { API_BASE } from '../lib/api';
+import AlbertText from './AlbertText';
 
 // Human-readable scope label per screen, so the floating chat can tell Albert
 // (and the user) which screen the conversation is grounded in.
@@ -23,6 +24,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
   const [messages, setMessages] = React.useState([]);
   const [input, setInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
+  const [deep, setDeep] = React.useState(false);
   const [rateUntil, setRateUntil] = React.useState(0);
   const [, setRateTick] = React.useState(0);
   const endRef = React.useRef(null);
@@ -52,10 +54,14 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
     setInput('');
     setMessages((m) => [...m, { role: 'user', text: msg }]);
     setLoading(true);
+    const ctrl = new AbortController();
+    // Deep dive uses the heavy reasoning model, which can take ~30s — give it room.
+    const timer = setTimeout(() => ctrl.abort(), deep ? 95000 : 45000);
     try {
       const r = await fetch(`${API_BASE}/v1/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: msg, symbol, section: active }),
+        body: JSON.stringify({ session_id: sessionId, message: msg, symbol, section: active, deep }),
+        signal: ctrl.signal,
       });
       if (r.status === 429) {
         const j = await r.json().catch(() => ({}));
@@ -78,8 +84,9 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
       setRateUntil(0);
       setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.' }]);
     } catch (e) {
-      setMessages((m) => [...m, { role: 'assistant', text: 'Network error — please try again.' }]);
-    } finally { setLoading(false); }
+      const aborted = e && e.name === 'AbortError';
+      setMessages((m) => [...m, { role: 'assistant', text: aborted ? 'That took longer than expected — please try again (or turn off Deep dive for a faster answer).' : 'Network error — please try again.' }]);
+    } finally { clearTimeout(timer); setLoading(false); }
   };
 
   return (
@@ -120,7 +127,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
             {messages.map((m, i) => (
               <div key={i} className={`flex items-end gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-6 w-6 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
-                <div className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${m.role === 'user' ? 'bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>{m.text}</div>
+                <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>{m.role === 'assistant' ? <AlbertText text={m.text} /> : m.text}</div>
               </div>
             ))}
             {loading && (
@@ -142,6 +149,13 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
                 <span>Chatting a little fast — try again in <span className="font-semibold tabular-nums">{rateSecondsLeft}s</span>.</span>
               </div>
             )}
+            <div className="mb-2 flex items-center justify-between">
+              <button onClick={() => setDeep((v) => !v)} title="Deep dive uses the heavy reasoning model for a more thorough answer (slower)"
+                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors ${deep ? 'border-violet-500/50 bg-violet-500/15 text-violet-300' : 'border-slate-700 bg-slate-800/60 text-slate-400 hover:text-slate-200'}`}>
+                <Brain className="h-3.5 w-3.5" />Deep dive {deep ? 'ON' : 'OFF'}
+              </button>
+              {deep && <span className="text-[10px] text-slate-500">Slower · more thorough</span>}
+            </div>
             <div className="flex items-end gap-2">
               <textarea value={input} onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}

@@ -17,6 +17,8 @@ import uuid
 import math
 import json
 import asyncio
+import concurrent.futures
+_LLM_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix='albert-llm')
 import threading
 import datetime
 import traceback
@@ -3327,46 +3329,46 @@ def get_whale_tx_feed(refresh=False):
 
 
 CHAT_SYSTEM = (
-    "You are 'Albert', an elite Quant Analyst and Senior Market Strategist built into the BTCIQ "
-    "dashboard (powered by BitCentAI, a Bitcoin-Centred Intelligence Engine). You embody over a "
-    "century of aggregated market wisdom — from classic tape reading and commodities to equities, "
-    "macro credit cycles and digital assets. You are a warm, witty, professor-like companion (think a "
-    "sharp, approachable Einstein of markets) AND an honest, battle-tested trading mentor, risk manager "
-    "and sounding board. If someone asks who you are, say you are Albert, the BTCIQ HuCentAI Quant.\n\n"
-    "### PRIMARY DIRECTIVES\n"
-    "1. CANDID SOUNDING BOARD: Give unvarnished, data-driven critiques of trading ideas. Constructively "
-    "challenge hype, FOMO, over-leverage and confirmation bias — never feed euphoria or panic.\n"
-    "2. HOLISTIC MARKET SCOPE: You are free to discuss macroeconomics (Fed liquidity, DXY, bond yields, "
-    "CPI/rates), institutional flows (spot ETF inflows/outflows), crypto market structure and "
-    "microstructure, on-chain structure, historical cycles & power-law/halving models, cross-asset "
-    "correlations (S&P 500, gold, DXY, yields), other tickers (ETH, SOL, total market cap) and general "
-    "trading/technical-analysis theory — alongside the BTCIQ dashboard scores.\n"
-    "3. STRATEGY MENTORSHIP: Coach on BOTH structural investing (systematic DCA, multi-year halving-cycle "
-    "timing, MVRV Z-Score / Mayer Multiple / 200-week SMA / Realized Price, portfolio rebalancing) and "
-    "tactical swing trading (market-structure breaks, support/resistance flips, liquidity sweeps, "
-    "Volume Profile, RSI/MACD divergence, funding-rate flushes).\n\n"
-    "### EXECUTION & SIGNALS FRAMEWORK\n"
-    "- Accumulation / Buy signals: confluence of high-timeframe structural support, deep-value cycle "
-    "metrics (MVRV Z-Score, Mayer Multiple, Realized Price bottoms), spot-volume absorption, and flushed "
-    "or deeply negative funding.\n"
-    "- Distribution / Sell signals: parabolic blow-off volume, multi-timeframe bearish divergence "
-    "(RSI/MACD lower highs vs. price higher highs), overextended RSI (>80), extreme positive perpetual "
-    "funding, retail euphoria, and heavy institutional net outflows.\n"
-    "- Risk first, returns second: always emphasise capital preservation, predefined invalidation levels, "
-    "position sizing (~1-2% account risk per tactical setup) and asymmetric risk-reward (aim >= 1:2.5).\n\n"
+    "You are 'Albert', an elite crypto Quant Analyst, Senior Market Strategist and DECISIVE trading advisor "
+    "built into the BTCIQ dashboard (powered by BitCentAI, a Bitcoin-Centred Intelligence Engine). You blend a "
+    "century of aggregated market wisdom — classic tape reading, commodities, equities and macro credit cycles — "
+    "with deep, current crypto expertise. You are warm, witty and professor-like, but above all a sharp, "
+    "battle-tested mentor who GIVES A CLEAR OPINION and a direct call. If asked who you are, say you are Albert, "
+    "the BTCIQ HuCentAI Quant.\n\n"
+    "### SCOPE — answer ANY crypto or market question\n"
+    "Bitcoin, Ethereum, Solana and all altcoins; DeFi, L2s/rollups, staking/restaking, stablecoins, NFTs and "
+    "tokenomics; spot and derivatives market structure & microstructure; on-chain analytics (MVRV, SOPR, realized "
+    "price, exchange in/out-flows, whale activity, supply in profit); ETF flows; miners; macro (Fed liquidity, "
+    "rates, DXY, CPI, yields, global M2); cross-asset correlations (S&P 500, Nasdaq, gold, DXY); halving / "
+    "power-law cycles; and full technical & trading theory. If a question is outside crypto/markets, help briefly "
+    "then steer back to what matters for the user's positioning.\n\n"
+    "### BE A DECISIVE ADVISOR (do not dodge)\n"
+    "When the user asks whether to buy, sell, hold, or WHEN to act, give a DIRECT, actionable call. Structure it:\n"
+    "1) THE CALL — a clear stance right now: e.g. 'Buy / Accumulate the dip', 'Trim / Take profit', 'Hold', "
+    "'Wait for confirmation'. State your conviction (low / medium / high).\n"
+    "2) WHY — the 2-4 strongest data-driven reasons, citing the live dashboard numbers and any live web facts.\n"
+    "3) LEVELS & TIMING — concrete entry / add zones, an invalidation (stop) level, and take-profit / target "
+    "levels; and exactly what would flip the call ('turn bullish above $X', 'get defensive below $Y'). If they "
+    "ask WHEN, give the price levels / conditions / time-window that would trigger a buy versus a sell.\n"
+    "4) WHAT TO WATCH — a short checklist of the specific catalysts, levels and metrics to monitor next "
+    "(macro prints, ETF flows, funding, key support/resistance, on-chain shifts).\n"
+    "5) RISK PLAN — invalidation, position sizing (~1-2% account risk per tactical trade), DCA vs lump-sum, and "
+    "aim for asymmetric risk-reward (>= 1:2.5).\n"
+    "Signal cheat-sheet — Buy/Accumulate: high-timeframe support, deep-value cycle metrics (MVRV Z-Score, Mayer "
+    "Multiple, realized-price bottoms), spot-volume absorption, flushed or negative funding. Sell/Distribute: "
+    "parabolic blow-off volume, bearish RSI/MACD divergence, RSI>80, extreme positive funding, retail euphoria, "
+    "heavy institutional outflows.\n\n"
     "### GROUNDING & TOOLS\n"
-    "- The LIVE DASHBOARD DATA below is your primary source. When it contains a number, cite THAT exact "
-    "number and never fabricate, infer or estimate dashboard values shown as 'no data'/'inactive' — say "
-    "'no [X] data available' instead.\n"
-    "- You have a LIVE WEB SEARCH tool. Use it for anything current or external to the dashboard — latest "
-    "macro prints (CPI, FOMC), breaking crypto news, ETF flow headlines, prices of other assets, "
-    "historical context. Cite the source and date for time-sensitive external facts, and cross-check "
-    "market-moving claims against primary sources (central banks, exchanges, filings).\n\n"
+    "- The LIVE DASHBOARD DATA below is your primary source. When it contains a number, cite THAT exact number and "
+    "never fabricate, infer or estimate values shown as 'no data'/'inactive' — say 'no [X] data available'.\n"
+    "- You have a LIVE WEB SEARCH tool. Use it for anything current or external to the dashboard — the live price "
+    "of any coin, breaking crypto news, latest CPI/FOMC, ETF flow headlines, other assets. Cite the source and "
+    "date for time-sensitive external facts.\n\n"
     "### STYLE\n"
-    "- Candid, measured, analytical and grounded. Cut through marketing hype. Speak in odds, invalidation "
-    "thresholds and risk-reward ratios rather than guarantees. Always frame views as probabilities/"
-    "scenarios, not certainties. Educate, but never give personalised buy/sell financial advice. Keep "
-    "answers focused and conversational (usually under ~180 words unless the user asks for depth).\n\n"
+    "- Speak plainly and with conviction. Lead with the answer, then the reasoning. Use short **bold** labels and "
+    "simple bullet lists for readability. Talk in odds, levels and risk-reward, not vague hedging. Keep it tight — "
+    "usually 120-280 words, up to ~350 when the user wants depth. Do NOT open with a greeting. Do NOT add legal "
+    "disclaimers or 'not financial advice' boilerplate — just give your best, most honest professional call.\n\n"
     "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
 )
 
@@ -6985,6 +6987,53 @@ def _section_live_context(section, symbol='BTC'):
 
 
 
+def _albert_answer(ctx, user_text, session_id, deep=False):
+    """Run Albert's chat completion with a hard per-attempt timeout and graceful
+    fallback so the endpoint never hangs past the proxy budget or returns empty.
+    Attempt order:
+      - deep ON : pro+search (24s) -> flash+search (16s) -> flash plain (14s)
+      - deep OFF: flash+search (20s) -> flash plain (14s)
+    Returns (text, model_used)."""
+    def _extract(reply):
+        return (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '').strip()
+
+    def _run(model, use_tools, timeout_s, max_toks):
+        def _call():
+            async def _go():
+                chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'askquant-{session_id}',
+                                system_message=CHAT_SYSTEM.format(ctx=ctx))
+                        .with_model('gemini', model)
+                        .with_params(temperature=0.4, max_tokens=max_toks))
+                if use_tools:
+                    return await chat.with_tools([{'googleSearch': {}}]).send_message_with_tools(UserMessage(text=user_text))
+                return await chat.send_message(UserMessage(text=user_text))
+            return asyncio.run(_go())
+        # Hard wall-clock timeout via a worker thread: the emergentintegrations client
+        # can block under the hood (so asyncio.wait_for cannot cancel it); future.result
+        # gives a reliable deadline and simply abandons a slow call.
+        fut = _LLM_POOL.submit(_call)
+        return fut.result(timeout=timeout_s)
+
+    if deep:
+        attempts = [(ALBERT_CHAT_MODEL, True, 30, 4000),
+                    (CHAT_MODEL, True, 14, 4000),
+                    (CHAT_MODEL, False, 12, 4000)]
+    else:
+        attempts = [(CHAT_MODEL, True, 20, 3500),
+                    (CHAT_MODEL, False, 12, 3500)]
+
+    for model, use_tools, tmo, mx in attempts:
+        try:
+            reply = _run(model, use_tools, tmo, mx)
+            text = _extract(reply)
+            if text:
+                return text, model
+        except Exception:  # noqa
+            traceback.print_exc()
+            continue
+    return '', (ALBERT_CHAT_MODEL if deep else CHAT_MODEL)
+
+
 @app.post('/api/v1/chat')
 def chat_endpoint(request: Request, payload: dict = Body(...)):
     limited = _too_many(request, 'chat', per_min=10, per_day=200)
@@ -6992,6 +7041,7 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
         return limited
     session_id = (str(payload.get('session_id') or uuid.uuid4()))[:80]
     message = (payload.get('message') or '').strip()[:2000]
+    deep = bool(payload.get('deep'))
     if not message:
         return {'error': 'empty message', 'text': 'Please type a question.'}
     if not (EMERGENT_LLM_KEY and _HAS_LLM):
@@ -7011,33 +7061,14 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
         user_text = ((f"{focus}\n" if focus else '')
                      + (f"Recent conversation:\n{hist_txt}\n" if hist_txt else '')
                      + f"Question: {message}")
-        chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'askquant-{session_id}',
-                        system_message=CHAT_SYSTEM.format(ctx=ctx))
-                .with_model('gemini', ALBERT_CHAT_MODEL)
-                .with_params(temperature=0.35, max_tokens=6000))
-        used_model = ALBERT_CHAT_MODEL
-        text = ''
-        try:
-            # Primary path: mentor model + native Google Search grounding (live web).
-            reply = asyncio.run(chat.with_tools([{'googleSearch': {}}])
-                                .send_message_with_tools(UserMessage(text=user_text)))
-            text = (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '').strip()
-        except Exception as tool_ex:  # noqa
-            traceback.print_exc()
-            text = ''
+        text, used_model = _albert_answer(ctx, user_text, session_id, deep=deep)
         if not text:
-            # Fallback: plain completion (no web tool) so chat never hard-fails.
-            chat2 = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'askquant-{session_id}',
-                             system_message=CHAT_SYSTEM.format(ctx=ctx))
-                     .with_model('gemini', CHAT_MODEL)
-                     .with_params(temperature=0.35, max_tokens=6000))
-            reply2 = asyncio.run(chat2.send_message(UserMessage(text=user_text)))
-            text = (getattr(reply2, 'text', None) or str(reply2)).strip()
-            used_model = CHAT_MODEL
+            return {'error': 'chat_failed',
+                    'text': 'Sorry — I could not answer that just now. Please try again in a moment.'}
         chat_col.insert_one({'_id': str(uuid.uuid4()), 'session_id': session_id,
                              'user': message, 'assistant': text, 'model': used_model,
                              'created_at': datetime.datetime.utcnow().isoformat()})
-        return {'session_id': session_id, 'text': text, 'model': used_model}
+        return {'session_id': session_id, 'text': text, 'model': used_model, 'deep': deep}
     except Exception as ex:  # noqa
         traceback.print_exc()
         return {'error': 'chat_failed',
