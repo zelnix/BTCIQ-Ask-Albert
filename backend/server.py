@@ -7361,6 +7361,57 @@ def _grade_albert_calls():
         }})
 
 
+def _target_progress(g):
+    """How close a graded call got to its take-profit target vs its invalidation.
+    Returns a signed ratio where 1.0 == target reached, 0 == flat at entry,
+    negative == moved toward (or past) the invalidation. Direction-aware for
+    buy vs sell. Falls back to directional % move when target is missing."""
+    try:
+        ref = g.get('ref_price')
+        ev = g.get('eval_price')
+        stance = g.get('stance')
+        tgt = g.get('target')
+        if not ref or ev is None or not stance:
+            return None
+        if tgt and tgt != ref:
+            if stance == 'buy':
+                return (ev - ref) / (tgt - ref)
+            return (ref - ev) / (ref - tgt)
+        # No usable target -> use directional move fraction (per-unit, e.g. 0.05 = +5%)
+        dir_move = (ev - ref) / ref if stance == 'buy' else (ref - ev) / ref
+        return dir_move
+    except Exception:  # noqa
+        return None
+
+
+def _best_worst_calls(graded):
+    """Pick Albert's single best and worst graded calls, ranked by how close
+    each got to its target vs invalidation."""
+    scored = []
+    for g in graded:
+        s = _target_progress(g)
+        if s is None:
+            continue
+        dir_move = None
+        try:
+            if g.get('stance') == 'buy':
+                dir_move = g.get('pct_move')
+            else:
+                dir_move = -g.get('pct_move') if g.get('pct_move') is not None else None
+        except Exception:  # noqa
+            dir_move = None
+        scored.append({**g, 'score': round(s, 3),
+                       'progress_pct': round(s * 100, 1),
+                       'dir_move': round(dir_move, 2) if dir_move is not None else None})
+    if not scored:
+        return None, None
+    best = max(scored, key=lambda x: x['score'])
+    worst = min(scored, key=lambda x: x['score'])
+    if best.get('id') == worst.get('id'):
+        worst = None  # only one gradeable call so far
+    return best, worst
+
+
 @app.get('/api/v1/albert/track-record')
 def albert_track_record(limit: int = 20):
     try:
@@ -7404,11 +7455,13 @@ def albert_track_record(limit: int = 20):
         if spot and ref:
             winning = (spot >= ref) if c.get('stance') == 'buy' else (spot <= ref)
         open_out.append({**c, 'spot': spot, 'live_pct': live_pct, 'winning': winning})
+    best, worst = _best_worst_calls(graded)
     return {
         'status': 'ready', 'n_calls': total, 'n_graded': n_graded, 'n_correct': n_correct,
         'hit_rate': round(n_correct / n_graded * 100, 1) if n_graded else None,
         'avg_move': round(sum(g.get('pct_move', 0) for g in graded) / n_graded, 2) if n_graded else None,
         'trend': trend, 'by_coin': by_coin,
+        'best_call': best, 'worst_call': worst,
         'recent': graded[:limit], 'open': open_out,
     }
 
@@ -7464,7 +7517,31 @@ def albert_weekly_recap(refresh: bool = False):
     recap_col.update_one({'_id': 'weekly'},
                          {'$set': {'text': text, 'created_at': now.isoformat(),
                                    'stats': {'n_graded': n_g, 'n_correct': n_c}}}, upsert=True)
+    # Archive one recap per ISO week so users can scroll back through history.
+    try:
+        iso = now.isocalendar()
+        wk_id = f'wk-{iso[0]}-{iso[1]:02d}'
+        week_label = f'Week {iso[1]}, {iso[0]}'
+        recap_col.update_one({'_id': wk_id},
+                             {'$set': {'kind': 'archive', 'text': text,
+                                       'created_at': now.isoformat(), 'week_label': week_label,
+                                       'stats': {'n_graded': n_g, 'n_correct': n_c,
+                                                 'hit_rate': round(n_c / n_g * 100) if n_g else None}}},
+                             upsert=True)
+    except Exception:  # noqa
+        pass
     return {'status': 'ready', 'text': text, 'created_at': now.isoformat(), 'cached': False}
+
+
+@app.get('/api/v1/albert/weekly-recap/history')
+def albert_weekly_recap_history():
+    """All archived weekly recaps, newest first, so users can look back at how
+    each week played out."""
+    try:
+        rows = list(recap_col.find({'kind': 'archive'}, {'_id': 0}).sort('created_at', -1))
+    except Exception:  # noqa
+        rows = []
+    return {'status': 'ready', 'recaps': rows}
 
 
 def _weekly_recap_autopost():

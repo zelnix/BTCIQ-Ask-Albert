@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Target, TrendingUp, TrendingDown, CircleDot, X } from 'lucide-react';
+import { Target, TrendingUp, TrendingDown, CircleDot, X, Trophy, ShieldAlert } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { API_BASE } from '../lib/api';
 import AlbertText from './AlbertText';
@@ -28,6 +28,8 @@ export default function AlbertTrackRecord() {
   const recent = (data && data.recent) || [];
   const trend = (data && data.trend) || [];
   const byCoin = (data && data.by_coin) || [];
+  const best = data && data.best_call;
+  const worst = data && data.worst_call;
   const coins = Array.from(new Set([...open, ...recent].map((c) => c.asset).filter(Boolean)));
   const applyF = (arr) => arr.filter((c) => (coinFilter === 'ALL' || c.asset === coinFilter) && (sideFilter === 'ALL' || c.stance === sideFilter));
   const openF = applyF(open);
@@ -64,6 +66,15 @@ export default function AlbertTrackRecord() {
               </div>
             )}
           </div>
+
+          {best && (
+            <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <BestWorstCard kind="best" call={best} onClick={() => setSelected(best)} />
+              {worst
+                ? <BestWorstCard kind="worst" call={worst} onClick={() => setSelected(worst)} />
+                : <div className="flex items-center justify-center rounded-lg border border-dashed border-slate-800 bg-slate-950/30 px-3 py-2 text-center text-[10px] text-slate-600">Worst call appears once Albert has more than one graded call.</div>}
+            </div>
+          )}
 
           {trend.length >= 2 && (
             <div className="mb-3">
@@ -144,6 +155,39 @@ export default function AlbertTrackRecord() {
       )}
       {selected && <CallDetailModal call={selected} onClose={() => setSelected(null)} />}
     </div>
+  );
+}
+
+function BestWorstCard({ kind, call, onClick }) {
+  const c = call || {};
+  const isBest = kind === 'best';
+  const Icon = isBest ? Trophy : ShieldAlert;
+  const prog = c.progress_pct;
+  const reached = prog != null && prog >= 100;
+  const barPct = prog == null ? 0 : Math.max(0, Math.min(100, prog));
+  return (
+    <button onClick={onClick}
+      className={`group flex flex-col gap-1.5 rounded-lg border p-2.5 text-left transition-colors ${isBest ? 'border-emerald-500/30 bg-emerald-500/[0.06] hover:border-emerald-500/60' : 'border-red-500/30 bg-red-500/[0.06] hover:border-red-500/60'}`}>
+      <div className="flex items-center gap-1.5">
+        <Icon className={`h-3.5 w-3.5 ${isBest ? 'text-emerald-400' : 'text-red-400'}`} />
+        <span className={`text-[10px] font-bold uppercase tracking-wide ${isBest ? 'text-emerald-300' : 'text-red-300'}`}>{isBest ? 'Best call' : 'Worst call'}</span>
+        <span className="ml-auto text-[10px] text-slate-500 group-hover:text-slate-300">details →</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${c.stance === 'buy' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}`}>{c.stance}</span>
+        <span className="font-semibold text-slate-200">{c.asset}</span>
+        <span className="text-[11px] text-slate-500">@ ${Number(c.ref_price).toLocaleString()}</span>
+        {c.dir_move != null && (
+          <span className={`ml-auto text-xs font-bold ${c.dir_move >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{c.dir_move > 0 ? '+' : ''}{c.dir_move}%</span>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
+          <div className={`h-full rounded-full ${isBest ? 'bg-emerald-500' : 'bg-red-500'}`} style={{ width: `${barPct}%` }} />
+        </div>
+        <span className="shrink-0 text-[10px] font-semibold text-slate-400">{prog != null ? `${reached ? '100+' : Math.round(prog)}% to target` : '—'}</span>
+      </div>
+    </button>
   );
 }
 
