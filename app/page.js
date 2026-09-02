@@ -18,12 +18,16 @@ import {
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { API_BASE } from './lib/api';
+import { API_BASE, getPid } from './lib/api';
 import { fmtUsd, fmtAud, fmtPct, CAT_COLORS, BAR_COLORS, scoreColor, signalText, TF_TOUCH, sigHex, sigColor, shortDate, riskColor, countdown, f24, fBy, DIR_COLOR, corrColor } from './lib/format';
 import { SymbolContext } from './lib/context';
 import { useFetch } from './lib/useFetch';
 import FloatingAlbert from './components/FloatingAlbert';
 import AlbertText from './components/AlbertText';
+import AlbertReplyMeta from './components/AlbertReplyMeta';
+import PortfolioPanel from './components/PortfolioPanel';
+import AlbertTrackRecord from './components/AlbertTrackRecord';
+
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
 import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, DemoBadge, Spark, LevGauge, ComingSoonSection } from './components/shared';
@@ -1981,6 +1985,7 @@ function AskQuantSection({ d }) {
   const [rateUntil, setRateUntil] = React.useState(0);
   const [, setRateTick] = React.useState(0);
   const endRef = React.useRef(null);
+  const pid = React.useMemo(() => getPid(), []);
 
   React.useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
   React.useEffect(() => {
@@ -2015,7 +2020,7 @@ function AskQuantSection({ d }) {
     try {
       const r = await fetch(`${API_BASE}/v1/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: msg, symbol, deep }),
+        body: JSON.stringify({ session_id: sessionId, message: msg, symbol, deep, pid }),
         signal: ctrl.signal,
       });
       if (r.status === 429) {
@@ -2037,7 +2042,7 @@ function AskQuantSection({ d }) {
         return;
       }
       setRateUntil(0);
-      setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.' }]);
+      setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.', sources: j.sources || [] }]);
     } catch (e) {
       const aborted = e && e.name === 'AbortError';
       setMessages((m) => [...m, { role: 'assistant', text: aborted ? 'That took longer than expected — please try again (or turn off Deep dive for a faster answer).' : 'Network error — please try again.' }]);
@@ -2048,6 +2053,10 @@ function AskQuantSection({ d }) {
     <div className="space-y-5">
       <SectionHead icon={MessageCircle} title="Ask Albert" blurb={sec('ask').blurb} />
       <AlbertIntroCard />
+      <div className="grid gap-4 md:grid-cols-2">
+        <PortfolioPanel />
+        <AlbertTrackRecord />
+      </div>
       <Card className="flex h-[560px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
         <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3">
           <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-sky-500/40" />
@@ -2072,7 +2081,9 @@ function AskQuantSection({ d }) {
           {messages.map((m, i) => (
             <div key={i} className={`flex items-end gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" />}
-              <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>{m.role === 'assistant' ? <AlbertText text={m.text} /> : m.text}</div>
+              <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>
+                {m.role === 'assistant' ? <><AlbertText text={m.text} /><AlbertReplyMeta text={m.text} sources={m.sources} symbol={symbol} pid={pid} /></> : m.text}
+              </div>
             </div>
           ))}
           {loading && (

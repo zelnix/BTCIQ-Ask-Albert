@@ -55,6 +55,7 @@ from config import (
     RESEND_API_KEY, RESEND_FROM, DIGEST_TZ, DIGEST_HOUR, DIGEST_MINUTE,
     email_recipients_col, email_log_col, email_settings_col,
     PUBLIC_BASE_URL, UNSUB_SECRET, WEEKLY_HOUR, WEEKLY_MINUTE, regime_col,
+    portfolio_col, price_watch_col, albert_calls_col,
 )
 from email_service import send_email, resend_configured
 import regime_engine
@@ -4971,6 +4972,10 @@ def _startup():
         scheduler.add_job(_refresh_etf_bg, 'interval', hours=3, id='etf_refresh')
         # Large-transaction feed: keep the labeled whale-tx feed fresh.
         scheduler.add_job(_refresh_whale_tx_bg, 'interval', minutes=30, id='whale_tx_refresh')
+        # Price-watch alerts created from Albert chat: check crossings every 60s.
+        scheduler.add_job(_check_price_watches, 'interval', seconds=60, id='price_watch_check')
+        # Albert self-check: grade his logged buy/sell calls once their horizon elapses.
+        scheduler.add_job(_grade_albert_calls, 'interval', minutes=30, id='albert_call_grade')
         # Daily Alert Digest email (Resend). Per-job timezone so it fires at local send time.
         try:
             scheduler.add_job(send_daily_digest_bg, 'cron', hour=DIGEST_HOUR, minute=DIGEST_MINUTE,
@@ -6993,9 +6998,40 @@ def _albert_answer(ctx, user_text, session_id, deep=False):
     Attempt order:
       - deep ON : pro+search (24s) -> flash+search (16s) -> flash plain (14s)
       - deep OFF: flash+search (20s) -> flash plain (14s)
-    Returns (text, model_used)."""
+    Returns (text, model_used, sources)."""
     def _extract(reply):
+        if isinstance(reply, str):
+            return reply.strip()
         return (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '').strip()
+
+    def _extract_sources(reply):
+        """Pull the live web-search citations Gemini used (title + url)."""
+        out, seen = [], set()
+        try:
+            raw = getattr(reply, 'raw', None)
+            data = raw.model_dump() if hasattr(raw, 'model_dump') else {}
+        except Exception:  # noqa
+            data = {}
+        try:
+            anns = ((data.get('choices') or [{}])[0].get('message', {}) or {}).get('annotations') or []
+            for a in anns:
+                uc = (a or {}).get('url_citation') or {}
+                url, title = uc.get('url'), uc.get('title')
+                if url and url not in seen:
+                    seen.add(url); out.append({'title': title or url, 'url': url})
+        except Exception:  # noqa
+            pass
+        if not out:
+            try:
+                for g in (data.get('vertex_ai_grounding_metadata') or []):
+                    for ch in (g.get('groundingChunks') or []):
+                        web = ch.get('web') or {}
+                        url, title = web.get('uri'), web.get('title')
+                        if url and url not in seen:
+                            seen.add(url); out.append({'title': title or url, 'url': url})
+            except Exception:  # noqa
+                pass
+        return out[:8]
 
     def _run(model, use_tools, timeout_s, max_toks):
         def _call():
@@ -7027,11 +7063,12 @@ def _albert_answer(ctx, user_text, session_id, deep=False):
             reply = _run(model, use_tools, tmo, mx)
             text = _extract(reply)
             if text:
-                return text, model
+                sources = _extract_sources(reply) if use_tools else []
+                return text, model, sources
         except Exception:  # noqa
             traceback.print_exc()
             continue
-    return '', (ALBERT_CHAT_MODEL if deep else CHAT_MODEL)
+    return '', (ALBERT_CHAT_MODEL if deep else CHAT_MODEL), []
 
 
 @app.post('/api/v1/chat')
@@ -7042,17 +7079,24 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
     session_id = (str(payload.get('session_id') or uuid.uuid4()))[:80]
     message = (payload.get('message') or '').strip()[:2000]
     deep = bool(payload.get('deep'))
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    sym = (payload.get('symbol') or 'BTC')
     if not message:
         return {'error': 'empty message', 'text': 'Please type a question.'}
     if not (EMERGENT_LLM_KEY and _HAS_LLM):
         return {'error': 'llm_unconfigured',
                 'text': 'The Ask Quant chat model is not configured on this server.'}
     try:
-        ctx = build_chat_context((payload.get('symbol') or 'BTC'))
+        ctx = build_chat_context(sym)
         section = payload.get('section')
-        live = _section_live_context(section, (payload.get('symbol') or 'BTC'))
+        live = _section_live_context(section, sym)
         if live:
             ctx = ctx + "\n\n===== CURRENT SCREEN LIVE DATA (cite these exact numbers) =====\n" + live
+        # Portfolio-aware coaching: inject the user's saved position so buy/sell calls
+        # are tailored to their P&L.
+        pf_ctx = _portfolio_context(pid)
+        if pf_ctx:
+            ctx = ctx + "\n\n===== USER PORTFOLIO (tailor buy/sell/hold to THIS position & P&L) =====\n" + pf_ctx
         hist = list(chat_col.find({'session_id': session_id}, {'_id': 0}).sort('created_at', 1))
         hist_txt = ''
         for h in hist[-5:]:
@@ -7061,18 +7105,285 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
         user_text = ((f"{focus}\n" if focus else '')
                      + (f"Recent conversation:\n{hist_txt}\n" if hist_txt else '')
                      + f"Question: {message}")
-        text, used_model = _albert_answer(ctx, user_text, session_id, deep=deep)
+        text, used_model, sources = _albert_answer(ctx, user_text, session_id, deep=deep)
         if not text:
             return {'error': 'chat_failed',
                     'text': 'Sorry — I could not answer that just now. Please try again in a moment.'}
         chat_col.insert_one({'_id': str(uuid.uuid4()), 'session_id': session_id,
                              'user': message, 'assistant': text, 'model': used_model,
                              'created_at': datetime.datetime.utcnow().isoformat()})
-        return {'session_id': session_id, 'text': text, 'model': used_model, 'deep': deep}
+        # Self-check: log Albert's directional call in the background (never blocks the reply).
+        try:
+            _LLM_POOL.submit(_log_albert_call, session_id, sym, message, text)
+        except Exception:  # noqa
+            pass
+        return {'session_id': session_id, 'text': text, 'model': used_model,
+                'deep': deep, 'sources': sources}
     except Exception as ex:  # noqa
         traceback.print_exc()
         return {'error': 'chat_failed',
                 'text': 'Sorry — I could not answer that just now. Please try again in a moment.'}
+
+
+# =====================================================================
+# ALBERT ADVISOR EXTRAS: server-side portfolio, price-alert watches,
+# and Albert's self-check track record (grades his own calls).
+# =====================================================================
+
+def _num(v):
+    try:
+        return round(float(v), 2) if v not in (None, '') else None
+    except Exception:  # noqa
+        return None
+
+
+def _spot_price(symbol='BTC'):
+    """Current spot price for any supported symbol (reuses the cached ticker)."""
+    try:
+        t = ticker((symbol or 'BTC'))
+        p = t.get('price') if isinstance(t, dict) else None
+        return float(p) if p else None
+    except Exception:  # noqa
+        return None
+
+
+def _portfolio_context(pid):
+    if not pid:
+        return ''
+    try:
+        doc = portfolio_col.find_one({'_id': pid})
+    except Exception:  # noqa
+        doc = None
+    if not doc or not doc.get('positions'):
+        return ''
+    lines = []
+    for p in (doc.get('positions') or [])[:12]:
+        asset = str(p.get('asset', '')).upper()[:6]
+        if not asset:
+            continue
+        size = p.get('size')
+        entry = p.get('avg_entry')
+        spot = _spot_price(asset)
+        pnl = ''
+        try:
+            if spot and entry:
+                pct = (spot - float(entry)) / float(entry) * 100
+                val = (float(size) * spot) if size else None
+                pnl = f", now ${spot:,.2f} ({pct:+.1f}% P&L" + (f", ~${val:,.0f} position" if val else '') + ")"
+        except Exception:  # noqa
+            pnl = ''
+        lines.append(f"- {asset}: {size if size is not None else '?'} @ avg entry ${entry if entry is not None else '?'}{pnl}")
+    if not lines:
+        return ''
+    return ("The user holds the following. Tailor EVERY buy/sell/hold call to THIS position and its P&L "
+            "(where to add, where to take profit, where to cut, how it changes their risk):\n" + "\n".join(lines))
+
+
+@app.get('/api/v1/portfolio')
+def get_portfolio(pid: str = ''):
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'positions': []}
+    doc = portfolio_col.find_one({'_id': pid}, {'_id': 0})
+    return {'positions': (doc or {}).get('positions', [])}
+
+
+@app.post('/api/v1/portfolio')
+def save_portfolio(payload: dict = Body(...)):
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    clean = []
+    for p in (payload.get('positions') or [])[:12]:
+        try:
+            asset = str(p.get('asset', '')).upper().strip()[:6]
+            if not asset:
+                continue
+            clean.append({'asset': asset, 'size': _num(p.get('size')), 'avg_entry': _num(p.get('avg_entry'))})
+        except Exception:  # noqa
+            continue
+    portfolio_col.update_one({'_id': pid},
+                             {'$set': {'positions': clean, 'updated_at': datetime.datetime.utcnow().isoformat()}},
+                             upsert=True)
+    return {'ok': True, 'positions': clean}
+
+
+@app.post('/api/v1/price-alert')
+def create_price_alert(payload: dict = Body(...)):
+    try:
+        asset = str(payload.get('asset') or 'BTC').upper().strip()[:6]
+        level = float(payload.get('level'))
+    except Exception:  # noqa
+        return {'error': 'invalid_level'}
+    if level <= 0:
+        return {'error': 'invalid_level'}
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    spot = _spot_price(asset)
+    direction = payload.get('direction')
+    if direction not in ('above', 'below'):
+        direction = 'above' if (spot is None or level >= spot) else 'below'
+    wid = str(uuid.uuid4())
+    price_watch_col.insert_one({
+        '_id': wid, 'id': wid, 'pid': pid, 'asset': asset, 'level': round(level, 2),
+        'direction': direction, 'created_price': spot, 'triggered': False,
+        'created_at': datetime.datetime.utcnow().isoformat(),
+    })
+    return {'ok': True, 'id': wid, 'asset': asset, 'level': round(level, 2), 'direction': direction, 'spot': spot}
+
+
+@app.get('/api/v1/price-alerts')
+def list_price_alerts(pid: str = ''):
+    q = {'triggered': False}
+    if pid:
+        q['pid'] = pid.strip()[:80]
+    rows = list(price_watch_col.find(q, {'_id': 0}).sort('created_at', -1).limit(50))
+    return {'watches': rows}
+
+
+@app.delete('/api/v1/price-alert/{wid}')
+def delete_price_alert(wid: str):
+    price_watch_col.delete_one({'_id': wid})
+    return {'ok': True}
+
+
+def _check_price_watches():
+    """Scheduler job: fire an in-app/browser notification when a watched level is crossed."""
+    try:
+        watches = list(price_watch_col.find({'triggered': False}).limit(200))
+    except Exception:  # noqa
+        return
+    price_cache = {}
+    for w in watches:
+        asset = w.get('asset', 'BTC')
+        if asset not in price_cache:
+            price_cache[asset] = _spot_price(asset)
+        spot = price_cache[asset]
+        if spot is None:
+            continue
+        level = w.get('level')
+        direction = w.get('direction')
+        hit = (direction == 'above' and spot >= level) or (direction == 'below' and spot <= level)
+        if not hit:
+            continue
+        push_alert('price_watch', 'high', f"{asset} crossed ${level:,.0f}",
+                   f"{asset} is now ${spot:,.2f}, {direction} the ${level:,.0f} level Albert flagged.",
+                   w.get('id'))
+        price_watch_col.update_one({'_id': w['_id']},
+                                   {'$set': {'triggered': True, 'triggered_price': spot,
+                                             'triggered_at': datetime.datetime.utcnow().isoformat()}})
+
+
+CALL_EXTRACT_SYSTEM = (
+    "You extract the single primary actionable trading call from a crypto analyst's answer. "
+    "Return ONLY strict minified JSON (no prose, no markdown) with keys: "
+    "stance (one of 'buy','sell','hold','wait','none'), asset (ticker like BTC/ETH/SOL, default BTC), "
+    "ref_price (number or null: the current/entry price the call is anchored to), "
+    "target (number or null), invalidation (number or null), horizon_days (integer, default 14), "
+    "conviction (one of 'low','medium','high'), summary (<=120 chars). "
+    "Map accumulate/buy the dip -> 'buy'; trim/take profit/distribute/short -> 'sell'. "
+    "If the answer gives no clear directional call, use stance='none'."
+)
+
+
+def _log_albert_call(session_id, symbol, question, answer):
+    """Background self-check: parse Albert's own answer into a structured call and log it."""
+    if not (EMERGENT_LLM_KEY and _HAS_LLM):
+        return
+    try:
+        def _call():
+            async def _go():
+                chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'callx-{session_id}',
+                                system_message=CALL_EXTRACT_SYSTEM)
+                        .with_model('gemini', CHAT_MODEL).with_params(temperature=0.0, max_tokens=2000))
+                return await chat.send_message(UserMessage(text=f"Analyst answer:\n{answer[:2500]}"))
+            return asyncio.run(_go())
+        reply = _LLM_POOL.submit(_call).result(timeout=20)
+        raw = reply.strip() if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '').strip()
+        m = re.search(r'\{.*\}', raw, re.DOTALL)
+        if not m:
+            return
+        data = json.loads(m.group(0))
+        stance = str(data.get('stance', 'none')).lower()
+        if stance not in ('buy', 'sell'):
+            return  # only grade directional calls
+        asset = str(data.get('asset') or symbol or 'BTC').upper()[:6]
+        ref_price = _num(data.get('ref_price')) or _spot_price(asset)
+        if not ref_price:
+            return
+        horizon = max(1, min(120, int(data.get('horizon_days') or 14)))
+        cid = str(uuid.uuid4())
+        albert_calls_col.insert_one({
+            '_id': cid, 'id': cid, 'session_id': session_id, 'asset': asset, 'stance': stance,
+            'ref_price': round(ref_price, 2), 'target': _num(data.get('target')),
+            'invalidation': _num(data.get('invalidation')),
+            'conviction': str(data.get('conviction') or 'medium').lower(),
+            'summary': str(data.get('summary') or '')[:200], 'question': (question or '')[:200],
+            'horizon_days': horizon, 'created_at': datetime.datetime.utcnow().isoformat(),
+            'status': 'open', 'outcome': None,
+        })
+    except Exception:  # noqa
+        traceback.print_exc()
+
+
+def _grade_albert_calls():
+    """Scheduler job: grade open calls whose horizon has elapsed against actual price."""
+    now = datetime.datetime.utcnow()
+    try:
+        open_calls = list(albert_calls_col.find({'status': 'open'}).limit(300))
+    except Exception:  # noqa
+        return
+    price_cache = {}
+    for c in open_calls:
+        try:
+            created = datetime.datetime.fromisoformat(c['created_at'])
+        except Exception:  # noqa
+            continue
+        if now < created + datetime.timedelta(days=int(c.get('horizon_days') or 14)):
+            continue
+        asset = c.get('asset', 'BTC')
+        if asset not in price_cache:
+            price_cache[asset] = _spot_price(asset)
+        spot = price_cache[asset]
+        ref = c.get('ref_price')
+        if spot is None or not ref:
+            continue
+        pct = (spot - ref) / ref * 100
+        correct = (spot >= ref) if c.get('stance') == 'buy' else (spot <= ref)
+        albert_calls_col.update_one({'_id': c['_id']}, {'$set': {
+            'status': 'graded', 'outcome': 'correct' if correct else 'incorrect',
+            'eval_price': round(spot, 2), 'pct_move': round(pct, 2), 'eval_at': now.isoformat(),
+        }})
+
+
+@app.get('/api/v1/albert/track-record')
+def albert_track_record(limit: int = 20):
+    try:
+        graded = list(albert_calls_col.find({'status': 'graded'}, {'_id': 0}).sort('eval_at', -1))
+        open_calls = list(albert_calls_col.find({'status': 'open'}, {'_id': 0}).sort('created_at', -1).limit(limit))
+        total = albert_calls_col.count_documents({})
+    except Exception:  # noqa
+        return {'status': 'ready', 'n_calls': 0, 'n_graded': 0, 'hit_rate': None, 'recent': [], 'open': []}
+    n_graded = len(graded)
+    n_correct = sum(1 for g in graded if g.get('outcome') == 'correct')
+    price_cache = {}
+    open_out = []
+    for c in open_calls[:limit]:
+        asset = c.get('asset', 'BTC')
+        if asset not in price_cache:
+            price_cache[asset] = _spot_price(asset)
+        spot = price_cache[asset]
+        ref = c.get('ref_price')
+        live_pct = round((spot - ref) / ref * 100, 2) if (spot and ref) else None
+        winning = None
+        if spot and ref:
+            winning = (spot >= ref) if c.get('stance') == 'buy' else (spot <= ref)
+        open_out.append({**c, 'spot': spot, 'live_pct': live_pct, 'winning': winning})
+    return {
+        'status': 'ready', 'n_calls': total, 'n_graded': n_graded, 'n_correct': n_correct,
+        'hit_rate': round(n_correct / n_graded * 100, 1) if n_graded else None,
+        'avg_move': round(sum(g.get('pct_move', 0) for g in graded) / n_graded, 2) if n_graded else None,
+        'recent': graded[:limit], 'open': open_out,
+    }
 
 
 # =====================================================================
