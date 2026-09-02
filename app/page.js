@@ -3260,7 +3260,7 @@ function AlbertBioModal({ onClose }) {
             Ask him anything — &ldquo;Is it time to buy or sell?&rdquo;, &ldquo;Why did the score fall?&rdquo;, &ldquo;What could move Bitcoin next?&rdquo; He grounds every answer strictly in real dashboard numbers, logs his directional calls, and grades himself honestly so you can see his track record over time.
           </p>
           <ul className="space-y-1.5 text-[13px] text-slate-300">
-            <li className="flex gap-2"><span className="text-sky-400">•</span>Ask him on any tab and he answers about <span className="font-semibold text-slate-200">that</span> screen — the metrics, charts and signals you&apos;re looking at right then</li>
+            <li className="flex gap-2"><span className="text-sky-400">•</span><span>Ask him on any tab and he answers about <span className="font-semibold text-slate-200">that</span> screen — the metrics, charts and signals you&apos;re looking at right then</span></li>
             <li className="flex gap-2"><span className="text-sky-400">•</span>Daily Morning Brief &amp; Weekly Recap in your own reading level</li>
             <li className="flex gap-2"><span className="text-sky-400">•</span>Directional calls with entries, targets &amp; invalidation — auto-graded</li>
             <li className="flex gap-2"><span className="text-sky-400">•</span>Live web-grounded deep dives on strategy, macro &amp; cycles</li>
