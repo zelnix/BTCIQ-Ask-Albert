@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Target, TrendingUp, TrendingDown, CircleDot, X, Trophy, ShieldAlert } from 'lucide-react';
+import { Target, TrendingUp, TrendingDown, CircleDot, X, Trophy, ShieldAlert, Flame, Snowflake } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { API_BASE } from '../lib/api';
 import AlbertText from './AlbertText';
@@ -30,6 +30,8 @@ export default function AlbertTrackRecord() {
   const byCoin = (data && data.by_coin) || [];
   const best = data && data.best_call;
   const worst = data && data.worst_call;
+  const streak = data && data.streak;
+  const longestWin = (data && data.longest_win_streak) || 0;
   const coins = Array.from(new Set([...open, ...recent].map((c) => c.asset).filter(Boolean)));
   const applyF = (arr) => arr.filter((c) => (coinFilter === 'ALL' || c.asset === coinFilter) && (sideFilter === 'ALL' || c.stance === sideFilter));
   const openF = applyF(open);
@@ -63,6 +65,18 @@ export default function AlbertTrackRecord() {
               <div>
                 <p className={`text-2xl font-bold ${data.avg_move >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{data.avg_move > 0 ? '+' : ''}{data.avg_move}%</p>
                 <p className="text-[10px] text-slate-500">avg move</p>
+              </div>
+            )}
+            {streak && streak.count > 0 && (
+              <div className="ml-auto text-right">
+                <p className={`flex items-center justify-end gap-1 text-2xl font-bold ${streak.type === 'win' ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {streak.type === 'win' ? <Flame className="h-5 w-5" /> : <Snowflake className="h-5 w-5" />}
+                  {streak.count}{streak.type === 'win' ? 'W' : 'L'}
+                </p>
+                <p className="text-[10px] text-slate-500">
+                  {streak.type === 'win' ? 'win streak' : 'cold streak'}
+                  {longestWin > 1 && <span className="text-slate-600"> · best {longestWin}W</span>}
+                </p>
               </div>
             )}
           </div>

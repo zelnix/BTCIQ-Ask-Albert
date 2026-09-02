@@ -7456,12 +7456,33 @@ def albert_track_record(limit: int = 20):
             winning = (spot >= ref) if c.get('stance') == 'buy' else (spot <= ref)
         open_out.append({**c, 'spot': spot, 'live_pct': live_pct, 'winning': winning})
     best, worst = _best_worst_calls(graded)
+    # Current win/loss streak: consecutive same-outcome calls counting back from
+    # the most recently graded call. Also track the longest win streak for flavour.
+    streak = None
+    longest_win = 0
+    if chrono:
+        last_outcome = chrono[-1].get('outcome')
+        cnt = 0
+        for g in reversed(chrono):
+            if g.get('outcome') == last_outcome:
+                cnt += 1
+            else:
+                break
+        streak = {'type': 'win' if last_outcome == 'correct' else 'loss', 'count': cnt}
+        run = 0
+        for g in chrono:
+            if g.get('outcome') == 'correct':
+                run += 1
+                longest_win = max(longest_win, run)
+            else:
+                run = 0
     return {
         'status': 'ready', 'n_calls': total, 'n_graded': n_graded, 'n_correct': n_correct,
         'hit_rate': round(n_correct / n_graded * 100, 1) if n_graded else None,
         'avg_move': round(sum(g.get('pct_move', 0) for g in graded) / n_graded, 2) if n_graded else None,
         'trend': trend, 'by_coin': by_coin,
         'best_call': best, 'worst_call': worst,
+        'streak': streak, 'longest_win_streak': longest_win,
         'recent': graded[:limit], 'open': open_out,
     }
 
