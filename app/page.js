@@ -2809,6 +2809,7 @@ export default function DashboardPage() {
   const [alertFilter, setAlertFilter] = useState('BTC');
   const [compareOpen, setCompareOpen] = useState(false);
   const [albertBioOpen, setAlbertBioOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
   React.useEffect(() => {
     const onDocClick = (e) => {
       const t = e.target;
@@ -2837,6 +2838,8 @@ export default function DashboardPage() {
     const btc = symbol === 'BTC';
     setData(btc ? (__dashCache || null) : null);
     setStatus(btc && __dashCache ? 'ready' : 'loading');
+    // Show the "Albert is compiling…" overlay while the new coin's analytics load.
+    setSwitching(!(btc && __dashCache));
     setError(null);
     setNews(btc ? (__newsCache || null) : null);
     setNewsStatus(btc && __newsCache ? 'ready' : 'loading');
@@ -2845,6 +2848,11 @@ export default function DashboardPage() {
     setActive((a) => (!btc && BTC_ONLY_SECTIONS.includes(a) ? 'overview' : a));
     if (btc) setCompareOpen(false);
   }, [symbol]);
+
+  // Clear the coin-switch overlay once the new coin's data is ready (or errors out).
+  useEffect(() => {
+    if ((data && status === 'ready') || status === 'error') setSwitching(false);
+  }, [data, status]);
 
   // Keep the Alerts feed scoped to the coin the user is viewing (they can still switch to All/other coins in the Alerts screen).
   useEffect(() => { setAlertFilter(symbol); }, [symbol]);
@@ -3040,7 +3048,12 @@ export default function DashboardPage() {
   };
 
   if (!data && (status === 'loading' || status === 'computing')) {
-    return <DashboardSkeleton ticker={ticker} />;
+    return (
+      <>
+        <DashboardSkeleton ticker={ticker} />
+        {switching && <CoinSwitchOverlay symbol={symbol} coins={coins} />}
+      </>
+    );
   }
   if (!data && status === 'error') {
     return (
@@ -3233,6 +3246,32 @@ export default function DashboardPage() {
   );
 }
 
+
+/* ===================== Coin-switch loading overlay ===================== */
+function CoinSwitchOverlay({ symbol, coins }) {
+  const name = ((coins || []).find((c) => c.symbol === symbol) || {}).name || symbol;
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/80 backdrop-blur-sm">
+      <div className="flex flex-col items-center gap-4 rounded-2xl border border-slate-700 bg-slate-900/90 px-8 py-7 shadow-2xl">
+        <div className="relative">
+          <img src="/albert.png" alt="Albert" className="h-16 w-16 rounded-full object-cover ring-2 ring-sky-500/40" />
+          <span className="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full bg-slate-900 ring-1 ring-slate-700">
+            <Loader2 className="h-4 w-4 animate-spin text-sky-400" />
+          </span>
+        </div>
+        <div className="text-center">
+          <p className="text-sm font-semibold text-white">Albert is compiling the analytics</p>
+          <p className="mt-0.5 text-xs text-slate-400">Pulling together the full read for <span className="font-semibold text-sky-300">{name}</span>…</p>
+        </div>
+        <div className="flex gap-1">
+          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400 [animation-delay:-0.3s]" />
+          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400 [animation-delay:-0.15s]" />
+          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-sky-400" />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ===================== Preview vs Production environment marker ===================== */
 function EnvBadge() {
