@@ -7,6 +7,8 @@ import {
 const SECTIONS = [
   { id: 'briefing', label: 'Morning Brief', icon: Sparkles,
     blurb: 'Your one-screen executive briefing: market bias, price, Albert’s read, the levels that matter, live sentiment and the decision engine — each card drills into the full analysis.' },
+  { id: 'ask', label: 'Ask Albert', icon: MessageCircle,
+    blurb: 'Chat with Albert, BTCIQ’s HuCentAI Quant Analyst, in plain English — "Why did the score fall?", "What could move Bitcoin next?" — grounded strictly in the live dashboard numbers. He never invents data.' },
   { id: 'overview', label: 'Overview', icon: LayoutDashboard,
     blurb: 'Your 10-second snapshot of Bitcoin right now: the price, the market "mood", one simple score, the near-term odds, how risky things are and how sure the model is. Start here.' },
   { id: 'forecasts', label: 'Forecasts', icon: Target,
@@ -39,8 +41,6 @@ const SECTIONS = [
     blurb: 'The receipts. Every forecast is logged before the outcome is known and graded when it matures — accuracy, calibration and an honest scoreboard, plus the data-trust log. Nothing is hidden.' },
   { id: 'timemachine', label: 'Bitcoin Time Machine', icon: History,
     blurb: 'Replay any day in Bitcoin’s history: see exactly what the model would have predicted then, what actually happened next, and the price path around it — using only the information available at the time.' },
-  { id: 'ask', label: 'Ask Albert', icon: MessageCircle,
-    blurb: 'Chat with Albert, BTCIQ’s HuCentAI Quant Analyst, in plain English — "Why did the score fall?", "What could move Bitcoin next?" — grounded strictly in the live dashboard numbers. He never invents data.' },
   { id: 'alerts', label: 'Alerts', icon: Bell,
     blurb: 'A running feed of what just changed and what is coming: regime shifts, decision changes, data-trust drops and upcoming high-impact events.' },
   { id: 'network', label: 'Network & Sentiment', icon: Activity,

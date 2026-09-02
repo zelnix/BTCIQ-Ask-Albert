@@ -1216,7 +1216,7 @@ function OverviewSection({ d, ticker }) {
   const [inspect, setInspect] = React.useState(false);
   return (
     <div className="space-y-5">
-      <SectionHead icon={LayoutDashboard} title="Overview" blurb={SECTIONS[0].blurb} />
+      <SectionHead icon={LayoutDashboard} title="Overview" blurb={sec('overview').blurb} />
       <ThreeSecondHero d={d} onInspect={() => setInspect(true)} />
       <AiReview text={reviewOverview(d)} voice section="overview" footer={<TechnicalBreakdownLink d={d} dec={d.decision || {}} />} />
       <MarketStateHero d={d} ticker={ticker} />
