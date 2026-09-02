@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import { CalendarDays, RefreshCw, History, ChevronDown, GitCompare, X, Check } from 'lucide-react';
+import { CalendarDays, RefreshCw, History, ChevronDown, GitCompare, X, Check, LineChart as LineChartIcon } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts';
 import { API_BASE } from '../lib/api';
 import AlbertText from './AlbertText';
 
@@ -37,6 +38,14 @@ export default function WeeklyRecap() {
   const text = data && data.text;
   const when = data && data.created_at;
   const past = history.filter((h) => h.created_at !== when);
+  // Season timeline: weekly hit-rate across all archived weeks, oldest -> newest.
+  const timeline = [...history]
+    .sort((x, y) => new Date(x.created_at) - new Date(y.created_at))
+    .filter((h) => h.stats && h.stats.hit_rate != null)
+    .map((h, i) => ({ i: i + 1, hr: h.stats.hit_rate,
+      label: h.week_label ? h.week_label.replace(/, \d+$/, '') : new Date(h.created_at).toLocaleDateString(),
+      n: (h.stats && h.stats.n_graded) || 0 }));
+  const avgHr = timeline.length ? Math.round(timeline.reduce((s, t) => s + t.hr, 0) / timeline.length) : null;
 
   const keyOf = (h) => h.week_label || h.created_at;
   const isPicked = (h) => picked.some((p) => keyOf(p) === keyOf(h));
@@ -67,6 +76,29 @@ export default function WeeklyRecap() {
         <div className="text-[13px] leading-relaxed text-slate-200"><AlbertText text={text} /></div>
       ) : (
         <p className="text-xs text-slate-500">Weekly recap will appear once Albert has logged some calls. Ask him a buy/sell question to get started.</p>
+      )}
+
+      {timeline.length >= 2 && (
+        <div className="mt-4 border-t border-slate-800 pt-3">
+          <div className="mb-1 flex items-center gap-1.5">
+            <LineChartIcon className="h-3.5 w-3.5 text-violet-400" />
+            <p className="text-[11px] font-semibold text-slate-300">Season hit-rate</p>
+            {avgHr != null && <span className="ml-auto text-[10px] text-slate-500">avg {avgHr}%</span>}
+          </div>
+          <div className="h-28">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={timeline} margin={{ top: 6, right: 8, left: -24, bottom: 0 }}>
+                <XAxis dataKey="label" tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+                <YAxis domain={[0, 100]} ticks={[0, 50, 100]} tick={{ fontSize: 9, fill: '#64748b' }} axisLine={false} tickLine={false} width={30} />
+                <ReferenceLine y={50} stroke="#334155" strokeDasharray="3 3" />
+                <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 11 }}
+                  formatter={(v, _n, p) => [`${v}% (${(p && p.payload && p.payload.n) || 0} graded)`, 'Hit rate']}
+                  labelFormatter={(l) => l} />
+                <Line type="monotone" dataKey="hr" stroke="#a78bfa" strokeWidth={2} dot={{ r: 2.5 }} activeDot={{ r: 4 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
       )}
 
       {past.length > 0 && (

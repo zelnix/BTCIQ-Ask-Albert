@@ -7339,6 +7339,7 @@ def _grade_albert_calls():
     except Exception:  # noqa
         return
     price_cache = {}
+    graded_any = False
     for c in open_calls:
         try:
             created = datetime.datetime.fromisoformat(c['created_at'])
@@ -7359,6 +7360,68 @@ def _grade_albert_calls():
             'status': 'graded', 'outcome': 'correct' if correct else 'incorrect',
             'eval_price': round(spot, 2), 'pct_move': round(pct, 2), 'eval_at': now.isoformat(),
         }})
+        graded_any = True
+    if graded_any:
+        try:
+            _check_streak_alerts()
+        except Exception:  # noqa
+            traceback.print_exc()
+
+
+HOT_STREAK_THRESHOLD = 3  # wins-in-a-row that counts as a "hot streak"
+
+
+def _current_streak():
+    """Return the current {'type','count'} streak from graded calls, or None."""
+    try:
+        chrono = list(albert_calls_col.find({'status': 'graded'}, {'_id': 0, 'outcome': 1, 'eval_at': 1})
+                      .sort('eval_at', 1))
+    except Exception:  # noqa
+        return None
+    if not chrono:
+        return None
+    last = chrono[-1].get('outcome')
+    cnt = 0
+    for g in reversed(chrono):
+        if g.get('outcome') == last:
+            cnt += 1
+        else:
+            break
+    return {'type': 'win' if last == 'correct' else 'loss', 'count': cnt}
+
+
+def _check_streak_alerts():
+    """Ping the bell when Albert STARTS a hot streak or BREAKS a cold one.
+    Compares the freshly-computed streak against the last-seen state in the DB."""
+    cur = _current_streak()
+    if not cur:
+        return
+    try:
+        prev_doc = recap_col.find_one({'_id': 'streak_state'}) or {}
+    except Exception:  # noqa
+        prev_doc = {}
+    prev_type = prev_doc.get('type')
+    prev_count = prev_doc.get('count', 0)
+    # Cold streak that was building before this update (>=2 losses in a row).
+    was_cold = prev_type == 'loss' and prev_count >= 2
+    if cur['type'] == 'win':
+        # Breaks a cold streak: previous state was a losing run, now back to winning.
+        if was_cold:
+            push_alert('albert_streak', 'success', 'Albert broke his cold streak',
+                       f"After {prev_count} misses in a row, Albert's latest call landed. He's back on the board — check his track record.",
+                       f"coldbreak-{datetime.date.today().isoformat()}")
+        # Starts a hot streak: crosses the hot-streak threshold on the way up.
+        if cur['count'] >= HOT_STREAK_THRESHOLD and prev_count < HOT_STREAK_THRESHOLD:
+            push_alert('albert_streak', 'success', f"Albert is on a {cur['count']}-call hot streak",
+                       f"Albert has now called {cur['count']} in a row correctly. He's running hot — see his track record for the wins.",
+                       f"hotstart-{datetime.date.today().isoformat()}-{cur['count']}")
+    try:
+        recap_col.update_one({'_id': 'streak_state'},
+                             {'$set': {'type': cur['type'], 'count': cur['count'],
+                                       'updated_at': datetime.datetime.utcnow().isoformat()}},
+                             upsert=True)
+    except Exception:  # noqa
+        pass
 
 
 def _target_progress(g):
