@@ -1744,7 +1744,7 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
       {/* Albert's Morning Brief */}
       <Card className="border-0 bg-gradient-to-br from-amber-500/[0.06] via-violet-500/[0.06] to-slate-900 p-6 ring-1 ring-violet-500/25">
         <div className="flex flex-wrap items-center gap-2">
-          <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-2 ring-amber-400/50" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+          <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-amber-400/50" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
           <h3 className="text-lg font-bold text-white">Albert&apos;s Morning Brief</h3>
           {re.regime_label && <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[11px] font-bold text-violet-200">{re.regime_label}</span>}
           {dec.ensemble_health != null && (() => {
