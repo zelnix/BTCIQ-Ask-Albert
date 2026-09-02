@@ -1650,6 +1650,8 @@ function ScenarioSimulator({ d, onNav }) {
 
 function ExecutiveSummary({ d, ticker, news, onNav }) {
   const [speaking, setSpeaking] = useState(false);
+  const [brief] = useFetch(`${API_BASE}/v1/albert/brief`);
+  const [techOpen, setTechOpen] = useState(false);
   const speakBrief = () => {
     try {
       const synth = window.speechSynthesis;
@@ -1741,7 +1743,24 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
         <div className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-2">
           <div>
             <span className="inline-block rounded-lg px-3 py-1 text-sm font-bold" style={{ backgroundColor: bias.color + '18', color: bias.color }}>{bias.label} · {dec.regime || '—'}</span>
-            <p className="mt-3 text-[15px] leading-relaxed text-slate-200">{dec.summary || 'Building today’s brief…'}</p>
+            {brief && (brief.observations || []).length ? (
+              <ul className="mt-3 space-y-1.5">
+                {(brief.observations || []).map((o, i) => (<li key={i} className="flex gap-2 text-[15px] leading-relaxed text-slate-200"><span className="text-sky-500">•</span>{o}</li>))}
+              </ul>
+            ) : (
+              <p className="mt-3 text-[15px] leading-relaxed text-slate-200">{(brief && brief.take) || dec.summary || 'Building today’s brief…'}</p>
+            )}
+            {brief && brief.take && (brief.observations || []).length ? (
+              <p className="mt-3 rounded-lg border border-sky-500/20 bg-sky-500/[0.06] p-3 text-sm font-medium text-white"><span className="text-sky-400">Take:</span> {brief.take}</p>
+            ) : null}
+            {dec.summary && (
+              <div className="mt-3">
+                <button onClick={() => setTechOpen((o) => !o)} className="flex items-center gap-1.5 text-[12px] font-semibold text-violet-300 transition-colors hover:text-violet-200">
+                  <Brain className="h-3.5 w-3.5" />{techOpen ? 'Hide technical briefing' : 'Read Albert’s technical briefing'}
+                </button>
+                {techOpen && <p className="mt-2 rounded-lg border border-violet-500/20 bg-violet-500/[0.05] p-3 text-[13px] leading-relaxed text-slate-300">{dec.summary}</p>}
+              </div>
+            )}
             <p className="mt-4 text-[11px] font-semibold uppercase tracking-wider text-slate-500">What matters today</p>
             <div className="mt-2 flex flex-wrap gap-2">
               {mattersChips.map((c) => (
@@ -2201,18 +2220,47 @@ function DemoMetricsCard({ title, icon: Icon, panel, sectionId }) {
 function MorningBriefCard() {
   const [d, loading] = useFetch(`${API_BASE}/v1/albert/brief`);
   const obs = (d && d.observations) || [];
+  const [techOpen, setTechOpen] = React.useState(false);
+  const [tech, setTech] = React.useState(null);
+  const [techLoading, setTechLoading] = React.useState(false);
+  const openTech = async () => {
+    setTechOpen((o) => !o);
+    if (!tech && !techLoading) {
+      setTechLoading(true);
+      try {
+        const r = await fetch(`${API_BASE}/v1/albert/brief?mode=technical`, { cache: 'no-store' });
+        setTech(await r.json());
+      } catch (e) { /* noop */ } finally { setTechLoading(false); }
+    }
+  };
+  const techObs = (tech && tech.observations) || [];
+  const hasBrief = obs.length || (d && d.take);
   return (
     <Card className="border-0 bg-gradient-to-br from-sky-950/40 to-slate-900 p-6 ring-1 ring-sky-900/50">
       <div className="mb-3 flex items-center gap-2">
         <img src="/albert.png" alt="Albert" className="h-7 w-7 rounded-full" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
         <h3 className="font-semibold text-white">Albert's Morning Brief</h3>
-        <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-sky-300">Daily</span>
+        <span className="rounded border border-sky-500/40 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-sky-300">Plain English</span>
       </div>
       {loading ? <p className="text-sm text-slate-500">Albert is pulling together today's whole-market read…</p>
-        : !obs.length && !(d && d.take) ? <p className="text-sm text-slate-500">Brief is generating — check back in a moment.</p>
+        : !hasBrief ? <p className="text-sm text-slate-500">Brief is generating — check back in a moment.</p>
           : (<>
             <ul className="space-y-1.5">{obs.map((o, i) => (<li key={i} className="flex gap-2 text-sm text-slate-300"><span className="text-sky-500">•</span>{o}</li>))}</ul>
             {d && d.take && <p className="mt-3 rounded-lg border border-sky-500/20 bg-sky-500/[0.06] p-3 text-sm font-medium text-white"><span className="text-sky-400">Take:</span> {d.take}</p>}
+            <div className="mt-3 border-t border-slate-800 pt-2.5">
+              <button onClick={openTech} className="flex items-center gap-1.5 text-[12px] font-semibold text-violet-300 transition-colors hover:text-violet-200">
+                <Brain className="h-3.5 w-3.5" />{techOpen ? 'Hide technical briefing' : "Read Albert’s technical briefing"}
+              </button>
+              {techOpen && (
+                <div className="mt-2.5">
+                  {techLoading && !tech ? <p className="flex items-center gap-2 text-xs text-slate-500"><span className="h-2 w-2 animate-pulse rounded-full bg-violet-400" />Albert is writing the technical briefing…</p>
+                    : (<>
+                      <ul className="space-y-1.5">{techObs.map((o, i) => (<li key={i} className="flex gap-2 text-[13px] text-slate-300"><span className="text-violet-400">•</span>{o}</li>))}</ul>
+                      {tech && tech.take && <p className="mt-2 rounded-lg border border-violet-500/20 bg-violet-500/[0.06] p-2.5 text-[13px] text-white"><span className="text-violet-300">Take:</span> {tech.take}</p>}
+                    </>)}
+                </div>
+              )}
+            </div>
           </>)}
     </Card>
   );

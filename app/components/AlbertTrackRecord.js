@@ -9,6 +9,8 @@ import AlbertText from './AlbertText';
 export default function AlbertTrackRecord() {
   const [data, setData] = React.useState(null);
   const [selected, setSelected] = React.useState(null);
+  const [coinFilter, setCoinFilter] = React.useState('ALL');
+  const [sideFilter, setSideFilter] = React.useState('ALL');
 
   const load = React.useCallback(async () => {
     try {
@@ -25,6 +27,13 @@ export default function AlbertTrackRecord() {
   const open = (data && data.open) || [];
   const recent = (data && data.recent) || [];
   const trend = (data && data.trend) || [];
+  const coins = Array.from(new Set([...open, ...recent].map((c) => c.asset).filter(Boolean)));
+  const applyF = (arr) => arr.filter((c) => (coinFilter === 'ALL' || c.asset === coinFilter) && (sideFilter === 'ALL' || c.stance === sideFilter));
+  const openF = applyF(open);
+  const recentF = applyF(recent);
+  const FilterBtn = ({ active, onClick, children }) => (
+    <button onClick={onClick} className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${active ? 'bg-violet-500/20 text-violet-200 ring-1 ring-violet-500/40' : 'bg-slate-800/60 text-slate-400 hover:text-slate-200'}`}>{children}</button>
+  );
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
@@ -71,10 +80,22 @@ export default function AlbertTrackRecord() {
             </div>
           )}
 
-          {open.length > 0 && (
+          {(coins.length > 1 || nCalls > 1) && (
+            <div className="mb-3 flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] uppercase tracking-wide text-slate-500">Filter</span>
+              <FilterBtn active={sideFilter === 'ALL'} onClick={() => setSideFilter('ALL')}>All</FilterBtn>
+              <FilterBtn active={sideFilter === 'buy'} onClick={() => setSideFilter('buy')}>Buy</FilterBtn>
+              <FilterBtn active={sideFilter === 'sell'} onClick={() => setSideFilter('sell')}>Sell</FilterBtn>
+              {coins.length > 1 && <span className="mx-1 text-slate-700">|</span>}
+              {coins.length > 1 && <FilterBtn active={coinFilter === 'ALL'} onClick={() => setCoinFilter('ALL')}>All coins</FilterBtn>}
+              {coins.length > 1 && coins.map((c) => <FilterBtn key={c} active={coinFilter === c} onClick={() => setCoinFilter(c)}>{c}</FilterBtn>)}
+            </div>
+          )}
+
+          {openF.length > 0 && (
             <div className="space-y-1.5">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">In progress</p>
-              {open.map((c) => (
+              {openF.map((c) => (
                 <button key={c.id} onClick={() => setSelected(c)} className="flex w-full items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-1.5 text-left text-xs transition-colors hover:border-slate-700 hover:bg-slate-900">
                   <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${c.stance === 'buy' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}`}>{c.stance}</span>
                   <span className="font-semibold text-slate-200">{c.asset}</span>
@@ -90,10 +111,10 @@ export default function AlbertTrackRecord() {
             </div>
           )}
 
-          {recent.length > 0 && (
+          {recentF.length > 0 && (
             <div className="mt-2 space-y-1.5">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Graded</p>
-              {recent.map((c) => (
+              {recentF.map((c) => (
                 <button key={c.id} onClick={() => setSelected(c)} className="flex w-full items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-1.5 text-left text-xs transition-colors hover:border-slate-700 hover:bg-slate-900">
                   <CircleDot className={`h-3 w-3 ${c.outcome === 'correct' ? 'text-emerald-400' : 'text-red-400'}`} />
                   <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${c.stance === 'buy' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300'}`}>{c.stance}</span>

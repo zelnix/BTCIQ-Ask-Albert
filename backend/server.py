@@ -4976,6 +4976,8 @@ def _startup():
         scheduler.add_job(_check_price_watches, 'interval', seconds=60, id='price_watch_check')
         # Albert self-check: grade his logged buy/sell calls once their horizon elapses.
         scheduler.add_job(_grade_albert_calls, 'interval', minutes=30, id='albert_call_grade')
+        # Weekly recap auto-post: drop Albert's recap into the notification bell every Monday.
+        scheduler.add_job(_weekly_recap_autopost, 'cron', day_of_week='mon', hour=13, minute=30, id='weekly_recap_autopost')
         # Daily Alert Digest email (Resend). Per-job timezone so it fires at local send time.
         try:
             scheduler.add_job(send_daily_digest_bg, 'cron', hour=DIGEST_HOUR, minute=DIGEST_MINUTE,
@@ -7452,6 +7454,18 @@ def albert_weekly_recap(refresh: bool = False):
     return {'status': 'ready', 'text': text, 'created_at': now.isoformat(), 'cached': False}
 
 
+def _weekly_recap_autopost():
+    """Scheduler (Mondays): regenerate the weekly recap and drop it into the notification bell."""
+    try:
+        res = albert_weekly_recap(refresh=True)
+        if res.get('status') == 'ready' and res.get('text'):
+            push_alert('weekly_recap', 'info', "Albert's Weekly Recap is ready",
+                       "How Albert's calls did this week + what he's watching next week — open Ask Albert to read it.",
+                       f"recap-{datetime.date.today().isoformat()}")
+    except Exception:  # noqa
+        traceback.print_exc()
+
+
 # =====================================================================
 # ALBERT SECTION INSIGHTS  (AI-generated, cached per compute-run)
 # =====================================================================
@@ -7785,15 +7799,34 @@ async def albert_insight(request: Request, section: str = 'overview', mode: str 
 
 
 ALBERT_BRIEF_SYSTEM = (
-    "You are 'Albert', the HuCentAI Quant analyst in the BTCIQ Bitcoin dashboard, writing a short "
-    "MORNING BRIEF for a busy non-trader — a 30-second read of the whole market state. Use ONLY the data "
-    "below. If a data source is unavailable or marked 'no data', explicitly say 'no [X] data available' and "
-    "do NOT invent or infer values for it. Output EXACTLY this shape and nothing else:\n"
-    "First, 4-5 lines each starting with '- ' (a single crisp observation pulling from decision, risk, "
-    "whales/exchange flows, ETF demand, leverage/positioning, sentiment and network health).\n"
+    "You are 'Albert', the friendly market guide in the BTCIQ Bitcoin dashboard, writing a short PLAIN-ENGLISH "
+    "MORNING BRIEF for a complete beginner — a 30-second read of what's going on with Bitcoin today. Use ONLY the "
+    "data below. If a data source is unavailable or marked 'no data', simply skip it (do not mention it). "
+    "AVOID JARGON completely: never use terms like MVRV, SOPR, funding, open interest, basis, liquidity, hashrate, "
+    "EH/s, realised/annualised vol, positioning. If a concept matters, say it in everyday words (e.g. 'big holders "
+    "are quietly buying', 'it's cheaper than usual to move Bitcoin', 'traders are betting aggressively, which can "
+    "cause sharp swings'). Translate every number into what it MEANS for a normal person. Output EXACTLY this shape "
+    "and nothing else:\n"
+    "First, 4-5 lines each starting with '- ' — each a single plain-English takeaway (the overall lean, how "
+    "risky/choppy it looks, whether big players are buying or selling, demand from big funds, how excited or fearful "
+    "people are, and whether the network looks healthy/busy).\n"
+    "Then one final line starting with 'TAKE: ' — the overall one-sentence bottom line in simple words.\n"
+    "Warm, calm, everyday language (leans/looks/seems/could). Never say definitely/guaranteed/will happen. "
+    "No greeting, no markdown headers, no jargon.\n\n"
+    "===== LIVE MARKET DATA =====\n{ctx}\n===== END DATA ====="
+)
+
+ALBERT_BRIEF_TECH_SYSTEM = (
+    "You are 'Albert', the HuCentAI Quant analyst in the BTCIQ Bitcoin dashboard, writing a MORE TECHNICAL "
+    "MORNING BRIEF for a reader who understands markets. Use ONLY the data below; if a source is unavailable or "
+    "marked 'no data', say 'no [X] data available' and do NOT invent values. Be precise and quantitative — cite "
+    "the concrete numbers: decision/confidence, risk score & realised vol, whale & exchange net flows (BTC), ETF $ "
+    "flows, leverage/positioning, sentiment, and network fees/hashrate. Output EXACTLY this shape and nothing "
+    "else:\n"
+    "First, 4-5 lines each starting with '- ' (a single crisp, data-dense observation).\n"
     "Then one final line starting with 'TAKE: ' giving the overall one-sentence read.\n"
-    "Measured, evidence-based language (suggests/indicates/may/could/elevated/decreasing). Never say "
-    "definitely/guaranteed/will happen. No greeting, no markdown headers, no extra commentary.\n\n"
+    "Measured probability language (suggests/indicates/may/could/elevated). Never say definitely/guaranteed. "
+    "No greeting, no markdown headers.\n\n"
     "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
 )
 
@@ -7849,14 +7882,15 @@ def _brief_context():
 
 
 @app.get('/api/v1/albert/brief')
-async def albert_brief(request: Request, refresh: int = 0):
-    """Albert's Morning Brief — one auto-generated daily summary of the whole market state."""
+async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain'):
+    """Albert's Morning Brief — a daily summary. mode='plain' (layman, default) or 'technical'."""
+    mode = 'technical' if mode == 'technical' else 'plain'
     today = datetime.date.today().isoformat()
-    cache_id = f'brief:{today}'
+    cache_id = f'brief:{today}:{mode}'
     if not refresh:
         c = insights_col.find_one({'_id': cache_id}, {'_id': 0})
         if c and c.get('text'):
-            return {'status': 'ready', 'cached': True, **c}
+            return {'status': 'ready', 'cached': True, 'mode': mode, **c}
     if _rate_limited(request, 'albert_brief', per_min=10, per_day=200):
         return {'status': 'computing', 'reason': 'rate_limited'}
     try:
@@ -7864,13 +7898,14 @@ async def albert_brief(request: Request, refresh: int = 0):
         if not ctx.strip():
             return {'status': 'computing'}
         if not (EMERGENT_LLM_KEY and _HAS_LLM):
-            return {'status': 'ready', 'cached': False, 'text': ctx,
+            return {'status': 'ready', 'cached': False, 'mode': mode, 'text': ctx,
                     'observations': [l for l in ctx.split('\n')][:5], 'take': '', 'as_of': as_of}
+        sys_prompt = ALBERT_BRIEF_TECH_SYSTEM if mode == 'technical' else ALBERT_BRIEF_SYSTEM
         chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'brief-{uuid.uuid4().hex[:10]}',
-                        system_message=ALBERT_BRIEF_SYSTEM.format(ctx=ctx))
+                        system_message=sys_prompt.format(ctx=ctx))
                 .with_model('gemini', CHAT_MODEL).with_params(temperature=0.4, max_tokens=6000))
         reply = await chat.send_message(UserMessage(text="Write today's market brief now."))
-        text = (getattr(reply, 'text', None) or str(reply)).strip()
+        text = (reply if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '')).strip()
         _bump_usage('llm_brief')
         obs, take = [], ''
         for ln in text.split('\n'):
@@ -7881,7 +7916,7 @@ async def albert_brief(request: Request, refresh: int = 0):
                 obs.append(ln.lstrip('-').strip())
         now_iso = datetime.datetime.utcnow().isoformat()
         doc = {'text': text, 'observations': obs, 'take': take, 'as_of': as_of,
-               'model': CHAT_MODEL, 'generated_at': now_iso}
+               'model': CHAT_MODEL, 'generated_at': now_iso, 'mode': mode}
         insights_col.update_one({'_id': cache_id}, {'$set': {'_id': cache_id, 'kind': 'brief', **doc}}, upsert=True)
         return {'status': 'ready', 'cached': False, **doc}
     except Exception:  # noqa

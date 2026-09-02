@@ -7120,3 +7120,46 @@ frontend:
               question and Albert's reasoning (AlbertText). Verified modal renders with all fields.
           (3) WeeklyRecap card added to the Ask Albert page with a regenerate button. Verified it renders the
               two-part recap.
+
+#====================================================================================================
+# SESSION: Plain-English briefs (+technical link), Track-record filters, Weekly recap auto-post
+#====================================================================================================
+
+backend:
+  - task: "Morning Brief plain/technical modes + weekly recap Monday auto-post"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          GET /api/v1/albert/brief now takes mode=plain|technical (cached per mode/day). ALBERT_BRIEF_SYSTEM
+          rewritten to be jargon-free layman English; new ALBERT_BRIEF_TECH_SYSTEM keeps the quantitative
+          version. Verified via curl: plain = no jargon, technical = numbers-dense. Added scheduler cron
+          _weekly_recap_autopost (Mondays 13:30 UTC) that regenerates the weekly recap and drops a
+          notification (push_alert category 'weekly_recap') into the bell. Also stored call 'reasoning' for
+          the detail view (prior session) — unchanged.
+
+frontend:
+  - task: "Layman brief default + technical link (hero + card), Track Record coin/buy-sell filters"
+    implemented: true
+    working: true
+    file: "app/page.js (ExecutiveSummary hero + MorningBriefCard), app/components/AlbertTrackRecord.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Hero "Albert's Morning Brief" (ExecutiveSummary) now fetches the PLAIN brief and shows its
+          layman bullets + Take by default; the previous dense computed summary (dec.summary) is moved behind
+          a "Read Albert's technical briefing" toggle. MorningBriefCard similarly defaults to plain with a
+          technical-briefing link (fetches ?mode=technical on demand). AlbertTrackRecord got All/Buy/Sell +
+          per-coin filter chips that filter both in-progress and graded lists. Verified via screenshots:
+          plain bullets show, technical link expands the quantitative version, Sell filter shows only SELL
+          calls.
