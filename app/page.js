@@ -537,7 +537,7 @@ function playAlertChime() {
 const NOTIFIED_KEY = 'btciq_notified_ids';
 const SOUND_KEY = 'btciq_notif_sound';
 
-function NotificationBell({ alertsData, onAck, onViewAll }) {
+function NotificationBell({ alertsData, onAck, onViewAll, onOpenBrief }) {
   const [open, setOpen] = React.useState(false);
   const [perm, setPerm] = React.useState(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
   const [soundOn, setSoundOn] = React.useState(true);
@@ -634,15 +634,26 @@ function NotificationBell({ alertsData, onAck, onViewAll }) {
             <div className="max-h-80 overflow-y-auto">
               {alerts.length === 0 ? (
                 <p className="px-3 py-6 text-center text-xs text-slate-500">No notifications yet.</p>
-              ) : alerts.slice(0, 10).map((a) => (
-                <div key={a.id} className={`flex gap-2 border-b border-slate-800/60 px-3 py-2 ${a.seen ? 'opacity-60' : ''}`}>
-                  <span className="mt-1 h-2 w-2 shrink-0 rounded-full" style={{ background: sevColor(a.severity) }} />
-                  <div className="min-w-0 flex-1">
-                    <p className="flex items-center justify-between gap-2 text-[12px] font-semibold text-slate-200"><span className="truncate">{a.title}</span><span className="shrink-0 text-[10px] font-normal text-slate-500">{rel(a.ts)}</span></p>
-                    <p className="line-clamp-2 text-[11px] text-slate-400">{a.message}</p>
-                  </div>
-                </div>
-              ))}
+              ) : alerts.slice(0, 10).map((a) => {
+                const isBrief = a.category === 'daily_brief';
+                const onClickItem = () => {
+                  setOpen(false);
+                  if (a.id) onAck([a.id]);
+                  if (isBrief && onOpenBrief) onOpenBrief(a.symbol || 'BTC');
+                  else onViewAll();
+                };
+                return (
+                  <button key={a.id} onClick={onClickItem}
+                    className={`flex w-full gap-2 border-b border-slate-800/60 px-3 py-2 text-left transition-colors hover:bg-slate-800/50 ${a.seen ? 'opacity-60' : ''}`}>
+                    <span className="mt-1 h-2 w-2 shrink-0 rounded-full" style={{ background: sevColor(a.severity) }} />
+                    <div className="min-w-0 flex-1">
+                      <p className="flex items-center justify-between gap-2 text-[12px] font-semibold text-slate-200"><span className="truncate">{a.title}</span><span className="shrink-0 text-[10px] font-normal text-slate-500">{rel(a.ts)}</span></p>
+                      <p className="line-clamp-2 text-[11px] text-slate-400">{a.message}</p>
+                      {isBrief && <span className="mt-0.5 inline-block text-[10px] font-semibold text-sky-400">Open {a.symbol || 'BTC'} brief →</span>}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
             <button onClick={() => { setOpen(false); onViewAll(); }} className="w-full border-t border-slate-800 px-3 py-2 text-center text-[12px] font-semibold text-sky-400 hover:bg-slate-800/50">View all alerts →</button>
           </div>
@@ -1662,6 +1673,67 @@ function ScenarioSimulator({ d, onNav }) {
   );
 }
 
+function briefTimeAgo(iso) {
+  if (!iso) return '';
+  try {
+    const norm = /[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + 'Z';
+    const s = Math.max(0, Math.floor((Date.now() - new Date(norm).getTime()) / 1000));
+    if (s < 60) return 'just now';
+    const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
+  } catch (e) { return ''; }
+}
+
+function BriefCoinPicker() {
+  const [open, setOpen] = useState(false);
+  const [wl, setWl] = useState(null); // { coins, available }
+  useEffect(() => { fetch(`${API_BASE}/v1/albert/brief-watchlist`, { cache: 'no-store' }).then((r) => r.json()).then(setWl).catch(() => {}); }, []);
+  const toggle = async (sym) => {
+    if (sym === 'BTC' || !wl) return; // BTC always on
+    const has = wl.coins.includes(sym);
+    const next = has ? wl.coins.filter((c) => c !== sym) : [...wl.coins, sym];
+    setWl({ ...wl, coins: next });
+    try {
+      const r = await fetch(`${API_BASE}/v1/albert/brief-watchlist`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ coins: next.filter((c) => c !== 'BTC') }) });
+      const j = await r.json();
+      if (j && j.coins) setWl((w) => ({ ...w, coins: j.coins }));
+    } catch (e) { /* noop */ }
+  };
+  return (
+    <div className="relative">
+      <button onClick={() => setOpen((o) => !o)} title="Choose coins for daily briefs & alerts"
+        className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-sky-500/50 hover:text-sky-200">
+        <Bell className="h-4 w-4" />Daily coins{wl ? ` (${wl.coins.length})` : ''}
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-50 mt-1 w-60 rounded-xl border border-slate-700 bg-slate-900 p-2 shadow-2xl">
+            <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Coins for daily briefs &amp; alerts</p>
+            <div className="max-h-64 overflow-y-auto">
+              {(wl?.available || []).map((a) => {
+                const on = wl.coins.includes(a.symbol);
+                const locked = a.symbol === 'BTC';
+                return (
+                  <button key={a.symbol} onClick={() => toggle(a.symbol)} disabled={locked}
+                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${locked ? 'cursor-default opacity-70' : 'hover:bg-slate-800'}`}>
+                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${on ? 'border-sky-400 bg-sky-500 text-white' : 'border-slate-600'}`}>{on && <Check className="h-3 w-3" />}</span>
+                    <span className={`font-semibold ${on ? 'text-white' : 'text-slate-400'}`}>{a.symbol}</span>
+                    <span className="truncate text-xs text-slate-500">{a.name}</span>
+                    {locked && <span className="ml-auto text-[9px] text-slate-600">always</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
 function ExecutiveSummary({ d, ticker, news, onNav }) {
   const [speaking, setSpeaking] = useState(false);
   const [warming, setWarming] = useState(false);
@@ -1769,7 +1841,11 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
             const m = h0 >= 0.9 ? { t: 'Strong', c: '#34d399' } : h0 >= 0.75 ? { t: 'Steady', c: '#a3e635' } : h0 >= 0.6 ? { t: 'Soft', c: '#fbbf24' } : { t: 'Weak', c: '#f87171' };
             return <span className="rounded-full border px-2 py-0.5 text-[11px] font-bold" style={{ borderColor: m.c + '55', color: m.c }} title={`Ensemble health ${Math.round(h0 * 100)}%`}>Model health: {m.t}</span>;
           })()}
+          {brief && brief.generated_at && (
+            <span className="rounded-full border border-slate-700 bg-slate-900/60 px-2 py-0.5 text-[10px] font-semibold text-slate-400" title={(() => { try { return new Date(brief.generated_at + (/[zZ]$/.test(brief.generated_at) ? '' : 'Z')).toLocaleString(); } catch (e) { return ''; } })()}>generated {briefTimeAgo(brief.generated_at)}</span>
+          )}
           <div className="ml-auto flex items-center gap-2">
+            <BriefCoinPicker />
             <button onClick={refreshBrief} disabled={refreshing} title="Regenerate brief"
               className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-violet-500/50 hover:text-violet-200 disabled:opacity-50">
               <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />{refreshing ? 'Refreshing…' : 'Refresh'}
@@ -3186,7 +3262,7 @@ export default function DashboardPage() {
               {ticker?.price_aud && <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/20">≈ {fmtAud(ticker.price_aud)}</span>}
               <span className={`text-sm font-semibold ${(ticker?.change24h ?? d.day_change_pct) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ticker?.change24h ?? d.day_change_pct}%</span>
             </div>
-            <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => setActive('alerts')} />
+            <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => setActive('alerts')} onOpenBrief={(sym) => { const s = (sym || 'BTC').toUpperCase(); if (s !== symbol) setSymbol(s); setActive('briefing'); }} />
             <Button onClick={() => setShowReport(true)} size="sm" variant="outline" title="Shareable daily report"
               className="gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800">
               <ClipboardList className="h-4 w-4" /><span className="hidden sm:inline">Report</span>

@@ -4085,7 +4085,7 @@ def _score_band(s):
 EMAIL_ALERTS_ENABLED = False
 
 
-def push_alert(category, severity, title, message, sig):
+def push_alert(category, severity, title, message, sig, symbol='BTC'):
     """Create an in-app notification (surfaced by the bell + browser push) for
     events that used to be emailed (drift breaker, model decay, live cascade).
     Idempotent per (day, category, sig)."""
@@ -4096,7 +4096,7 @@ def push_alert(category, severity, title, message, sig):
             {'_id': key},
             {'$setOnInsert': {
                 '_id': key, 'id': key, 'ts': datetime.datetime.utcnow().isoformat(),
-                'as_of': day, 'symbol': 'BTC', 'category': category, 'severity': severity,
+                'as_of': day, 'symbol': (symbol or 'BTC').upper(), 'category': category, 'severity': severity,
                 'title': title, 'message': message, 'seen': False,
             }}, upsert=True)
         return res.upserted_id is not None
@@ -7764,10 +7764,26 @@ def _generate_daily_brief(symbol):
     return take, coin_name
 
 
+def _get_brief_watchlist():
+    """Coins that get daily briefs + bell notifications. User-configurable, with a
+    sensible default; BTC is always included."""
+    try:
+        doc = insights_col.find_one({'_id': 'cfg:brief_watchlist'}, {'_id': 0})
+        coins = (doc or {}).get('coins')
+        if coins:
+            out = [c for c in coins if c == 'BTC' or c in COMPARE_COINS]
+            if 'BTC' not in out:
+                out = ['BTC'] + out
+            return out
+    except Exception:  # noqa
+        pass
+    return BRIEF_COINS
+
+
 def _daily_brief_autopost():
     """Scheduler (daily): ensure each watched coin's brief exists, then push it to the bell."""
     today = datetime.date.today().isoformat()
-    for symbol in BRIEF_COINS:
+    for symbol in _get_brief_watchlist():
         try:
             if symbol != 'BTC' and symbol not in COMPARE_COINS:
                 continue
@@ -7775,7 +7791,7 @@ def _daily_brief_autopost():
             title = "Albert's Morning Brief is ready" if symbol == 'BTC' else f"Albert's {coin_name} Brief is ready"
             push_alert('daily_brief', 'info', title,
                        take or f"Your plain-English {coin_name} brief for today is ready — open the dashboard to read it.",
-                       f"brief-{symbol}-{today}")
+                       f"brief-{symbol}-{today}", symbol=symbol)
         except Exception:  # noqa
             traceback.print_exc()
 
@@ -8263,6 +8279,28 @@ def _brief_context():
     except Exception:  # noqa
         pass
     return "\n".join(L), run.get('as_of')
+
+
+@app.get('/api/v1/albert/brief-watchlist')
+def get_brief_watchlist():
+    """Coins the user has chosen for daily briefs + notifications."""
+    return {'status': 'ready', 'coins': _get_brief_watchlist(),
+            'available': [{'symbol': 'BTC', 'name': 'Bitcoin'}] + [{'symbol': k, 'name': v['name']} for k, v in COMPARE_COINS.items() if k != 'BTC']}
+
+
+@app.post('/api/v1/albert/brief-watchlist')
+def set_brief_watchlist(payload: dict = Body(...)):
+    coins = payload.get('coins') or []
+    clean = ['BTC'] + [c.strip().upper() for c in coins if c.strip().upper() != 'BTC' and c.strip().upper() in COMPARE_COINS]
+    # dedupe, preserve order
+    seen, out = set(), []
+    for c in clean:
+        if c not in seen:
+            seen.add(c); out.append(c)
+    insights_col.update_one({'_id': 'cfg:brief_watchlist'},
+                            {'$set': {'_id': 'cfg:brief_watchlist', 'kind': 'config', 'coins': out,
+                                      'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+    return {'status': 'ready', 'coins': out}
 
 
 @app.get('/api/v1/albert/brief')
