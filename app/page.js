@@ -32,7 +32,7 @@ import WeeklyRecap from './components/WeeklyRecap';
 
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
-import { speakAlbert, stopAlbert } from './lib/albertVoice';
+import { speakAlbert, stopAlbert, prefetchAlbert } from './lib/albertVoice';
 import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, DemoBadge, Spark, LevGauge, ComingSoonSection } from './components/shared';
 import AnalogsSection from './components/Analogs';
 import CrossMarketSection from './components/CrossMarket';
@@ -1667,7 +1667,11 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
   const [warming, setWarming] = useState(false);
   const briefSym = (d && d.symbol) || 'BTC';
   const briefName = (d && d.coin_name) || (briefSym === 'BTC' ? 'Bitcoin' : briefSym);
-  const [brief] = useFetch(`${API_BASE}/v1/albert/brief${briefSym !== 'BTC' ? `?symbol=${encodeURIComponent(briefSym)}` : ''}`);
+  const [briefFetched] = useFetch(`${API_BASE}/v1/albert/brief${briefSym !== 'BTC' ? `?symbol=${encodeURIComponent(briefSym)}` : ''}`, [briefSym]);
+  const [briefOverride, setBriefOverride] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  useEffect(() => { setBriefOverride(null); }, [briefSym]); // clear stale override on coin switch
+  const brief = briefOverride || briefFetched;
   const [techOpen, setTechOpen] = useState(false);
   React.useEffect(() => {
     const apply = () => setTechOpen(getReadingLevel() === 'pro');
@@ -1675,15 +1679,29 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
     window.addEventListener('btciq:reading-level', apply);
     return () => window.removeEventListener('btciq:reading-level', apply);
   }, []);
+  const buildParts = (b) => [`Good morning! Here is your ${briefName} brief.`,
+    ...((b && b.observations) || []), (b && b.take) ? `My take: ${b.take}` : '']
+    .filter(Boolean).join(' ');
+  // Instant Listen: pre-generate the audio as soon as the brief is ready.
+  useEffect(() => {
+    if (brief && (brief.observations || []).length) prefetchAlbert(buildParts(brief));
+  }, [brief]); // eslint-disable-line
+  const refreshBrief = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    stopAlbert(); setSpeaking(false); setWarming(false);
+    try {
+      const r = await fetch(`${API_BASE}/v1/albert/brief?refresh=1${briefSym !== 'BTC' ? `&symbol=${encodeURIComponent(briefSym)}` : ''}`, { cache: 'no-store' });
+      const j = await r.json();
+      if (j && j.status === 'ready') { setBriefOverride(j); prefetchAlbert(buildParts(j)); }
+    } catch (e) { /* noop */ } finally { setRefreshing(false); }
+  };
   const speakBrief = () => {
     try {
       if (speaking || warming) { stopAlbert(); setSpeaking(false); setWarming(false); return; }
-      // Read the MAIN brief that's shown on screen (Albert's plain observations + take),
-      // not the technical decision summary.
-      const obs = (brief && brief.observations) || [];
-      const take = (brief && brief.take) || (d.decision && d.decision.summary) || '';
-      const parts = [`Good morning! Here is your ${briefName} brief.`, ...obs, take ? `My take: ${take}` : '']
-        .filter(Boolean).join(' ');
+      const hasBrief = brief && (brief.observations || []).length;
+      const parts = hasBrief ? buildParts(brief)
+        : (d.decision && d.decision.summary ? `Good morning! ${d.decision.summary}` : '');
       if (!parts.trim()) return;
       setWarming(true);
       speakAlbert(parts, {
@@ -1752,6 +1770,10 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
             return <span className="rounded-full border px-2 py-0.5 text-[11px] font-bold" style={{ borderColor: m.c + '55', color: m.c }} title={`Ensemble health ${Math.round(h0 * 100)}%`}>Model health: {m.t}</span>;
           })()}
           <div className="ml-auto flex items-center gap-2">
+            <button onClick={refreshBrief} disabled={refreshing} title="Regenerate brief"
+              className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-slate-200 transition-colors hover:border-violet-500/50 hover:text-violet-200 disabled:opacity-50">
+              <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />{refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
             <button onClick={speakBrief} className={`flex items-center gap-1 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${(speaking || warming) ? 'border-amber-500/50 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-900 text-slate-200 hover:border-amber-500/50 hover:text-amber-200'}`}>
               {warming ? <><Loader2 className="h-4 w-4 animate-spin" />Albert is warming up…</> : speaking ? <><VolumeX className="h-4 w-4" />Stop</> : <><Volume2 className="h-4 w-4" />Listen</>}
             </button>

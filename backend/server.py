@@ -7720,40 +7720,64 @@ def _weekly_recap_autopost():
         traceback.print_exc()
 
 
-def _daily_brief_autopost():
-    """Scheduler (daily): ensure today's plain-English brief exists, then push it to the bell."""
-    try:
-        today = datetime.date.today().isoformat()
-        cache_id = f'brief:{today}:plain'
-        doc = insights_col.find_one({'_id': cache_id}, {'_id': 0})
-        take = (doc or {}).get('take') or ''
-        if not doc and EMERGENT_LLM_KEY and _HAS_LLM:
+BRIEF_COINS = [s.strip().upper() for s in os.environ.get('BRIEF_COINS', 'BTC,ETH,SOL').split(',') if s.strip()]
+
+
+def _generate_daily_brief(symbol):
+    """Ensure today's plain-English brief exists for `symbol`; return (take, coin_name)."""
+    today = datetime.date.today().isoformat()
+    is_btc = symbol == 'BTC'
+    cache_id = f'brief:{today}:plain' if is_btc else f'brief:{today}:plain:{symbol}'
+    doc = insights_col.find_one({'_id': cache_id}, {'_id': 0})
+    coin_name = 'Bitcoin' if is_btc else COMPARE_COINS.get(symbol, {}).get('name', symbol)
+    if doc:
+        return (doc.get('take') or ''), (doc.get('coin') or coin_name)
+    take = ''
+    if EMERGENT_LLM_KEY and _HAS_LLM:
+        if is_btc:
             ctx, as_of = _brief_context()
-            if ctx.strip():
-                def _call():
-                    async def _go():
-                        chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'brief-{uuid.uuid4().hex[:8]}',
-                                        system_message=ALBERT_BRIEF_SYSTEM.format(ctx=ctx))
-                                .with_model('gemini', CHAT_MODEL).with_params(temperature=0.4, max_tokens=6000))
-                        return await chat.send_message(UserMessage(text="Write today's market brief now."))
-                    return asyncio.run(_go())
-                reply = _LLM_POOL.submit(_call).result(timeout=45)
-                text = (reply if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '')).strip()
-                obs = []
-                for ln in text.split('\n'):
-                    ln = ln.strip()
-                    if ln.upper().startswith('TAKE:'):
-                        take = ln[5:].strip()
-                    elif ln.startswith('-'):
-                        obs.append(ln.lstrip('-').strip())
-                insights_col.update_one({'_id': cache_id}, {'$set': {
-                    '_id': cache_id, 'kind': 'brief', 'text': text, 'observations': obs, 'take': take,
-                    'as_of': as_of, 'mode': 'plain', 'generated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
-        push_alert('daily_brief', 'info', "Albert's Morning Brief is ready",
-                   take or "Your plain-English market brief for today is ready — open the dashboard to read it.",
-                   f"brief-{today}")
-    except Exception:  # noqa
-        traceback.print_exc()
+            sys_msg = ALBERT_BRIEF_SYSTEM.format(ctx=ctx)
+        else:
+            ctx, coin_name, as_of = _coin_brief_context(symbol)
+            sys_msg = ALBERT_BRIEF_COIN_SYSTEM.format(ctx=ctx, coin=coin_name)
+        if ctx.strip():
+            def _call():
+                async def _go():
+                    chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'brief-{uuid.uuid4().hex[:8]}',
+                                    system_message=sys_msg)
+                            .with_model('gemini', CHAT_MODEL).with_params(temperature=0.4, max_tokens=6000))
+                    return await chat.send_message(UserMessage(text=f"Write today's {coin_name} brief now."))
+                return asyncio.run(_go())
+            reply = _LLM_POOL.submit(_call).result(timeout=45)
+            text = (reply if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '')).strip()
+            obs = []
+            for ln in text.split('\n'):
+                ln = ln.strip()
+                if ln.upper().startswith('TAKE:'):
+                    take = ln[5:].strip()
+                elif ln.startswith('-'):
+                    obs.append(ln.lstrip('-').strip())
+            insights_col.update_one({'_id': cache_id}, {'$set': {
+                '_id': cache_id, 'kind': 'brief', 'text': text, 'observations': obs, 'take': take,
+                'as_of': as_of, 'mode': 'plain', 'symbol': symbol, 'coin': coin_name,
+                'generated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+    return take, coin_name
+
+
+def _daily_brief_autopost():
+    """Scheduler (daily): ensure each watched coin's brief exists, then push it to the bell."""
+    today = datetime.date.today().isoformat()
+    for symbol in BRIEF_COINS:
+        try:
+            if symbol != 'BTC' and symbol not in COMPARE_COINS:
+                continue
+            take, coin_name = _generate_daily_brief(symbol)
+            title = "Albert's Morning Brief is ready" if symbol == 'BTC' else f"Albert's {coin_name} Brief is ready"
+            push_alert('daily_brief', 'info', title,
+                       take or f"Your plain-English {coin_name} brief for today is ready — open the dashboard to read it.",
+                       f"brief-{symbol}-{today}")
+        except Exception:  # noqa
+            traceback.print_exc()
 
 
 # =====================================================================

@@ -43,6 +43,7 @@ export function applyAlbertVoice(u, synth) {
 /* --------------------------- shared playback --------------------------- */
 let _audio = null;         // current HTMLAudioElement (Gemini path)
 let _usingBrowser = false; // whether the browser synth is currently speaking
+const _clip = new Map();   // chunk text -> playable data URL (client-side cache)
 
 function stripMarkup(text) {
   return String(text || '').replace(/[#*`_>]/g, '').replace(/\s+/g, ' ').trim();
@@ -75,6 +76,7 @@ function chunkText(text) {
 }
 
 async function fetchTTS(text) {
+  if (_clip.has(text)) return _clip.get(text);
   const res = await fetch(`${API_BASE}/v1/tts`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -83,7 +85,20 @@ async function fetchTTS(text) {
   if (!res.ok) throw new Error('tts http ' + res.status);
   const data = await res.json();
   if (!data || !data.audio_base64) throw new Error('no audio');
-  return `data:${data.mime_type || 'audio/wav'};base64,${data.audio_base64}`;
+  const url = `data:${data.mime_type || 'audio/wav'};base64,${data.audio_base64}`;
+  if (_clip.size > 60) _clip.clear();
+  _clip.set(text, url);
+  return url;
+}
+
+// Pre-generate (and cache) the audio for `text` so a later speakAlbert() plays instantly.
+// Fire-and-forget; failures are ignored (Listen still works on demand).
+export function prefetchAlbert(text) {
+  try {
+    const clean = stripMarkup(text);
+    if (!clean) return;
+    chunkText(clean).forEach((c) => { fetchTTS(c).catch(() => {}); });
+  } catch (e) { /* noop */ }
 }
 
 function playUrl(url, onStart) {
