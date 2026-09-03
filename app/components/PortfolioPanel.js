@@ -4,7 +4,7 @@ import React from 'react';
 import { Briefcase, Plus, Trash2, Save, Check } from 'lucide-react';
 import { API_BASE, getPid } from '../lib/api';
 
-const COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'MATIC'];
+const COINS = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'MATIC', 'DOT', 'LTC', 'ATOM', 'USDT', 'USDC', 'DAI', 'BUSD', 'TUSD', 'USDE', 'PYUSD'];
 
 export default function PortfolioPanel({ onSaved }) {
   const [rows, setRows] = React.useState([]);
