@@ -534,6 +534,29 @@ function playAlertChime() {
   } catch (e) { /* noop */ }
 }
 
+// A softer, warmer chime for Albert's daily-brief notifications (distinct from the
+// brighter market-alert chime above) — a gentle low-to-high two-note.
+function playBriefChime() {
+  try {
+    const Ctx = (typeof window !== 'undefined') && (window.AudioContext || window.webkitAudioContext);
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    [523.25, 783.99].forEach((f, i) => { // C5 -> G5
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'triangle';
+      o.frequency.value = f;
+      o.connect(g); g.connect(ctx.destination);
+      const t = ctx.currentTime + i * 0.22;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.09, t + 0.05);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.55);
+      o.start(t); o.stop(t + 0.58);
+    });
+    setTimeout(() => { try { ctx.close(); } catch (e) { /* noop */ } }, 1200);
+  } catch (e) { /* noop */ }
+}
+
 const NOTIFIED_KEY = 'btciq_notified_ids';
 const SOUND_KEY = 'btciq_notif_sound';
 
@@ -573,16 +596,19 @@ function NotificationBell({ alertsData, onAck, onViewAll, onOpenBrief }) {
     if (fresh.length === 0) return;
     fresh.forEach((a) => notified.current.add(a.id));
     persistNotified();
+    const briefs = fresh.filter((a) => a.category === 'daily_brief');
     const meaningful = fresh.filter((a) => note.includes(a.severity)).slice(0, 3);
-    if (meaningful.length === 0) return;
-    // Browser push: fire an OS notification for new, meaningful alerts.
+    // Browser push: fire an OS notification for new, meaningful market alerts + briefs.
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      meaningful.forEach((a) => {
+      [...meaningful, ...briefs.slice(0, 3)].forEach((a) => {
         try { new Notification(`BTCIQ · ${a.title}`, { body: a.message, icon: '/btciq-logo.png', tag: a.id }); } catch (e) { /* noop */ }
       });
     }
-    // Audible chime (respecting the user's mute preference).
-    if (soundOn) playAlertChime();
+    // Audible chime (respecting the user's mute preference) — briefs get a gentler tone.
+    if (soundOn) {
+      if (meaningful.length > 0) playAlertChime();
+      else if (briefs.length > 0) playBriefChime();
+    }
   }, [alerts, soundOn, persistNotified]);
 
   const toggleSound = () => {
@@ -1685,8 +1711,7 @@ function briefTimeAgo(iso) {
   } catch (e) { return ''; }
 }
 
-function BriefCoinPicker() {
-  const [open, setOpen] = useState(false);
+function useBriefWatchlist() {
   const [wl, setWl] = useState(null); // { coins, available }
   useEffect(() => { fetch(`${API_BASE}/v1/albert/brief-watchlist`, { cache: 'no-store' }).then((r) => r.json()).then(setWl).catch(() => {}); }, []);
   const toggle = async (sym) => {
@@ -1700,6 +1725,46 @@ function BriefCoinPicker() {
       if (j && j.coins) setWl((w) => ({ ...w, coins: j.coins }));
     } catch (e) { /* noop */ }
   };
+  return { wl, toggle };
+}
+
+function BriefWatchlistList({ wl, toggle }) {
+  return (
+    <div className="max-h-64 overflow-y-auto">
+      {(wl?.available || []).map((a) => {
+        const on = wl.coins.includes(a.symbol);
+        const locked = a.symbol === 'BTC';
+        return (
+          <button key={a.symbol} onClick={() => toggle(a.symbol)} disabled={locked}
+            className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${locked ? 'cursor-default opacity-70' : 'hover:bg-slate-800'}`}>
+            <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${on ? 'border-sky-400 bg-sky-500 text-white' : 'border-slate-600'}`}>{on && <Check className="h-3 w-3" />}</span>
+            <span className={`font-semibold ${on ? 'text-white' : 'text-slate-400'}`}>{a.symbol}</span>
+            <span className="truncate text-xs text-slate-500">{a.name}</span>
+            {locked && <span className="ml-auto text-[9px] text-slate-600">always</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Inline panel for the Settings screen.
+function BriefWatchlistPanel() {
+  const { wl, toggle } = useBriefWatchlist();
+  return (
+    <div>
+      <p className="mb-1 text-[11px] text-slate-500">Pick which coins get a daily brief and a bell notification. Bitcoin is always included.</p>
+      <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-1">
+        <BriefWatchlistList wl={wl} toggle={toggle} />
+      </div>
+    </div>
+  );
+}
+
+// Compact dropdown for the Morning Brief header.
+function BriefCoinPicker() {
+  const [open, setOpen] = useState(false);
+  const { wl, toggle } = useBriefWatchlist();
   return (
     <div className="relative">
       <button onClick={() => setOpen((o) => !o)} title="Choose coins for daily briefs & alerts"
@@ -1711,21 +1776,7 @@ function BriefCoinPicker() {
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute right-0 z-50 mt-1 w-60 rounded-xl border border-slate-700 bg-slate-900 p-2 shadow-2xl">
             <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Coins for daily briefs &amp; alerts</p>
-            <div className="max-h-64 overflow-y-auto">
-              {(wl?.available || []).map((a) => {
-                const on = wl.coins.includes(a.symbol);
-                const locked = a.symbol === 'BTC';
-                return (
-                  <button key={a.symbol} onClick={() => toggle(a.symbol)} disabled={locked}
-                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-sm ${locked ? 'cursor-default opacity-70' : 'hover:bg-slate-800'}`}>
-                    <span className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${on ? 'border-sky-400 bg-sky-500 text-white' : 'border-slate-600'}`}>{on && <Check className="h-3 w-3" />}</span>
-                    <span className={`font-semibold ${on ? 'text-white' : 'text-slate-400'}`}>{a.symbol}</span>
-                    <span className="truncate text-xs text-slate-500">{a.name}</span>
-                    {locked && <span className="ml-auto text-[9px] text-slate-600">always</span>}
-                  </button>
-                );
-              })}
-            </div>
+            <BriefWatchlistList wl={wl} toggle={toggle} />
           </div>
         </>
       )}
@@ -1744,6 +1795,8 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
   const [refreshing, setRefreshing] = useState(false);
   useEffect(() => { setBriefOverride(null); }, [briefSym]); // clear stale override on coin switch
   const brief = briefOverride || briefFetched;
+  const briefAgeH = (() => { try { if (!brief || !brief.generated_at) return null; const norm = /[zZ]$/.test(brief.generated_at) ? brief.generated_at : brief.generated_at + 'Z'; return (Date.now() - new Date(norm).getTime()) / 3600000; } catch (e) { return null; } })();
+  const staleBrief = briefAgeH != null && briefAgeH > 24;
   const [techOpen, setTechOpen] = useState(false);
   React.useEffect(() => {
     const apply = () => setTechOpen(getReadingLevel() === 'pro');
@@ -1856,6 +1909,13 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
             <button onClick={() => onNav('ask')} className="flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:border-sky-500/50 hover:text-sky-200"><MessageCircle className="h-4 w-4" />Ask Albert</button>
           </div>
         </div>
+        {staleBrief && (
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+            <ShieldAlert className="h-4 w-4 shrink-0" />
+            <span className="flex-1">This brief is over a day old ({briefTimeAgo(brief.generated_at)}). Refresh for Albert&apos;s latest read.</span>
+            <button onClick={refreshBrief} disabled={refreshing} className="shrink-0 rounded-md bg-amber-500/20 px-2 py-1 font-semibold text-amber-100 transition-colors hover:bg-amber-500/30 disabled:opacity-50">{refreshing ? 'Refreshing…' : 'Refresh now'}</button>
+          </div>
+        )}
         <div className="mt-4 grid grid-cols-1 gap-5 lg:grid-cols-2">
           <div>
             <span className="inline-block rounded-lg px-3 py-1 text-sm font-bold" style={{ backgroundColor: bias.color + '18', color: bias.color }}>{bias.label} · {dec.regime || '—'}</span>
@@ -2592,6 +2652,10 @@ function SettingsSection({ onManualRun }) {
         </div>
       </Card>
       <BreakerDemoCard passcode={pass} />
+      <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+        <h3 className="mb-1 flex items-center gap-2 font-semibold text-white"><Bell className="h-4 w-4 text-sky-400" />Daily brief coins</h3>
+        <BriefWatchlistPanel />
+      </Card>
       <NotificationSettings />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
