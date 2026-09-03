@@ -8121,6 +8121,76 @@ ALBERT_BRIEF_TECH_SYSTEM = (
 )
 
 
+ALBERT_BRIEF_COIN_SYSTEM = (
+    "You are 'Albert', the friendly market guide in the BTCIQ dashboard, writing a short PLAIN-ENGLISH "
+    "MORNING BRIEF for a complete beginner — a 30-second read of what's going on with {coin} today. Use ONLY the "
+    "data below. AVOID JARGON completely: translate every number into what it MEANS for a normal person. "
+    "Output EXACTLY this shape and nothing else:\n"
+    "First, 4-5 lines each starting with '- ' — each a single plain-English takeaway (the overall lean, how "
+    "risky/choppy it looks, the near-term odds of going up or down, the key price levels to watch, and what stands "
+    "out most).\n"
+    "Then one final line starting with 'TAKE: ' — the overall one-sentence bottom line in simple words.\n"
+    "Warm, calm, everyday language (leans/looks/seems/could). Never say definitely/guaranteed/will happen. "
+    "No greeting, no markdown headers, no jargon.\n\n"
+    "===== LIVE {coin} DATA =====\n{ctx}\n===== END DATA ====="
+)
+
+ALBERT_BRIEF_COIN_TECH_SYSTEM = (
+    "You are 'Albert', the HuCentAI Quant analyst in the BTCIQ dashboard, writing a MORE TECHNICAL "
+    "MORNING BRIEF on {coin} for a reader who understands markets. Use ONLY the data below; do NOT invent values. "
+    "Be precise and quantitative — cite the concrete numbers: quant score, regime, 24H/7D forecast direction & "
+    "confidence, nearest support/resistance, and the key tailwinds/risks. Output EXACTLY this shape and nothing "
+    "else:\n"
+    "First, 4-5 lines each starting with '- ' (a single crisp, data-dense observation).\n"
+    "Then one final line starting with 'TAKE: ' giving the overall one-sentence read.\n"
+    "Measured probability language (suggests/indicates/may/could/elevated). Never say definitely/guaranteed. "
+    "No greeting, no markdown headers.\n\n"
+    "===== LIVE {coin} DATA =====\n{ctx}\n===== END DATA ====="
+)
+
+
+def _coin_brief_context(symbol):
+    """Build a coin-specific brief context, reusing the cached compare summary when
+    available so we don't re-fetch OHLCV on every request."""
+    today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+    data = None
+    try:
+        cached = compare_col.find_one({'_id': f'{symbol}:{today}'}, {'_id': 0})
+        if cached and cached.get('data'):
+            data = cached['data']
+    except Exception:  # noqa
+        data = None
+    if not data:
+        data = compute_coin_summary(symbol)
+        try:
+            compare_col.update_one({'_id': f'{symbol}:{today}'},
+                                   {'$set': {'_id': f'{symbol}:{today}', 'symbol': symbol, 'day': today,
+                                             'data': data, 'created_at': datetime.datetime.utcnow().isoformat()}},
+                                   upsert=True)
+        except Exception:  # noqa
+            pass
+    L = []
+    L.append(f"PRICE: ${data.get('price')} ({data.get('day_change_pct'):+}% today).")
+    L.append(f"QUANT SCORE: {data.get('quant_score')}/100 ({data.get('quant_label')}).")
+    if data.get('regime'):
+        L.append(f"REGIME: {data.get('regime')}.")
+    f24 = data.get('forecast_24h') or {}
+    f7 = data.get('forecast_7d') or {}
+    if f24.get('confidence_pct') is not None:
+        L.append(f"24H FORECAST: {'higher' if f24.get('higher') else 'lower'} with {f24.get('confidence_pct')}% confidence.")
+    if f7.get('confidence_pct') is not None:
+        L.append(f"7D FORECAST: {'higher' if f7.get('higher') else 'lower'} with {f7.get('confidence_pct')}% confidence.")
+    if data.get('support'):
+        L.append(f"NEAREST SUPPORT: ${data.get('support')}.")
+    if data.get('resistance'):
+        L.append(f"NEAREST RESISTANCE: ${data.get('resistance')}.")
+    if data.get('bullish'):
+        L.append("TAILWINDS: " + "; ".join([str(x) for x in data.get('bullish')]))
+    if data.get('risk'):
+        L.append("RISKS: " + "; ".join([str(x) for x in data.get('risk')]))
+    return "\n".join(L), data.get('name', symbol), data.get('as_of')
+
+
 def _brief_context():
     run = runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0}) or {}
     L = []
@@ -8172,29 +8242,41 @@ def _brief_context():
 
 
 @app.get('/api/v1/albert/brief')
-async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain'):
-    """Albert's Morning Brief — a daily summary. mode='plain' (layman, default) or 'technical'."""
+async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain', symbol: str = 'BTC'):
+    """Albert's Morning Brief — a daily summary, coin-specific. mode='plain' (layman,
+    default) or 'technical'; symbol selects the asset (BTC default)."""
     mode = 'technical' if mode == 'technical' else 'plain'
+    symbol = (symbol or 'BTC').strip().upper()[:6]
+    is_btc = symbol == 'BTC'
+    if not is_btc and symbol not in COMPARE_COINS:
+        return {'status': 'error', 'reason': 'unsupported_symbol'}
     today = datetime.date.today().isoformat()
-    cache_id = f'brief:{today}:{mode}'
+    cache_id = f'brief:{today}:{mode}' if is_btc else f'brief:{today}:{mode}:{symbol}'
     if not refresh:
         c = insights_col.find_one({'_id': cache_id}, {'_id': 0})
         if c and c.get('text'):
-            return {'status': 'ready', 'cached': True, 'mode': mode, **c}
+            return {'status': 'ready', 'cached': True, 'mode': mode, 'symbol': symbol, **c}
     if _rate_limited(request, 'albert_brief', per_min=10, per_day=200):
         return {'status': 'computing', 'reason': 'rate_limited'}
     try:
-        ctx, as_of = _brief_context()
+        if is_btc:
+            ctx, as_of = _brief_context()
+            coin_name = 'Bitcoin'
+            sys_prompt = ALBERT_BRIEF_TECH_SYSTEM if mode == 'technical' else ALBERT_BRIEF_SYSTEM
+            sys_msg = sys_prompt.format(ctx=ctx)
+        else:
+            ctx, coin_name, as_of = _coin_brief_context(symbol)
+            sys_prompt = ALBERT_BRIEF_COIN_TECH_SYSTEM if mode == 'technical' else ALBERT_BRIEF_COIN_SYSTEM
+            sys_msg = sys_prompt.format(ctx=ctx, coin=coin_name)
         if not ctx.strip():
             return {'status': 'computing'}
         if not (EMERGENT_LLM_KEY and _HAS_LLM):
-            return {'status': 'ready', 'cached': False, 'mode': mode, 'text': ctx,
+            return {'status': 'ready', 'cached': False, 'mode': mode, 'symbol': symbol, 'text': ctx,
                     'observations': [l for l in ctx.split('\n')][:5], 'take': '', 'as_of': as_of}
-        sys_prompt = ALBERT_BRIEF_TECH_SYSTEM if mode == 'technical' else ALBERT_BRIEF_SYSTEM
         chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'brief-{uuid.uuid4().hex[:10]}',
-                        system_message=sys_prompt.format(ctx=ctx))
+                        system_message=sys_msg)
                 .with_model('gemini', CHAT_MODEL).with_params(temperature=0.4, max_tokens=6000))
-        reply = await chat.send_message(UserMessage(text="Write today's market brief now."))
+        reply = await chat.send_message(UserMessage(text=f"Write today's {coin_name} brief now."))
         text = (reply if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '')).strip()
         _bump_usage('llm_brief')
         obs, take = [], ''
@@ -8206,7 +8288,7 @@ async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain'):
                 obs.append(ln.lstrip('-').strip())
         now_iso = datetime.datetime.utcnow().isoformat()
         doc = {'text': text, 'observations': obs, 'take': take, 'as_of': as_of,
-               'model': CHAT_MODEL, 'generated_at': now_iso, 'mode': mode}
+               'model': CHAT_MODEL, 'generated_at': now_iso, 'mode': mode, 'symbol': symbol, 'coin': coin_name}
         insights_col.update_one({'_id': cache_id}, {'$set': {'_id': cache_id, 'kind': 'brief', **doc}}, upsert=True)
         return {'status': 'ready', 'cached': False, **doc}
     except Exception:  # noqa

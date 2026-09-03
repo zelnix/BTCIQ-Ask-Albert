@@ -1665,7 +1665,9 @@ function ScenarioSimulator({ d, onNav }) {
 function ExecutiveSummary({ d, ticker, news, onNav }) {
   const [speaking, setSpeaking] = useState(false);
   const [warming, setWarming] = useState(false);
-  const [brief] = useFetch(`${API_BASE}/v1/albert/brief`);
+  const briefSym = (d && d.symbol) || 'BTC';
+  const briefName = (d && d.coin_name) || (briefSym === 'BTC' ? 'Bitcoin' : briefSym);
+  const [brief] = useFetch(`${API_BASE}/v1/albert/brief${briefSym !== 'BTC' ? `?symbol=${encodeURIComponent(briefSym)}` : ''}`);
   const [techOpen, setTechOpen] = useState(false);
   React.useEffect(() => {
     const apply = () => setTechOpen(getReadingLevel() === 'pro');
@@ -1680,7 +1682,7 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
       // not the technical decision summary.
       const obs = (brief && brief.observations) || [];
       const take = (brief && brief.take) || (d.decision && d.decision.summary) || '';
-      const parts = ['Good morning! Here is your Bitcoin brief.', ...obs, take ? `My take: ${take}` : '']
+      const parts = [`Good morning! Here is your ${briefName} brief.`, ...obs, take ? `My take: ${take}` : '']
         .filter(Boolean).join(' ');
       if (!parts.trim()) return;
       setWarming(true);
@@ -1727,7 +1729,7 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
         <ExecKpi label="Market Bias" onClick={() => onNav('overview')}>
           <p className="flex items-center gap-2 text-3xl font-black" style={{ color: bias.color }}>{bias.label}<span className="text-2xl">{bias.arrow}</span></p>
         </ExecKpi>
-        <ExecKpi label="BTC Price" onClick={() => onNav('market-intel')} sub={`${chg >= 0 ? '+' : ''}${chg}% 24h`} subColor={chg >= 0 ? '#34d399' : '#f87171'}>
+        <ExecKpi label={`${briefSym} Price`} onClick={() => onNav('market-intel')} sub={`${chg >= 0 ? '+' : ''}${chg}% 24h`} subColor={chg >= 0 ? '#34d399' : '#f87171'}>
           <p className="text-3xl font-black text-white">{fmtUsd(price)}</p>
         </ExecKpi>
         <ExecKpi label="Conviction Score" onClick={() => onNav('overview')} sub={dec.overall_score_raw != null && dec.overall_score_raw !== dec.overall_score ? `ensemble-adj from ${dec.overall_score_raw}` : (dec.label || '')} subColor={scoreColor(dec.overall_score)}>
@@ -1742,7 +1744,7 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
       <Card className="border-0 bg-gradient-to-br from-amber-500/[0.06] via-violet-500/[0.06] to-slate-900 p-6 ring-1 ring-violet-500/25">
         <div className="flex flex-wrap items-center gap-2">
           <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-amber-400/50" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-          <h3 className="text-lg font-bold text-white">Albert&apos;s Morning Brief</h3>
+          <h3 className="text-lg font-bold text-white">{briefSym === 'BTC' ? 'Albert\u2019s Morning Brief' : `Albert\u2019s ${briefName} Brief`}</h3>
           {re.regime_label && <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[11px] font-bold text-violet-200">{re.regime_label}</span>}
           {dec.ensemble_health != null && (() => {
             const h0 = dec.ensemble_health;
