@@ -3293,6 +3293,24 @@ export default function DashboardPage() {
     <div className="relative min-h-screen bg-slate-950 text-slate-100">
       {albertBioOpen && <AlbertBioModal onClose={() => setAlbertBioOpen(false)} />}
       <AlbertVoiceToast />
+      {chatStrategyBuilding && !chatStrategy?.draft && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
+          <div className="flex items-center gap-3 rounded-2xl border border-slate-700 bg-slate-900 px-6 py-5 shadow-2xl">
+            <img src="/albert.png" alt="Albert" className="h-9 w-9 rounded-full object-cover ring-1 ring-sky-500/40" />
+            <div>
+              <p className="text-sm font-bold text-white">Albert is drafting your strategy…</p>
+              <p className="text-[12px] text-slate-400">Turning his call into a trackable plan</p>
+            </div>
+            <Loader2 className="ml-2 h-5 w-5 animate-spin text-sky-400" />
+          </div>
+        </div>
+      )}
+      {chatStrategy?.draft && (
+        <StrategyDraftModal draft={chatStrategy.draft} symbol={chatStrategy.symbol}
+          onClose={() => setChatStrategy(null)}
+          onRegenerate={() => { window.dispatchEvent(new CustomEvent('albert:build-strategy', { detail: { symbol: chatStrategy.symbol, seed: '' } })); }}
+          onActivated={() => { setChatStrategy(null); setActive('strategies'); }} />
+      )}
       <style>{`img[alt="Albert"]{cursor:pointer}`}</style>
       <div aria-hidden className="pointer-events-none fixed inset-0 bg-[radial-gradient(55rem_38rem_at_-8%_-12%,rgba(247,147,26,0.10),transparent_58%),radial-gradient(52rem_40rem_at_112%_6%,rgba(109,94,246,0.14),transparent_55%)]" />
       {compareOpen && symbol !== 'BTC' && d && (
