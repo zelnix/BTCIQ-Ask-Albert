@@ -32,7 +32,7 @@ import WeeklyRecap from './components/WeeklyRecap';
 
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
-import { speakAlbert, stopAlbert, prefetchAlbert } from './lib/albertVoice';
+import { speakAlbert, stopAlbert, prefetchAlbert, getVoicePref, setVoicePref, previewVoice } from './lib/albertVoice';
 import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, DemoBadge, Spark, LevGauge, ComingSoonSection } from './components/shared';
 import AnalogsSection from './components/Analogs';
 import CrossMarketSection from './components/CrossMarket';
@@ -3264,6 +3264,7 @@ export default function DashboardPage() {
     <SymbolContext.Provider value={symbol}>
     <div className="relative min-h-screen bg-slate-950 text-slate-100">
       {albertBioOpen && <AlbertBioModal onClose={() => setAlbertBioOpen(false)} />}
+      <AlbertVoiceToast />
       <style>{`img[alt="Albert"]{cursor:pointer}`}</style>
       <div aria-hidden className="pointer-events-none fixed inset-0 bg-[radial-gradient(55rem_38rem_at_-8%_-12%,rgba(247,147,26,0.10),transparent_58%),radial-gradient(52rem_40rem_at_112%_6%,rgba(109,94,246,0.14),transparent_55%)]" />
       {compareOpen && symbol !== 'BTC' && d && (
@@ -3472,6 +3473,120 @@ function PublishStamp() {
   );
 }
 
+/* ===================== Albert voice picker (Meet Albert) ===================== */
+function VoicePicker() {
+  const [data, setData] = useState({ voices: [], tts_available: true, default: 'Charon' });
+  const [pref, setPref] = useState(() => (typeof window !== 'undefined' ? getVoicePref() : { engine: 'gemini', voice: 'Charon', browserVoiceURI: '' }));
+  const [browserVoices, setBrowserVoices] = useState([]);
+  const [sampling, setSampling] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    fetch(`${API_BASE}/v1/tts/voices`).then((r) => r.json()).then((j) => { if (alive && j && j.voices) setData(j); }).catch(() => {});
+    const loadVoices = () => {
+      try {
+        const vs = (window.speechSynthesis?.getVoices() || []).filter((v) => /^en(\b|[-_])/i.test(v.lang || ''));
+        setBrowserVoices(vs.length ? vs : (window.speechSynthesis?.getVoices() || []));
+      } catch (e) { /* noop */ }
+    };
+    loadVoices();
+    try { window.speechSynthesis?.addEventListener?.('voiceschanged', loadVoices); } catch (e) { /* noop */ }
+    return () => { alive = false; try { window.speechSynthesis?.removeEventListener?.('voiceschanged', loadVoices); } catch (e) { /* noop */ } };
+  }, []);
+
+  const choose = (next) => { const p = setVoicePref({ ...pref, ...next }); setPref(p); };
+
+  const sample = async (key) => {
+    if (sampling) { stopAlbert(); setSampling(''); return; }
+    setSampling(key);
+    try { await previewVoice("Hello! I'm Albert, your crypto quant. Let's read the market together and find your edge."); }
+    finally { setSampling(''); }
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-700 bg-slate-950/50 p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <Volume2 className="h-4 w-4 text-amber-300" />
+        <h3 className="text-sm font-bold text-white">Albert&apos;s voice</h3>
+        <span className="ml-auto text-[10px] text-slate-500">saved automatically</span>
+      </div>
+      {!data.tts_available && (
+        <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] text-amber-200">Premium voices are offline right now — device voices are available below.</p>
+      )}
+      <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+        {(data.voices || []).map((v) => {
+          const selected = pref.engine === 'gemini' && pref.voice === v.id;
+          const key = `g:${v.id}`;
+          return (
+            <button key={v.id} onClick={() => choose({ engine: 'gemini', voice: v.id })}
+              className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-colors ${selected ? 'border-amber-500/60 bg-amber-500/10' : 'border-slate-800 bg-slate-900/50 hover:border-slate-600'}`}>
+              <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${selected ? 'border-amber-400 bg-amber-400/20' : 'border-slate-600'}`}>{selected && <Check className="h-3 w-3 text-amber-300" />}</span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[13px] font-semibold text-slate-100">{v.name}</span>
+                <span className="block truncate text-[11px] text-slate-400">{v.desc}</span>
+              </span>
+              <span onClick={(e) => { e.stopPropagation(); choose({ engine: 'gemini', voice: v.id }); sample(key); }}
+                className={`flex shrink-0 items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-semibold ${sampling === key ? 'border-amber-500/60 bg-amber-500/15 text-amber-200' : 'border-slate-700 text-slate-300 hover:text-white'}`}>
+                {sampling === key ? <><Loader2 className="h-3 w-3 animate-spin" />Stop</> : <><Volume2 className="h-3 w-3" />Sample</>}
+              </span>
+            </button>
+          );
+        })}
+
+        {/* Device (browser) voice */}
+        <div className={`rounded-lg border px-3 py-2 ${pref.engine === 'browser' ? 'border-sky-500/60 bg-sky-500/10' : 'border-slate-800 bg-slate-900/50'}`}>
+          <button onClick={() => choose({ engine: 'browser', browserVoiceURI: pref.browserVoiceURI || (browserVoices[0] && (browserVoices[0].voiceURI || browserVoices[0].name)) || '' })}
+            className="flex w-full items-center gap-3 text-left">
+            <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${pref.engine === 'browser' ? 'border-sky-400 bg-sky-400/20' : 'border-slate-600'}`}>{pref.engine === 'browser' && <Check className="h-3 w-3 text-sky-300" />}</span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-semibold text-slate-100">Device voice</span>
+              <span className="block text-[11px] text-slate-400">Uses your device&apos;s built-in voice · always free, no quota</span>
+            </span>
+          </button>
+          {pref.engine === 'browser' && (
+            <div className="mt-2 flex items-center gap-2">
+              <select value={pref.browserVoiceURI} onChange={(e) => choose({ engine: 'browser', browserVoiceURI: e.target.value })}
+                className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-950 px-2 py-1.5 text-[12px] text-slate-100 focus:border-sky-500/60 focus:outline-none">
+                {browserVoices.length === 0 && <option value="">Default device voice</option>}
+                {browserVoices.map((v) => (<option key={v.voiceURI || v.name} value={v.voiceURI || v.name}>{v.name}{v.lang ? ` (${v.lang})` : ''}</option>))}
+              </select>
+              <button onClick={() => sample('browser')}
+                className={`flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1.5 text-[10px] font-semibold ${sampling === 'browser' ? 'border-sky-500/60 bg-sky-500/15 text-sky-200' : 'border-slate-700 text-slate-300 hover:text-white'}`}>
+                {sampling === 'browser' ? <><Loader2 className="h-3 w-3 animate-spin" />Stop</> : <><Volume2 className="h-3 w-3" />Sample</>}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+      <p className="mt-2 text-[10px] leading-relaxed text-slate-500">Premium voices are generated by Albert&apos;s server so they sound the same on every device. If they&apos;re busy, Albert falls back to your device voice.</p>
+    </div>
+  );
+}
+
+/* Global toast for voice fallback / notices (mounted once at the app root). */
+function AlbertVoiceToast() {
+  const [msg, setMsg] = useState('');
+  useEffect(() => {
+    let timer = null;
+    const onNotice = (e) => {
+      setMsg((e.detail && e.detail.msg) || '');
+      clearTimeout(timer);
+      timer = setTimeout(() => setMsg(''), 5000);
+    };
+    window.addEventListener('albert:voice-notice', onNotice);
+    return () => { window.removeEventListener('albert:voice-notice', onNotice); clearTimeout(timer); };
+  }, []);
+  if (!msg) return null;
+  return (
+    <div className="fixed bottom-4 left-1/2 z-[120] -translate-x-1/2 px-4">
+      <div className="flex items-center gap-2 rounded-full border border-amber-500/40 bg-slate-900/95 px-4 py-2 text-[12px] font-medium text-amber-200 shadow-lg backdrop-blur">
+        <Volume2 className="h-4 w-4 shrink-0" />{msg}
+      </div>
+    </div>
+  );
+}
+
+
 /* ===================== Albert bio popup (tap any Albert avatar) ===================== */
 function AlbertBioModal({ onClose }) {
   return (
@@ -3502,6 +3617,7 @@ function AlbertBioModal({ onClose }) {
             <li className="flex gap-2"><span className="text-sky-400">•</span>Directional calls with entries, targets &amp; invalidation — auto-graded</li>
             <li className="flex gap-2"><span className="text-sky-400">•</span>Live web-grounded deep dives on strategy, macro &amp; cycles</li>
           </ul>
+          <VoicePicker />
           <button onClick={onClose}
             className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-violet-500 py-2.5 text-sm font-bold text-white transition-opacity hover:opacity-90">
             <MessageCircle className="h-4 w-4" />Got it

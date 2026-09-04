@@ -33,10 +33,9 @@ export default function AlbertReplyMeta({ text, sources = [], symbol = 'BTC', pi
 
   const speak = () => {
     if (speaking || warming) { stopAlbert(); setSpeaking(false); setWarming(false); return; }
-    const clean = String(text || '').replace(/[#*`_>]/g, '').replace(/\s+/g, ' ').trim();
-    if (!clean) return;
+    if (!String(text || '').trim()) return;
     setWarming(true);
-    speakAlbert(clean, {
+    speakAlbert(text, {
       onStart: () => { setWarming(false); setSpeaking(true); },
       onEnd: () => { setSpeaking(false); setWarming(false); },
     });

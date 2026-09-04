@@ -7555,6 +7555,60 @@ def albert_tts(payload: dict = Body(...)):
         return JSONResponse({'error': 'tts_failed'}, status_code=502)
 
 
+# Curated set of Gemini prebuilt voices offered for Albert. Names are the exact
+# `voice_name` values accepted by the Gemini TTS API (case-insensitive).
+ALBERT_VOICE_CHOICES = [
+    {'id': 'Charon', 'name': 'Albert (Classic)', 'desc': 'Informative & warm — the original Albert', 'gender': 'male'},
+    {'id': 'Fenrir', 'name': 'Excitable Professor', 'desc': 'Energetic, animated, bursting with enthusiasm', 'gender': 'male'},
+    {'id': 'Puck', 'name': 'Upbeat Guide', 'desc': 'Lively and upbeat, keeps things fun', 'gender': 'male'},
+    {'id': 'Orus', 'name': 'Confident Analyst', 'desc': 'Firm, steady and self-assured', 'gender': 'male'},
+    {'id': 'Iapetus', 'name': 'Clear Lecturer', 'desc': 'Crisp, clear and articulate', 'gender': 'male'},
+    {'id': 'Algieba', 'name': 'Smooth Narrator', 'desc': 'Smooth, mellow and relaxed', 'gender': 'male'},
+    {'id': 'Gacrux', 'name': 'Seasoned Veteran', 'desc': 'Mature, seasoned, well-aged wisdom', 'gender': 'male'},
+    {'id': 'Rasalgethi', 'name': 'Deep Briefer', 'desc': 'Informative with a fuller, deeper tone', 'gender': 'male'},
+    {'id': 'Sadaltager', 'name': 'The Scholar', 'desc': 'Knowledgeable and measured', 'gender': 'male'},
+    {'id': 'Sulafat', 'name': 'Warm Companion', 'desc': 'Warm and friendly', 'gender': 'female'},
+    {'id': 'Zephyr', 'name': 'Bright Assistant', 'desc': 'Bright and clear', 'gender': 'female'},
+    {'id': 'Aoede', 'name': 'Breezy Host', 'desc': 'Breezy, light and easy-going', 'gender': 'female'},
+]
+
+
+@app.get('/api/v1/tts/voices')
+def albert_tts_voices():
+    """Curated Gemini voices offered on the Meet Albert voice picker."""
+    return {'status': 'ready', 'default': GEMINI_TTS_VOICE,
+            'tts_available': bool(GEMINI_API_KEY), 'voices': ALBERT_VOICE_CHOICES}
+
+
+@app.get('/api/v1/albert/voice-pref')
+def get_voice_pref():
+    """User's saved Albert voice preference (cross-device fallback to localStorage)."""
+    try:
+        doc = insights_col.find_one({'_id': 'cfg:albert_voice'}, {'_id': 0}) or {}
+    except Exception:
+        doc = {}
+    return {'status': 'ready', 'engine': doc.get('engine', 'gemini'),
+            'voice': doc.get('voice', GEMINI_TTS_VOICE),
+            'browser_voice_uri': doc.get('browser_voice_uri', '')}
+
+
+@app.post('/api/v1/albert/voice-pref')
+def set_voice_pref(payload: dict = Body(...)):
+    engine = (payload.get('engine') or 'gemini').strip().lower()
+    if engine not in ('gemini', 'browser'):
+        engine = 'gemini'
+    voice = (payload.get('voice') or GEMINI_TTS_VOICE).strip()
+    valid = {v['id'] for v in ALBERT_VOICE_CHOICES}
+    if engine == 'gemini' and voice not in valid:
+        voice = GEMINI_TTS_VOICE
+    browser_voice_uri = (payload.get('browser_voice_uri') or '').strip()[:200]
+    insights_col.update_one({'_id': 'cfg:albert_voice'},
+                            {'$set': {'_id': 'cfg:albert_voice', 'kind': 'config', 'engine': engine,
+                                      'voice': voice, 'browser_voice_uri': browser_voice_uri,
+                                      'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+    return {'status': 'ready', 'engine': engine, 'voice': voice, 'browser_voice_uri': browser_voice_uri}
+
+
 @app.get('/api/v1/albert/track-record')
 def albert_track_record(limit: int = 20):
     try:

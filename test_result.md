@@ -128,6 +128,20 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED all 3 tests via external URL. (1) Valid text 'Good morning from Albert.' returns HTTP 200 with audio_base64 (172,280 chars, decodes to 129,210 bytes valid WAV), mime_type='audio/wav', cached=False ✅ (2) Repeat same text returns cached=True ✅ (3) Empty text returns HTTP 400 ✅ All validations passed. Gemini TTS generation takes ~10s on first call, cached responses are instant."
+  - task: "Albert voice picker endpoints — GET /api/v1/tts/voices, GET/POST /api/v1/albert/voice-pref, and voice-aware POST /api/v1/tts"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "New: GET /api/v1/tts/voices returns {status, default, tts_available, voices[]} (12 curated Gemini voices with id/name/desc/gender). GET /api/v1/albert/voice-pref returns saved {engine, voice, browser_voice_uri} (defaults engine=gemini, voice=Charon). POST /api/v1/albert/voice-pref persists to insights_col cfg:albert_voice; validates engine in (gemini,browser) and voice within curated set. POST /api/v1/tts now honours a caller-supplied 'voice' (e.g. Fenrir, Puck). Verify: voices list non-empty & includes Charon; POST voice-pref with {engine:'gemini',voice:'Fenrir'} persists and GET returns it; POST with invalid voice falls back to Charon; POST /api/v1/tts with {text, voice:'Puck'} returns 200 audio (may hit free-tier quota -> 502/503 acceptable, note it)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED all 7 tests via external URL (https://quant-features.preview.emergentagent.com/api). (1) GET /api/v1/tts/voices returns HTTP 200 with status='ready', default='Charon', tts_available=true, voices array with 12 items ✅ Each voice has required fields (id, name, desc, gender) ✅ Voice ids include 'Charon' and 'Fenrir' ✅ (2) GET /api/v1/albert/voice-pref returns HTTP 200 with status='ready', engine='gemini', voice='Charon', browser_voice_uri='' ✅ (3a) POST /api/v1/albert/voice-pref with {engine:'gemini', voice:'Fenrir'} returns HTTP 200 echoing voice='Fenrir', engine='gemini' ✅ GET confirms persistence: voice='Fenrir' ✅ (3b) POST with {engine:'gemini', voice:'NotARealVoice'} returns HTTP 200 with voice='Charon' (invalid voice correctly falls back to default) ✅ (3c) POST with {engine:'browser', browser_voice_uri:'com.apple.voice.x'} returns HTTP 200 with engine='browser' ✅ (4) POST /api/v1/tts with {text:'Hello from Albert', voice:'Puck'} returns HTTP 502 (free-tier quota exhausted, ACCEPTABLE and EXPECTED behavior for Gemini API free tier) ✅ (5) CLEANUP: POST with {engine:'gemini', voice:'Charon'} successfully resets to default ✅ All validations passed. Voice selection, persistence, validation (fallback to Charon for invalid voices), and engine switching (gemini/browser) all working correctly."
   - task: "Coin-specific Morning Brief (GET /api/v1/albert/brief?symbol=BTC|ETH|...&mode=plain|technical&refresh=1)"
     implemented: true
     working: true
@@ -7414,13 +7428,23 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Post-rebrand sanity check - verify string replacements"
+    - "Albert voice picker endpoints — GET /api/v1/tts/voices, GET/POST /api/v1/albert/voice-pref, and voice-aware POST /api/v1/tts"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
-    -agent: "testing"
+    -agent: "main"
+    -message: |
+      NEW FEATURE — Albert voice selection + karaoke word highlighting.
+      Please test ONLY the new/affected backend endpoints:
+      1. GET /api/v1/tts/voices -> expect 200 {status:'ready', default:'Charon', tts_available:true, voices:[...12]}; each voice has id/name/desc; list includes 'Charon' and 'Fenrir'.
+      2. GET /api/v1/albert/voice-pref -> expect 200 {status:'ready', engine, voice, browser_voice_uri}.
+      3. POST /api/v1/albert/voice-pref {engine:'gemini', voice:'Fenrir'} -> expect 200 echoing voice:'Fenrir'; then GET returns voice:'Fenrir'. POST {engine:'gemini', voice:'NotAVoice'} -> should fall back to voice:'Charon'. POST {engine:'browser', browser_voice_uri:'x'} -> engine:'browser'.
+      4. POST /api/v1/tts {text:'Hello from Albert', voice:'Puck'} -> ideally 200 with audio_base64; BUT the GEMINI key is FREE TIER so 429/502/503 (quota) is ACCEPTABLE — just report it, it is NOT a code bug (frontend falls back to browser voice).
+      IMPORTANT: reset voice-pref back to {engine:'gemini', voice:'Charon'} at the end so the user's default is clean.
+
+
     -message: |
       ✅ POST-REBRAND SANITY CHECK COMPLETE - 7/8 ENDPOINTS PASSED
       

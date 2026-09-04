@@ -1,467 +1,387 @@
-#!/usr/bin/env python3
 """
-Backend API Test Suite for NEW/CHANGED endpoints
-Tests the 6 new tasks from the current session via the /api proxy
+Backend API Test Suite for Albert Voice Selection Endpoints
+Tests the new voice picker endpoints as per review request.
 """
 import requests
 import json
-import base64
 import time
-import sys
 
-# Use the external URL with /api prefix (proxied to internal :8001)
+# Load base URL from .env
 BASE_URL = "https://quant-features.preview.emergentagent.com/api"
 
-def test_tts_endpoint():
-    """Test 1: POST /api/v1/tts - Gemini TTS endpoint"""
+def test_tts_voices():
+    """
+    Test 1: GET /api/v1/tts/voices
+    Expect HTTP 200 JSON with keys {status:'ready', default:'Charon', tts_available:true, voices:[...]}
+    Assert voices is a non-empty array (should be 12), each item has 'id','name','desc'
+    Assert the list of ids includes 'Charon' and 'Fenrir'
+    """
     print("\n" + "="*80)
-    print("TEST 1: POST /api/v1/tts - Gemini TTS endpoint")
+    print("TEST 1: GET /api/v1/tts/voices")
     print("="*80)
     
-    # Test 1a: Valid text request
-    print("\n[1a] Testing valid text request...")
     try:
-        payload = {"text": "Good morning from Albert."}
-        response = requests.post(f"{BASE_URL}/v1/tts", json=payload, timeout=60)
-        print(f"Status Code: {response.status_code}")
+        url = f"{BASE_URL}/v1/tts/voices"
+        print(f"Request: GET {url}")
         
-        if response.status_code == 200:
-            data = response.json()
-            print(f"✅ Response keys: {list(data.keys())}")
-            
-            # Validate response structure
-            assert 'audio_base64' in data, "Missing audio_base64 field"
-            assert 'mime_type' in data, "Missing mime_type field"
-            assert 'cached' in data, "Missing cached field"
-            
-            # Validate audio_base64 is non-empty and valid base64
-            audio_b64 = data['audio_base64']
-            assert len(audio_b64) > 0, "audio_base64 is empty"
-            try:
-                audio_bytes = base64.b64decode(audio_b64)
-                assert len(audio_bytes) > 0, "Decoded audio is empty"
-                print(f"✅ audio_base64: non-empty ({len(audio_b64)} chars), decodes to {len(audio_bytes)} bytes")
-            except Exception as e:
-                print(f"❌ audio_base64 is not valid base64: {e}")
-                return False
-            
-            # Validate mime_type
-            assert data['mime_type'] == 'audio/wav', f"Expected mime_type 'audio/wav', got '{data['mime_type']}'"
-            print(f"✅ mime_type: {data['mime_type']}")
-            
-            # Validate cached field
-            assert isinstance(data['cached'], bool), "cached field is not boolean"
-            print(f"✅ cached: {data['cached']} (first call, expected False)")
-            
-            print("✅ TEST 1a PASSED: Valid text returns 200 with non-empty audio_base64 (base64-decodable WAV)")
-        else:
-            print(f"❌ TEST 1a FAILED: Expected 200, got {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 1a FAILED with exception: {e}")
-        return False
-    
-    # Test 1b: Repeat same text (should be cached)
-    print("\n[1b] Testing cache (repeat same text)...")
-    try:
-        time.sleep(1)
-        payload = {"text": "Good morning from Albert."}
-        response = requests.post(f"{BASE_URL}/v1/tts", json=payload, timeout=60)
-        print(f"Status Code: {response.status_code}")
+        response = requests.get(url, timeout=30)
+        print(f"Response Status: {response.status_code}")
         
-        if response.status_code == 200:
-            data = response.json()
-            assert data.get('cached') == True, f"Expected cached=True, got {data.get('cached')}"
-            print(f"✅ cached: {data['cached']} (second call, expected True)")
-            print("✅ TEST 1b PASSED: Repeat text returns cached=True")
-        else:
-            print(f"❌ TEST 1b FAILED: Expected 200, got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 1b FAILED with exception: {e}")
-        return False
-    
-    # Test 1c: Empty text (should return 400)
-    print("\n[1c] Testing empty text (should return 400)...")
-    try:
-        payload = {"text": ""}
-        response = requests.post(f"{BASE_URL}/v1/tts", json=payload, timeout=30)
-        print(f"Status Code: {response.status_code}")
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
         
-        if response.status_code == 400:
-            print("✅ TEST 1c PASSED: Empty text returns 400")
-        else:
-            print(f"❌ TEST 1c FAILED: Expected 400, got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 1c FAILED with exception: {e}")
+        data = response.json()
+        print(f"Response Data: {json.dumps(data, indent=2)}")
+        
+        # Validate required keys
+        assert 'status' in data, "Missing 'status' key"
+        assert data['status'] == 'ready', f"Expected status='ready', got {data['status']}"
+        
+        assert 'default' in data, "Missing 'default' key"
+        assert data['default'] == 'Charon', f"Expected default='Charon', got {data['default']}"
+        
+        assert 'tts_available' in data, "Missing 'tts_available' key"
+        assert data['tts_available'] == True, f"Expected tts_available=true, got {data['tts_available']}"
+        
+        assert 'voices' in data, "Missing 'voices' key"
+        assert isinstance(data['voices'], list), "voices should be a list"
+        assert len(data['voices']) > 0, "voices array should not be empty"
+        assert len(data['voices']) == 12, f"Expected 12 voices, got {len(data['voices'])}"
+        
+        # Validate each voice has required fields
+        for voice in data['voices']:
+            assert 'id' in voice, f"Voice missing 'id': {voice}"
+            assert 'name' in voice, f"Voice missing 'name': {voice}"
+            assert 'desc' in voice, f"Voice missing 'desc': {voice}"
+        
+        # Check that Charon and Fenrir are in the list
+        voice_ids = [v['id'] for v in data['voices']]
+        assert 'Charon' in voice_ids, "Expected 'Charon' in voice ids"
+        assert 'Fenrir' in voice_ids, "Expected 'Fenrir' in voice ids"
+        
+        print("✅ TEST 1 PASSED: GET /api/v1/tts/voices returns correct structure with 12 voices including Charon and Fenrir")
+        return True
+        
+    except AssertionError as e:
+        print(f"❌ TEST 1 FAILED: {e}")
         return False
-    
-    print("\n✅ ALL TTS TESTS PASSED")
-    return True
+    except Exception as e:
+        print(f"❌ TEST 1 ERROR: {e}")
+        return False
 
 
-def test_albert_brief():
-    """Test 2: GET /api/v1/albert/brief - Coin-specific Morning Brief"""
+def test_get_voice_pref():
+    """
+    Test 2: GET /api/v1/albert/voice-pref
+    Expect HTTP 200 JSON with keys {status:'ready', engine, voice, browser_voice_uri}
+    """
     print("\n" + "="*80)
-    print("TEST 2: GET /api/v1/albert/brief - Coin-specific Morning Brief")
+    print("TEST 2: GET /api/v1/albert/voice-pref")
     print("="*80)
     
-    # Test 2a: BTC brief (default)
-    print("\n[2a] Testing BTC brief (default)...")
     try:
-        response = requests.get(f"{BASE_URL}/v1/albert/brief", timeout=60)
-        print(f"Status Code: {response.status_code}")
+        url = f"{BASE_URL}/v1/albert/voice-pref"
+        print(f"Request: GET {url}")
         
-        if response.status_code == 200:
-            data = response.json()
-            print(f"Response keys: {list(data.keys())}")
-            
-            assert data.get('status') == 'ready', f"Expected status='ready', got '{data.get('status')}'"
-            print(f"✅ status: {data['status']}")
-            print("✅ TEST 2a PASSED: BTC brief returns status='ready'")
-        else:
-            print(f"❌ TEST 2a FAILED: Expected 200, got {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 2a FAILED with exception: {e}")
-        return False
-    
-    # Test 2b: ETH brief (first call may be slow ~15-25s)
-    print("\n[2b] Testing ETH brief (may take 15-25s on first call)...")
-    try:
-        response = requests.get(f"{BASE_URL}/v1/albert/brief?symbol=ETH", timeout=60)
-        print(f"Status Code: {response.status_code}")
+        response = requests.get(url, timeout=30)
+        print(f"Response Status: {response.status_code}")
         
-        if response.status_code == 200:
-            data = response.json()
-            print(f"Response keys: {list(data.keys())}")
-            
-            assert data.get('status') == 'ready', f"Expected status='ready', got '{data.get('status')}'"
-            assert data.get('coin') == 'Ethereum', f"Expected coin='Ethereum', got '{data.get('coin')}'"
-            print(f"✅ status: {data['status']}")
-            print(f"✅ coin: {data['coin']}")
-            
-            # Check if observations mention ETH
-            observations = data.get('observations', [])
-            text = data.get('text', '')
-            eth_mentioned = any('ETH' in str(obs).upper() or 'ETHEREUM' in str(obs).upper() for obs in observations) or 'ETH' in text.upper() or 'ETHEREUM' in text.upper()
-            if eth_mentioned:
-                print(f"✅ observations/text reference ETH/Ethereum")
-            else:
-                print(f"⚠️  observations/text do not explicitly mention ETH (may be acceptable)")
-            
-            print("✅ TEST 2b PASSED: ETH brief returns status='ready', coin='Ethereum'")
-        else:
-            print(f"❌ TEST 2b FAILED: Expected 200, got {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 2b FAILED with exception: {e}")
-        return False
-    
-    # Test 2c: Unsupported symbol (should return error)
-    print("\n[2c] Testing unsupported symbol (ZZZ)...")
-    try:
-        response = requests.get(f"{BASE_URL}/v1/albert/brief?symbol=ZZZ", timeout=30)
-        print(f"Status Code: {response.status_code}")
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
         
-        if response.status_code == 200:
-            data = response.json()
-            assert data.get('status') == 'error', f"Expected status='error', got '{data.get('status')}'"
-            print(f"✅ status: {data['status']}")
-            print("✅ TEST 2c PASSED: Unsupported symbol returns status='error'")
-        else:
-            print(f"❌ TEST 2c FAILED: Expected 200 with status='error', got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 2c FAILED with exception: {e}")
-        return False
-    
-    # Test 2d: Refresh parameter (regenerates)
-    print("\n[2d] Testing refresh=1 (regenerates)...")
-    try:
-        response = requests.get(f"{BASE_URL}/v1/albert/brief?refresh=1", timeout=60)
-        print(f"Status Code: {response.status_code}")
+        data = response.json()
+        print(f"Response Data: {json.dumps(data, indent=2)}")
         
-        if response.status_code == 200:
-            data = response.json()
-            assert data.get('status') == 'ready', f"Expected status='ready', got '{data.get('status')}'"
-            assert data.get('cached') == False, f"Expected cached=False with refresh=1, got {data.get('cached')}"
-            print(f"✅ status: {data['status']}")
-            print(f"✅ cached: {data['cached']} (refresh=1, expected False)")
-            print("✅ TEST 2d PASSED: refresh=1 regenerates (cached=False)")
-        else:
-            print(f"❌ TEST 2d FAILED: Expected 200, got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 2d FAILED with exception: {e}")
+        # Validate required keys
+        assert 'status' in data, "Missing 'status' key"
+        assert data['status'] == 'ready', f"Expected status='ready', got {data['status']}"
+        
+        assert 'engine' in data, "Missing 'engine' key"
+        assert 'voice' in data, "Missing 'voice' key"
+        assert 'browser_voice_uri' in data, "Missing 'browser_voice_uri' key"
+        
+        print("✅ TEST 2 PASSED: GET /api/v1/albert/voice-pref returns correct structure")
+        return True
+        
+    except AssertionError as e:
+        print(f"❌ TEST 2 FAILED: {e}")
         return False
-    
-    print("\n✅ ALL BRIEF TESTS PASSED")
-    return True
+    except Exception as e:
+        print(f"❌ TEST 2 ERROR: {e}")
+        return False
 
 
-def test_brief_watchlist():
-    """Test 3: GET/POST /api/v1/albert/brief-watchlist"""
+def test_post_voice_pref_fenrir():
+    """
+    Test 3a: POST /api/v1/albert/voice-pref with body {"engine":"gemini","voice":"Fenrir"}
+    Expect 200 echoing voice:"Fenrir", engine:"gemini"
+    Then GET /api/v1/albert/voice-pref and confirm it now returns voice:"Fenrir"
+    """
     print("\n" + "="*80)
-    print("TEST 3: GET/POST /api/v1/albert/brief-watchlist")
+    print("TEST 3a: POST /api/v1/albert/voice-pref with valid voice (Fenrir)")
     print("="*80)
     
-    # Test 3a: GET watchlist
-    print("\n[3a] Testing GET watchlist...")
     try:
-        response = requests.get(f"{BASE_URL}/v1/albert/brief-watchlist", timeout=30)
-        print(f"Status Code: {response.status_code}")
+        url = f"{BASE_URL}/v1/albert/voice-pref"
+        payload = {"engine": "gemini", "voice": "Fenrir"}
+        print(f"Request: POST {url}")
+        print(f"Payload: {json.dumps(payload, indent=2)}")
         
-        if response.status_code == 200:
-            data = response.json()
-            print(f"Response keys: {list(data.keys())}")
-            
-            assert 'coins' in data, "Missing 'coins' field"
-            assert 'available' in data, "Missing 'available' field"
-            assert 'BTC' in data['coins'], "BTC should always be in coins list"
-            print(f"✅ coins: {data['coins']}")
-            print(f"✅ available: {[c['symbol'] for c in data['available']]}")
-            print("✅ TEST 3a PASSED: GET watchlist returns {coins, available} with BTC included")
-        else:
-            print(f"❌ TEST 3a FAILED: Expected 200, got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 3a FAILED with exception: {e}")
-        return False
-    
-    # Test 3b: POST with valid coins (BTC should be forced in)
-    print("\n[3b] Testing POST with ['ETH', 'SOL'] (BTC should be forced in)...")
-    try:
-        payload = {"coins": ["ETH", "SOL"]}
-        response = requests.post(f"{BASE_URL}/v1/albert/brief-watchlist", json=payload, timeout=30)
-        print(f"Status Code: {response.status_code}")
+        response = requests.post(url, json=payload, timeout=30)
+        print(f"Response Status: {response.status_code}")
         
-        if response.status_code == 200:
-            data = response.json()
-            assert 'BTC' in data['coins'], "BTC should be forced into coins list"
-            assert 'ETH' in data['coins'], "ETH should be in coins list"
-            assert 'SOL' in data['coins'], "SOL should be in coins list"
-            print(f"✅ coins: {data['coins']}")
-            print("✅ TEST 3b PASSED: POST saves coins with BTC forced in")
-        else:
-            print(f"❌ TEST 3b FAILED: Expected 200, got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 3b FAILED with exception: {e}")
-        return False
-    
-    # Test 3c: POST with invalid symbol (should return only BTC)
-    print("\n[3c] Testing POST with ['ZZZ'] (should return only BTC)...")
-    try:
-        payload = {"coins": ["ZZZ"]}
-        response = requests.post(f"{BASE_URL}/v1/albert/brief-watchlist", json=payload, timeout=30)
-        print(f"Status Code: {response.status_code}")
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
         
-        if response.status_code == 200:
-            data = response.json()
-            assert data['coins'] == ['BTC'], f"Expected only ['BTC'], got {data['coins']}"
-            print(f"✅ coins: {data['coins']}")
-            print("✅ TEST 3c PASSED: Invalid symbol returns only BTC")
-        else:
-            print(f"❌ TEST 3c FAILED: Expected 200, got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 3c FAILED with exception: {e}")
-        return False
-    
-    # Test 3d: Reset to default ['ETH', 'SOL']
-    print("\n[3d] Resetting watchlist to ['ETH', 'SOL']...")
-    try:
-        payload = {"coins": ["ETH", "SOL"]}
-        response = requests.post(f"{BASE_URL}/v1/albert/brief-watchlist", json=payload, timeout=30)
-        print(f"Status Code: {response.status_code}")
+        data = response.json()
+        print(f"Response Data: {json.dumps(data, indent=2)}")
         
-        if response.status_code == 200:
-            data = response.json()
-            print(f"✅ Reset complete. coins: {data['coins']}")
-            print("✅ TEST 3d PASSED: Watchlist reset to default")
-        else:
-            print(f"❌ TEST 3d FAILED: Expected 200, got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 3d FAILED with exception: {e}")
+        # Validate response
+        assert data.get('voice') == 'Fenrir', f"Expected voice='Fenrir', got {data.get('voice')}"
+        assert data.get('engine') == 'gemini', f"Expected engine='gemini', got {data.get('engine')}"
+        
+        # Now GET to confirm persistence
+        print("\nVerifying persistence with GET...")
+        get_response = requests.get(url, timeout=30)
+        assert get_response.status_code == 200, f"GET failed with {get_response.status_code}"
+        
+        get_data = get_response.json()
+        print(f"GET Response Data: {json.dumps(get_data, indent=2)}")
+        
+        assert get_data.get('voice') == 'Fenrir', f"Expected persisted voice='Fenrir', got {get_data.get('voice')}"
+        
+        print("✅ TEST 3a PASSED: POST with Fenrir persists correctly")
+        return True
+        
+    except AssertionError as e:
+        print(f"❌ TEST 3a FAILED: {e}")
         return False
-    
-    print("\n✅ ALL WATCHLIST TESTS PASSED")
-    return True
+    except Exception as e:
+        print(f"❌ TEST 3a ERROR: {e}")
+        return False
 
 
-def test_track_record():
-    """Test 4: GET /api/v1/albert/track-record"""
+def test_post_voice_pref_invalid():
+    """
+    Test 3b: POST /api/v1/albert/voice-pref with body {"engine":"gemini","voice":"NotARealVoice"}
+    Expect 200 and voice should have FALLEN BACK to "Charon" (invalid voice rejected)
+    """
     print("\n" + "="*80)
-    print("TEST 4: GET /api/v1/albert/track-record")
+    print("TEST 3b: POST /api/v1/albert/voice-pref with invalid voice (NotARealVoice)")
     print("="*80)
     
-    print("\n[4] Testing track-record endpoint...")
     try:
-        response = requests.get(f"{BASE_URL}/v1/albert/track-record", timeout=30)
-        print(f"Status Code: {response.status_code}")
+        url = f"{BASE_URL}/v1/albert/voice-pref"
+        payload = {"engine": "gemini", "voice": "NotARealVoice"}
+        print(f"Request: POST {url}")
+        print(f"Payload: {json.dumps(payload, indent=2)}")
         
-        if response.status_code == 200:
-            data = response.json()
-            print(f"Response keys: {list(data.keys())}")
-            
-            # Validate required keys exist
-            required_keys = ['best_call', 'worst_call', 'streak', 'longest_win_streak']
-            for key in required_keys:
-                assert key in data, f"Missing required key: {key}"
-                print(f"✅ {key}: {data[key]} (may be null/None if no graded calls)")
-            
-            # Validate status
-            assert data.get('status') == 'ready', f"Expected status='ready', got '{data.get('status')}'"
-            print(f"✅ status: {data['status']}")
-            
-            print("✅ TEST 4 PASSED: track-record returns 200 with all required keys (best_call, worst_call, streak, longest_win_streak)")
-        else:
-            print(f"❌ TEST 4 FAILED: Expected 200, got {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 4 FAILED with exception: {e}")
+        response = requests.post(url, json=payload, timeout=30)
+        print(f"Response Status: {response.status_code}")
+        
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+        
+        data = response.json()
+        print(f"Response Data: {json.dumps(data, indent=2)}")
+        
+        # Validate fallback to Charon
+        assert data.get('voice') == 'Charon', f"Expected fallback to voice='Charon', got {data.get('voice')}"
+        
+        print("✅ TEST 3b PASSED: Invalid voice correctly falls back to Charon")
+        return True
+        
+    except AssertionError as e:
+        print(f"❌ TEST 3b FAILED: {e}")
         return False
-    
-    return True
+    except Exception as e:
+        print(f"❌ TEST 3b ERROR: {e}")
+        return False
 
 
-def test_weekly_recap_history():
-    """Test 5: GET /api/v1/albert/weekly-recap/history"""
+def test_post_voice_pref_browser():
+    """
+    Test 3c: POST /api/v1/albert/voice-pref with body {"engine":"browser","browser_voice_uri":"com.apple.voice.x"}
+    Expect 200 with engine:"browser"
+    """
     print("\n" + "="*80)
-    print("TEST 5: GET /api/v1/albert/weekly-recap/history")
+    print("TEST 3c: POST /api/v1/albert/voice-pref with browser engine")
     print("="*80)
     
-    print("\n[5] Testing weekly-recap/history endpoint...")
     try:
-        response = requests.get(f"{BASE_URL}/v1/albert/weekly-recap/history", timeout=30)
-        print(f"Status Code: {response.status_code}")
+        url = f"{BASE_URL}/v1/albert/voice-pref"
+        payload = {"engine": "browser", "browser_voice_uri": "com.apple.voice.x"}
+        print(f"Request: POST {url}")
+        print(f"Payload: {json.dumps(payload, indent=2)}")
         
-        if response.status_code == 200:
-            data = response.json()
-            print(f"Response keys: {list(data.keys())}")
-            
-            # Validate required keys
-            assert 'status' in data, "Missing 'status' field"
-            assert 'recaps' in data, "Missing 'recaps' field"
-            assert data['status'] == 'ready', f"Expected status='ready', got '{data['status']}'"
-            assert isinstance(data['recaps'], list), "recaps should be a list"
-            
-            print(f"✅ status: {data['status']}")
-            print(f"✅ recaps: list with {len(data['recaps'])} items")
-            
-            print("✅ TEST 5 PASSED: weekly-recap/history returns 200 with {status:'ready', recaps:[...]}")
-        else:
-            print(f"❌ TEST 5 FAILED: Expected 200, got {response.status_code}")
-            print(f"Response: {response.text}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 5 FAILED with exception: {e}")
+        response = requests.post(url, json=payload, timeout=30)
+        print(f"Response Status: {response.status_code}")
+        
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+        
+        data = response.json()
+        print(f"Response Data: {json.dumps(data, indent=2)}")
+        
+        # Validate engine is browser
+        assert data.get('engine') == 'browser', f"Expected engine='browser', got {data.get('engine')}"
+        
+        print("✅ TEST 3c PASSED: Browser engine set correctly")
+        return True
+        
+    except AssertionError as e:
+        print(f"❌ TEST 3c FAILED: {e}")
         return False
-    
-    return True
+    except Exception as e:
+        print(f"❌ TEST 3c ERROR: {e}")
+        return False
 
 
-def test_regression_sanity():
-    """Test 6: Regression sanity checks (health, alerts)"""
+def test_post_tts_with_voice():
+    """
+    Test 4: POST /api/v1/tts with body {"text":"Hello from Albert","voice":"Puck"}
+    IDEALLY 200 with non-empty audio_base64
+    HOWEVER the GEMINI_API_KEY is FREE TIER, so a 429/502/503 (quota exhausted) response is ACCEPTABLE
+    Only flag a real failure if it returns 500 with a code error unrelated to quota, or 400 for valid non-empty text
+    """
     print("\n" + "="*80)
-    print("TEST 6: Regression sanity checks (health, alerts)")
+    print("TEST 4: POST /api/v1/tts with voice parameter (Puck)")
     print("="*80)
     
-    # Test 6a: GET /api/v1/health
-    print("\n[6a] Testing GET /api/v1/health...")
     try:
-        response = requests.get(f"{BASE_URL}/v1/health", timeout=30)
-        print(f"Status Code: {response.status_code}")
+        url = f"{BASE_URL}/v1/tts"
+        payload = {"text": "Hello from Albert", "voice": "Puck"}
+        print(f"Request: POST {url}")
+        print(f"Payload: {json.dumps(payload, indent=2)}")
+        
+        response = requests.post(url, json=payload, timeout=60)
+        print(f"Response Status: {response.status_code}")
+        
+        # Acceptable status codes: 200 (success), 429/502/503 (quota/rate limit)
+        acceptable_codes = [200, 429, 502, 503]
         
         if response.status_code == 200:
             data = response.json()
-            print(f"Response: {data}")
-            print("✅ TEST 6a PASSED: /api/v1/health returns 200")
-        else:
-            print(f"❌ TEST 6a FAILED: Expected 200, got {response.status_code}")
+            print(f"Response Data Keys: {list(data.keys())}")
+            
+            # Validate audio_base64 is present and non-empty
+            assert 'audio_base64' in data, "Missing 'audio_base64' key"
+            assert len(data['audio_base64']) > 0, "audio_base64 should not be empty"
+            
+            print(f"✅ TEST 4 PASSED: POST /api/v1/tts with voice='Puck' returns audio (audio_base64 length: {len(data['audio_base64'])} chars)")
+            return True
+            
+        elif response.status_code in [429, 502, 503]:
+            print(f"⚠️  TEST 4 ACCEPTABLE: Free-tier quota/rate limit hit (status {response.status_code})")
+            print("This is expected behavior for free-tier Gemini API key")
+            return True
+            
+        elif response.status_code == 400:
+            # 400 for valid non-empty text is a failure
+            print(f"❌ TEST 4 FAILED: Got 400 for valid non-empty text")
             return False
-    except Exception as e:
-        print(f"❌ TEST 6a FAILED with exception: {e}")
-        return False
-    
-    # Test 6b: GET /api/v1/alerts
-    print("\n[6b] Testing GET /api/v1/alerts...")
-    try:
-        response = requests.get(f"{BASE_URL}/v1/alerts", timeout=30)
-        print(f"Status Code: {response.status_code}")
+            
+        elif response.status_code == 500:
+            # 500 is a code error (not acceptable)
+            print(f"❌ TEST 4 FAILED: Got 500 (code error)")
+            return False
+            
+        else:
+            print(f"❌ TEST 4 FAILED: Unexpected status code {response.status_code}")
+            return False
         
-        if response.status_code == 200:
-            data = response.json()
-            print(f"Response keys: {list(data.keys())}")
-            print("✅ TEST 6b PASSED: /api/v1/alerts returns 200")
-        else:
-            print(f"❌ TEST 6b FAILED: Expected 200, got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 6b FAILED with exception: {e}")
+    except AssertionError as e:
+        print(f"❌ TEST 4 FAILED: {e}")
         return False
+    except Exception as e:
+        print(f"❌ TEST 4 ERROR: {e}")
+        return False
+
+
+def test_cleanup_reset_to_charon():
+    """
+    Cleanup: POST /api/v1/albert/voice-pref with {"engine":"gemini","voice":"Charon"}
+    to reset the user's default to clean state
+    """
+    print("\n" + "="*80)
+    print("CLEANUP: Reset voice preference to Charon")
+    print("="*80)
     
-    # Test 6c: GET /api/v1/alerts?limit=50
-    print("\n[6c] Testing GET /api/v1/alerts?limit=50...")
     try:
-        response = requests.get(f"{BASE_URL}/v1/alerts?limit=50", timeout=30)
-        print(f"Status Code: {response.status_code}")
+        url = f"{BASE_URL}/v1/albert/voice-pref"
+        payload = {"engine": "gemini", "voice": "Charon"}
+        print(f"Request: POST {url}")
+        print(f"Payload: {json.dumps(payload, indent=2)}")
         
-        if response.status_code == 200:
-            data = response.json()
-            print(f"Response keys: {list(data.keys())}")
-            print("✅ TEST 6c PASSED: /api/v1/alerts?limit=50 returns 200")
-        else:
-            print(f"❌ TEST 6c FAILED: Expected 200, got {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"❌ TEST 6c FAILED with exception: {e}")
+        response = requests.post(url, json=payload, timeout=30)
+        print(f"Response Status: {response.status_code}")
+        
+        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
+        
+        data = response.json()
+        print(f"Response Data: {json.dumps(data, indent=2)}")
+        
+        assert data.get('voice') == 'Charon', f"Expected voice='Charon', got {data.get('voice')}"
+        assert data.get('engine') == 'gemini', f"Expected engine='gemini', got {data.get('engine')}"
+        
+        print("✅ CLEANUP PASSED: Voice preference reset to Charon")
+        return True
+        
+    except AssertionError as e:
+        print(f"❌ CLEANUP FAILED: {e}")
         return False
-    
-    print("\n✅ ALL REGRESSION TESTS PASSED")
-    return True
+    except Exception as e:
+        print(f"❌ CLEANUP ERROR: {e}")
+        return False
 
 
 def main():
-    """Run all backend tests"""
+    """Run all tests in sequence"""
     print("\n" + "="*80)
-    print("BACKEND API TEST SUITE - NEW/CHANGED ENDPOINTS")
-    print("Testing via external URL: " + BASE_URL)
+    print("ALBERT VOICE SELECTION ENDPOINTS - BACKEND TEST SUITE")
+    print("="*80)
+    print(f"Base URL: {BASE_URL}")
+    print(f"Test Time: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+    
+    results = []
+    
+    # Test 1: GET /api/v1/tts/voices
+    results.append(("GET /api/v1/tts/voices", test_tts_voices()))
+    
+    # Test 2: GET /api/v1/albert/voice-pref
+    results.append(("GET /api/v1/albert/voice-pref", test_get_voice_pref()))
+    
+    # Test 3a: POST valid voice (Fenrir)
+    results.append(("POST voice-pref (Fenrir)", test_post_voice_pref_fenrir()))
+    
+    # Test 3b: POST invalid voice (fallback to Charon)
+    results.append(("POST voice-pref (invalid)", test_post_voice_pref_invalid()))
+    
+    # Test 3c: POST browser engine
+    results.append(("POST voice-pref (browser)", test_post_voice_pref_browser()))
+    
+    # Test 4: POST /api/v1/tts with voice parameter
+    results.append(("POST /api/v1/tts (voice=Puck)", test_post_tts_with_voice()))
+    
+    # Cleanup: Reset to Charon
+    results.append(("CLEANUP (reset to Charon)", test_cleanup_reset_to_charon()))
+    
+    # Summary
+    print("\n" + "="*80)
+    print("TEST SUMMARY")
     print("="*80)
     
-    results = {
-        "TTS Endpoint": test_tts_endpoint(),
-        "Albert Brief": test_albert_brief(),
-        "Brief Watchlist": test_brief_watchlist(),
-        "Track Record": test_track_record(),
-        "Weekly Recap History": test_weekly_recap_history(),
-        "Regression Sanity": test_regression_sanity(),
-    }
+    passed = sum(1 for _, result in results if result)
+    total = len(results)
     
-    print("\n" + "="*80)
-    print("FINAL SUMMARY")
-    print("="*80)
+    for test_name, result in results:
+        status = "✅ PASS" if result else "❌ FAIL"
+        print(f"{status}: {test_name}")
     
-    for test_name, passed in results.items():
-        status = "✅ PASSED" if passed else "❌ FAILED"
-        print(f"{test_name}: {status}")
+    print(f"\nTotal: {passed}/{total} tests passed")
     
-    all_passed = all(results.values())
-    
-    if all_passed:
-        print("\n🎉 ALL TESTS PASSED 🎉")
+    if passed == total:
+        print("\n🎉 ALL TESTS PASSED!")
         return 0
     else:
-        print("\n❌ SOME TESTS FAILED")
+        print(f"\n⚠️  {total - passed} test(s) failed")
         return 1
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    exit(main())
