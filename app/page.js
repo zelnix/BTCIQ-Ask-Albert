@@ -3027,18 +3027,13 @@ export default function DashboardPage() {
   // Keep the Alerts feed scoped to the coin the user is viewing (they can still switch to All/other coins in the Alerts screen).
   useEffect(() => { setAlertFilter(symbol); }, [symbol]);
 
-  // Reflect the selected coin in the browser tab (favicon + title).
+  // Reflect the selected coin's price in the browser tab title only.
+  // (The favicon stays the Ask Albert app icon — we no longer swap it per coin.)
   useEffect(() => {
     const coin = coins.find((c) => c.symbol === symbol);
     const name = (coin && coin.name) || (data && data.coin_name) || symbol;
     const price = ticker && ticker.price;
     document.title = price ? `${symbol} ${fmtUsd(price)} · Ask Albert` : `${name} · Ask Albert`;
-    try {
-      const href = `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/${symbol.toLowerCase()}.png`;
-      const links = document.querySelectorAll("link[rel~='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']");
-      if (links.length) { links.forEach((l) => { l.href = href; }); }
-      else { const l = document.createElement('link'); l.rel = 'icon'; l.href = href; document.head.appendChild(l); }
-    } catch (e) { /* noop */ }
   }, [symbol, ticker, coins, data]);
 
 
