@@ -54,7 +54,7 @@ from config import (
     bitmark_col, smart_alerts_col, audit_col, insights_col, compare_col, coin_dash_col,
     coin_news_col, coin_dom_col, markets_col, analogs_col, glassnode_col,
     onchain_col, lev_col, misc_col, usage_col, etf_col, whale_col, whale_hist_col, whale_tx_col,
-    GLASSNODE_API_KEY, ADMIN_PASSCODE, EMERGENT_LLM_KEY, GEMINI_MODEL, CHAT_MODEL, ALBERT_CHAT_MODEL,
+    GLASSNODE_API_KEY, ADMIN_PASSCODE, GEMINI_MODEL, CHAT_MODEL, ALBERT_CHAT_MODEL,
     GEMINI_API_KEY, GEMINI_TTS_MODEL, GEMINI_TTS_VOICE,
     RESEND_API_KEY, RESEND_FROM, DIGEST_TZ, DIGEST_HOUR, DIGEST_MINUTE,
     email_recipients_col, email_log_col, email_settings_col,
@@ -74,11 +74,96 @@ _bitmark_last_manual = {'ts': 0.0}
 _CORRIDOR_WIDEN = {}  # horizon label -> q_hat widen factor (self-heals corridors toward 90% coverage)
 
 try:
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
     import feedparser
-    _HAS_LLM = True
+    _HAS_FEEDPARSER = True
 except Exception:  # noqa
-    _HAS_LLM = False
+    _HAS_FEEDPARSER = False
+
+# =====================================================================
+# LLM BACKEND — direct Google Gemini via the official google-genai SDK.
+# Previously all LLM traffic was routed through emergentintegrations; it now
+# goes straight to Gemini keyed on GEMINI_API_KEY. A thin drop-in shim keeps
+# every original LlmChat(...).with_model().with_params().with_tools()
+# .send_message()/.send_message_with_tools() call site working unchanged.
+# Stateless single-turn: callers assemble prior turns into the prompt.
+# =====================================================================
+# Legacy readiness flag (kept name-compatible across the file) now reflects the
+# Gemini key — all `if LLM_READY_KEY ...` gates key off Gemini availability.
+LLM_READY_KEY = GEMINI_API_KEY
+_HAS_LLM = bool(GEMINI_API_KEY)
+
+
+class UserMessage:
+    """Minimal stand-in for emergentintegrations' UserMessage."""
+
+    def __init__(self, text=''):
+        self.text = text or ''
+
+
+class _GeminiReply:
+    """Reply wrapper exposing .content/.text (consumed by _extract) and .raw
+    (the raw google-genai response, used for grounding-source extraction)."""
+
+    def __init__(self, text, raw):
+        self.content = text
+        self.text = text
+        self.raw = raw
+
+
+class LlmChat:
+    """Drop-in replacement for emergentintegrations.LlmChat backed by google-genai.
+    Stateless single-turn — history is assembled into the prompt by callers."""
+
+    def __init__(self, api_key=None, session_id=None, system_message=None):
+        self._system = system_message
+        self._model = None
+        self._temp = None
+        self._max = None
+        self._tools = False
+
+    def with_model(self, provider, model):
+        self._model = model
+        return self
+
+    def with_params(self, temperature=None, max_tokens=None, **kwargs):
+        self._temp = temperature
+        self._max = max_tokens
+        return self
+
+    def with_tools(self, tools):
+        # Only Google Search grounding is used anywhere in this app.
+        self._tools = bool(tools)
+        return self
+
+    def _sync_generate(self, text):
+        from google.genai import types
+        model = self._model or CHAT_MODEL
+        cfg = {}
+        if self._system:
+            cfg['system_instruction'] = self._system
+        if self._max:
+            cfg['max_output_tokens'] = int(self._max)
+        if self._temp is not None:
+            cfg['temperature'] = self._temp
+        if self._tools:
+            cfg['tools'] = [types.Tool(google_search=types.GoogleSearch())]
+            # Google Search grounding is supported on Flash, not the Pro preview —
+            # route grounded requests to Flash to avoid tool-unsupported errors.
+            if 'pro' in (model or '').lower():
+                model = CHAT_MODEL
+        client = _get_genai_client()
+        resp = client.models.generate_content(
+            model=model, contents=(text or ''),
+            config=types.GenerateContentConfig(**cfg))
+        return _GeminiReply((getattr(resp, 'text', '') or '').strip(), resp)
+
+    async def send_message(self, user_message):
+        text = getattr(user_message, 'text', None) or str(user_message)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._sync_generate, text)
+
+    async def send_message_with_tools(self, user_message):
+        return await self.send_message(user_message)
 
 # in-memory ticker cache (avoid hammering the exchange on every poll)
 _ticker_cache = {}  # symbol -> {'data':..., 'ts':...}
@@ -780,7 +865,7 @@ NEWS_SYSTEM = (
 
 
 def generate_news_summary(headline, text):
-    chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'news-{abs(hash(headline)) % 99999}',
+    chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'news-{abs(hash(headline)) % 99999}',
                     system_message=NEWS_SYSTEM)
             .with_model('gemini', GEMINI_MODEL)
             .with_params(temperature=0.0, max_tokens=1200))
@@ -854,7 +939,7 @@ def fetch_news():
                     'published': m['published'], 'title': m['title']} for m in members]
         n_src = len(set(m['source'] for m in members))
         ai = None
-        if EMERGENT_LLM_KEY and _HAS_LLM:
+        if LLM_READY_KEY and _HAS_LLM:
             try:
                 ai = generate_news_summary(rep['title'], rep['summary'] or rep['title'])
             except Exception:  # noqa
@@ -912,7 +997,7 @@ def fetch_news():
     }
     doc = {'id': str(uuid.uuid4()), 'created_at': datetime.datetime.utcnow().isoformat(),
            'cards': cards, 'briefing': briefing,
-           'model': (GEMINI_MODEL if (EMERGENT_LLM_KEY and _HAS_LLM) else 'rule-based')}
+           'model': (GEMINI_MODEL if (LLM_READY_KEY and _HAS_LLM) else 'rule-based')}
     try:
         fire_news_alerts(cards)
     except Exception:  # noqa
@@ -5353,7 +5438,7 @@ def analog_recap(date: str, price: float = None):
         cached = misc_col.find_one({'_id': key})
         if cached and cached.get('recap'):
             return {'date': date, 'recap': cached['recap'], 'cached': True}
-        if not EMERGENT_LLM_KEY:
+        if not LLM_READY_KEY:
             return {'date': date, 'recap': None, 'error': 'LLM not configured'}
         sys = ("You are Albert, a concise market historian. Using live web search, recap what was "
                "actually happening in Bitcoin and broader markets around the given date. Reply in 2-4 "
@@ -5363,7 +5448,7 @@ def analog_recap(date: str, price: float = None):
         q = f"What was happening in Bitcoin and macro markets around {date}?"
         if price:
             q += f" (BTC traded near ${round(price):,} at that time.)"
-        chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'analog-{date}', system_message=sys)
+        chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'analog-{date}', system_message=sys)
                 .with_model('gemini', ALBERT_CHAT_MODEL)
                 .with_params(temperature=0.3, max_tokens=3000))
         text = ''
@@ -5693,8 +5778,8 @@ def admin_overview():
 
     # ---- integrations (no secrets exposed) ----
     integrations = [
-        {'name': 'Gemini (' + str(CHAT_MODEL) + ')', 'category': 'LLM / Albert', 'auth': 'Emergent LLM key',
-         'status': 'Active' if (EMERGENT_LLM_KEY and _HAS_LLM) else 'Inactive', 'cost': 'Metered (Emergent key)'},
+        {'name': 'Gemini (' + str(CHAT_MODEL) + ')', 'category': 'LLM / Albert', 'auth': 'Gemini API key',
+         'status': 'Active' if (LLM_READY_KEY and _HAS_LLM) else 'Inactive', 'cost': 'Metered (Gemini API key)'},
         {'name': 'OKX public API', 'category': 'Derivatives / Leverage', 'auth': 'Keyless',
          'status': 'Active', 'cost': 'Free'},
         {'name': 'mempool.space', 'category': 'Whales / Network health', 'auth': 'Keyless',
@@ -5745,19 +5830,20 @@ def admin_overview():
         'runs_logged': runs_col.count_documents({}),
     }
     costs = {
-        'note': ('Free/keyless feeds cost $0. The only metered cost is the LLM (Gemini via the Emergent '
-                 'LLM key). The figures below are ROUGH estimates from call counts — NOT billed amounts. '
-                 'See your Emergent dashboard for the exact credit balance & spend.'),
+        'note': ('Free/keyless feeds cost $0. The only metered cost is the LLM (Gemini, called '
+                 'directly via your Google AI Studio API key). The figures below are ROUGH estimates '
+                 'from call counts — NOT billed amounts. See your Google AI Studio / Cloud billing '
+                 'dashboard for exact usage & spend.'),
         'emergent': {
-            'service': 'Emergent Universal LLM key',
+            'service': 'Google Gemini API (google-genai SDK)',
             'model': str(CHAT_MODEL),
-            'status': 'Active' if (EMERGENT_LLM_KEY and _HAS_LLM) else 'Inactive',
+            'status': 'Active' if (LLM_READY_KEY and _HAS_LLM) else 'Inactive',
             'llm_calls_total': llm_total,
             'llm_calls_today': llm_today,
             'est_per_call_usd': est_per_call_usd,
             'est_cost_total_usd': round(llm_total * est_per_call_usd, 2),
             'est_cost_today_usd': round(llm_today * est_per_call_usd, 2),
-            'billing_note': 'Estimate only — actual usage & remaining credits are shown in the Emergent dashboard.',
+            'billing_note': 'Estimate only — actual usage & spend are shown in your Google AI Studio / Cloud billing dashboard.',
         },
         'est_llm_cost_usd': round(llm_total * est_per_call_usd, 2),
         'est_llm_cost_today_usd': round(llm_today * est_per_call_usd, 2),
@@ -7033,38 +7119,30 @@ def _albert_answer(ctx, user_text, session_id, deep=False):
         return (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '').strip()
 
     def _extract_sources(reply):
-        """Pull the live web-search citations Gemini used (title + url)."""
+        """Pull the live web-search citations Gemini used (title + url) from the
+        google-genai response's grounding_metadata."""
         out, seen = [], set()
         try:
-            raw = getattr(reply, 'raw', None)
-            data = raw.model_dump() if hasattr(raw, 'model_dump') else {}
-        except Exception:  # noqa
-            data = {}
-        try:
-            anns = ((data.get('choices') or [{}])[0].get('message', {}) or {}).get('annotations') or []
-            for a in anns:
-                uc = (a or {}).get('url_citation') or {}
-                url, title = uc.get('url'), uc.get('title')
-                if url and url not in seen:
-                    seen.add(url); out.append({'title': title or url, 'url': url})
+            resp = getattr(reply, 'raw', None)
+            for cand in (getattr(resp, 'candidates', None) or []):
+                gm = getattr(cand, 'grounding_metadata', None)
+                if not gm:
+                    continue
+                for ch in (getattr(gm, 'grounding_chunks', None) or []):
+                    web = getattr(ch, 'web', None)
+                    url = getattr(web, 'uri', None) if web else None
+                    title = getattr(web, 'title', None) if web else None
+                    if url and url not in seen:
+                        seen.add(url)
+                        out.append({'title': title or url, 'url': url})
         except Exception:  # noqa
             pass
-        if not out:
-            try:
-                for g in (data.get('vertex_ai_grounding_metadata') or []):
-                    for ch in (g.get('groundingChunks') or []):
-                        web = ch.get('web') or {}
-                        url, title = web.get('uri'), web.get('title')
-                        if url and url not in seen:
-                            seen.add(url); out.append({'title': title or url, 'url': url})
-            except Exception:  # noqa
-                pass
         return out[:8]
 
     def _run(model, use_tools, timeout_s, max_toks):
         def _call():
             async def _go():
-                chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'askquant-{session_id}',
+                chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'askquant-{session_id}',
                                 system_message=CHAT_SYSTEM.format(ctx=ctx))
                         .with_model('gemini', model)
                         .with_params(temperature=0.4, max_tokens=max_toks))
@@ -7111,7 +7189,7 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
     sym = (payload.get('symbol') or 'BTC')
     if not message:
         return {'error': 'empty message', 'text': 'Please type a question.'}
-    if not (EMERGENT_LLM_KEY and _HAS_LLM):
+    if not (LLM_READY_KEY and _HAS_LLM):
         return {'error': 'llm_unconfigured',
                 'text': 'The Ask Quant chat model is not configured on this server.'}
     try:
@@ -7316,12 +7394,12 @@ CALL_EXTRACT_SYSTEM = (
 
 def _log_albert_call(session_id, symbol, question, answer):
     """Background self-check: parse Albert's own answer into a structured call and log it."""
-    if not (EMERGENT_LLM_KEY and _HAS_LLM):
+    if not (LLM_READY_KEY and _HAS_LLM):
         return
     try:
         def _call():
             async def _go():
-                chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'callx-{session_id}',
+                chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'callx-{session_id}',
                                 system_message=CALL_EXTRACT_SYSTEM)
                         .with_model('gemini', CHAT_MODEL).with_params(temperature=0.0, max_tokens=2000))
                 return await chat.send_message(UserMessage(text=f"Analyst answer:\n{answer[:2500]}"))
@@ -7714,7 +7792,7 @@ def albert_weekly_recap(refresh: bool = False):
                 return {'status': 'ready', 'text': cached.get('text', ''), 'created_at': cached.get('created_at'), 'cached': True}
         except Exception:  # noqa
             pass
-    if not (EMERGENT_LLM_KEY and _HAS_LLM):
+    if not (LLM_READY_KEY and _HAS_LLM):
         return {'status': 'unavailable', 'text': ''}
     # Build a compact performance digest from the last 7 days of calls.
     wk_ago = (now - datetime.timedelta(days=7)).isoformat()
@@ -7801,7 +7879,7 @@ def _generate_daily_brief(symbol):
     if doc:
         return (doc.get('take') or ''), (doc.get('coin') or coin_name)
     take = ''
-    if EMERGENT_LLM_KEY and _HAS_LLM:
+    if LLM_READY_KEY and _HAS_LLM:
         if is_btc:
             ctx, as_of = _brief_context()
             sys_msg = ALBERT_BRIEF_SYSTEM.format(ctx=ctx)
@@ -7811,7 +7889,7 @@ def _generate_daily_brief(symbol):
         if ctx.strip():
             def _call():
                 async def _go():
-                    chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'brief-{uuid.uuid4().hex[:8]}',
+                    chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'brief-{uuid.uuid4().hex[:8]}',
                                     system_message=sys_msg)
                             .with_model('gemini', CHAT_MODEL).with_params(temperature=0.4, max_tokens=6000))
                     return await chat.send_message(UserMessage(text=f"Write today's {coin_name} brief now."))
@@ -7991,7 +8069,7 @@ async def albert_insight(request: Request, section: str = 'overview', mode: str 
         cached = insights_col.find_one({'_id': cache_id}, {'_id': 0})
         if cached and cached.get('text'):
             return {'status': 'ready', 'section': section, 'mode': mode, 'text': cached['text'], 'model': cached.get('model'), 'generated_at': cached.get('created_at'), 'cached': True}
-    if not (EMERGENT_LLM_KEY and _HAS_LLM):
+    if not (LLM_READY_KEY and _HAS_LLM):
         return {'status': 'fallback', 'reason': 'llm_unconfigured'}
     # About to call the LLM (cache miss / refresh) — guard against cost abuse.
     if _rate_limited(request, 'albert_insight', per_min=20, per_day=400):
@@ -8166,7 +8244,7 @@ async def albert_insight(request: Request, section: str = 'overview', mode: str 
         # so retry a few times and keep the first complete-looking (or longest) answer.
         best = ''
         for _ in range(3):
-            chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'insight-{section}-{mode}-{uuid.uuid4().hex[:10]}',
+            chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'insight-{section}-{mode}-{uuid.uuid4().hex[:10]}',
                             system_message=sys_tmpl.format(focus=focus, ctx=ctx))
                     .with_model('gemini', CHAT_MODEL)
                     .with_params(temperature=0.4, max_tokens=8000))
@@ -8528,7 +8606,7 @@ def _fallback_strategy_draft(symbol, spot, goal=''):
 def _build_strategy_draft(symbol, goal=''):
     symbol = (symbol or 'BTC').upper()
     spot = _spot_price(symbol)
-    if not (EMERGENT_LLM_KEY and _HAS_LLM):
+    if not (LLM_READY_KEY and _HAS_LLM):
         return _fallback_strategy_draft(symbol, spot, goal)
     ctx = build_chat_context(symbol)
     coin = _strat_coin_name(symbol)
@@ -8538,7 +8616,7 @@ def _build_strategy_draft(symbol, goal=''):
 
     def _call():
         async def _go():
-            chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'strategy-{uuid.uuid4().hex[:8]}',
+            chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'strategy-{uuid.uuid4().hex[:8]}',
                             system_message=ALBERT_STRATEGY_SYSTEM)
                     .with_model('gemini', CHAT_MODEL).with_params(temperature=0.5, max_tokens=3000))
             return await chat.send_message(UserMessage(text=umsg))
@@ -9691,10 +9769,10 @@ async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain', 
             sys_msg = sys_prompt.format(ctx=ctx, coin=coin_name)
         if not ctx.strip():
             return {'status': 'computing'}
-        if not (EMERGENT_LLM_KEY and _HAS_LLM):
+        if not (LLM_READY_KEY and _HAS_LLM):
             return {'status': 'ready', 'cached': False, 'mode': mode, 'symbol': symbol, 'text': ctx,
                     'observations': [l for l in ctx.split('\n')][:5], 'take': '', 'as_of': as_of}
-        chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'brief-{uuid.uuid4().hex[:10]}',
+        chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'brief-{uuid.uuid4().hex[:10]}',
                         system_message=sys_msg)
                 .with_model('gemini', CHAT_MODEL).with_params(temperature=0.4, max_tokens=6000))
         reply = await chat.send_message(UserMessage(text=f"Write today's {coin_name} brief now."))
@@ -10092,7 +10170,7 @@ _coin_news_lock = threading.Lock()
 
 def generate_coin_news_summary(name, headline, text):
     sysmsg = NEWS_SYSTEM.replace('Bitcoin', name)
-    chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'coinnews-{abs(hash(headline)) % 99999}',
+    chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'coinnews-{abs(hash(headline)) % 99999}',
                     system_message=sysmsg)
             .with_model('gemini', GEMINI_MODEL)
             .with_params(temperature=0.0, max_tokens=1200))
@@ -10166,7 +10244,7 @@ def build_coin_news(symbol):
                     'published': m['published'], 'title': m['title']} for m in members]
         n_src = len(set(m['source'] for m in members))
         ai = None
-        if EMERGENT_LLM_KEY and _HAS_LLM:
+        if LLM_READY_KEY and _HAS_LLM:
             try:
                 ai = generate_coin_news_summary(name, rep['title'], rep['summary'] or rep['title'])
             except Exception:  # noqa
@@ -10222,7 +10300,7 @@ def build_coin_news(symbol):
     }
     doc = {'id': str(uuid.uuid4()), 'created_at': datetime.datetime.utcnow().isoformat(),
            'symbol': symbol, 'coin_name': name, 'cards': cards, 'briefing': briefing,
-           'model': (GEMINI_MODEL if (EMERGENT_LLM_KEY and _HAS_LLM) else 'rule-based')}
+           'model': (GEMINI_MODEL if (LLM_READY_KEY and _HAS_LLM) else 'rule-based')}
     return doc
 
 

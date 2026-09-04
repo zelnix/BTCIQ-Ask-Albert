@@ -2564,7 +2564,7 @@ function AdminSection() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {/* Emergent cost */}
           <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-            <h3 className="mb-3 flex items-center gap-1 font-semibold text-white">Emergent LLM Cost<InfoTip below text="Cost of the Gemini model calls made via your Emergent Universal LLM key. Figures are a rough estimate from call counts — exact spend is in your Emergent dashboard." /></h3>
+            <h3 className="mb-3 flex items-center gap-1 font-semibold text-white">Gemini LLM Cost<InfoTip below text="Cost of the Gemini model calls made directly via your Google AI Studio API key. Figures are a rough estimate from call counts — exact spend is in your Google AI Studio / Cloud billing dashboard." /></h3>
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div className="rounded border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">Model</div><div className="font-mono text-slate-200">{em.model}</div></div>
               <div className="rounded border border-slate-800 bg-slate-950/40 p-3"><div className="text-[11px] text-slate-500">Status</div><div className={`font-semibold ${stColor(em.status)}`}>{em.status}</div></div>
@@ -2603,7 +2603,7 @@ function AdminSection() {
             ))}</div>
           </Card>
         </div>
-        <p className="text-[11px] text-slate-600">As of {d.as_of ? new Date(d.as_of).toLocaleString() : '—'}. Costs for free/keyless feeds are $0; the only metered cost is the Emergent LLM key.</p>
+        <p className="text-[11px] text-slate-600">As of {d.as_of ? new Date(d.as_of).toLocaleString() : '—'}. Costs for free/keyless feeds are $0; the only metered cost is the Gemini API key.</p>
       </>)}
     </div>
   );

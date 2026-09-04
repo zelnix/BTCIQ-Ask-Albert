@@ -88,11 +88,11 @@ GLASSNODE_API_KEY = os.environ.get('GLASSNODE_API_KEY')
 ADMIN_PASSCODE = os.environ.get('ADMIN_PASSCODE', '')
 
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
-GEMINI_MODEL = 'gemini-2.5-flash'
-# Ask Quant conversational model (Gemini 3 Flash via Emergent gateway, verified available)
+GEMINI_MODEL = os.environ.get('GEMINI_MODEL', 'gemini-3-flash-preview')
+# Ask Quant conversational model — Gemini 3 Flash (direct google-genai SDK)
 CHAT_MODEL = os.environ.get('CHAT_MODEL', 'gemini-3-flash-preview')
-# Interactive "Ask Albert" mentor model — deeper reasoning + native Google Search
-# grounding (live web) via the Emergent gateway. Verified available 2026.
+# Interactive "Ask Albert" mentor model — deeper reasoning; grounded (Google
+# Search) requests auto-route to Flash. Called directly via the google-genai SDK.
 ALBERT_CHAT_MODEL = os.environ.get('ALBERT_CHAT_MODEL', 'gemini-3.1-pro-preview')
 
 # ---- Google AI Studio Gemini TTS (Albert's spoken voice) ----
