@@ -1795,6 +1795,7 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
   const [briefFetched] = useFetch(`${API_BASE}/v1/albert/brief${briefSym !== 'BTC' ? `?symbol=${encodeURIComponent(briefSym)}` : ''}`, [briefSym]);
   const [briefOverride, setBriefOverride] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+  const autoRefreshedRef = React.useRef(new Set());
   useEffect(() => { setBriefOverride(null); }, [briefSym]); // clear stale override on coin switch
   const brief = briefOverride || briefFetched;
   const briefAgeH = (() => { try { if (!brief || !brief.generated_at) return null; const norm = /[zZ]$/.test(brief.generated_at) ? brief.generated_at : brief.generated_at + 'Z'; return (Date.now() - new Date(norm).getTime()) / 3600000; } catch (e) { return null; } })();
@@ -1823,6 +1824,14 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
       if (j && j.status === 'ready') { setBriefOverride(j); prefetchAlbert(buildParts(j)); }
     } catch (e) { /* noop */ } finally { setRefreshing(false); }
   };
+  // Freshness auto-refresh: the moment a stale brief's tab is opened, quietly fetch
+  // Albert's latest read (once per coin per session).
+  useEffect(() => {
+    if (staleBrief && brief && !refreshing && !autoRefreshedRef.current.has(briefSym)) {
+      autoRefreshedRef.current.add(briefSym);
+      refreshBrief();
+    }
+  }, [staleBrief, briefSym, brief]); // eslint-disable-line
   const speakBrief = () => {
     try {
       if (speaking || warming) { stopAlbert(); setSpeaking(false); setWarming(false); return; }
@@ -1920,7 +1929,7 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
         {staleBrief && (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
             <ShieldAlert className="h-4 w-4 shrink-0" />
-            <span className="flex-1">This brief is over a day old ({briefTimeAgo(brief.generated_at)}). Refresh for Albert&apos;s latest read.</span>
+            <span className="flex-1">{refreshing ? 'Albert is fetching a fresh read for you…' : `This brief is over a day old (${briefTimeAgo(brief.generated_at)}). Refresh for Albert's latest read.`}</span>
             <button onClick={refreshBrief} disabled={refreshing} className="shrink-0 rounded-md bg-amber-500/20 px-2 py-1 font-semibold text-amber-100 transition-colors hover:bg-amber-500/30 disabled:opacity-50">{refreshing ? 'Refreshing…' : 'Refresh now'}</button>
           </div>
         )}

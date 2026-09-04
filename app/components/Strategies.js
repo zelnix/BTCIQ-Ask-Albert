@@ -3,7 +3,7 @@
 import React from 'react';
 import {
   Crosshair, Target, ShieldAlert, Clock, Activity, Sparkles, RefreshCw, X, Check,
-  Loader2, TrendingUp, TrendingDown, History, Trophy, Bell, ArrowRight, Plus, Play,
+  Loader2, TrendingUp, TrendingDown, History, Trophy, Bell, ArrowRight, Plus, Play, Scale,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -170,24 +170,32 @@ export function DraftModal({ draft, symbol, onClose, onActivated, onRegenerate, 
   );
 }
 
-function HistoryCard({ s }) {
+function HistoryCard({ s, selectable, selected, onToggleSelect }) {
   const [open, setOpen] = React.useState(false);
   const win = (s.final_pnl_usd ?? 0) >= 0;
   return (
-    <Card className="border-0 bg-slate-900/60 p-4 ring-1 ring-slate-800">
-      <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-3 text-left">
-        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${win ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
-          {win ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
-        </span>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[14px] font-bold text-slate-100">{s.title}</p>
-          <p className="text-[11px] text-slate-500 capitalize">{s.position} · {s.perf?.days_active}d · closed {s.close_reason?.replace('_', ' ')}</p>
-        </div>
-        <div className="text-right">
-          <p className={`text-lg font-black leading-tight ${pnlColor(s.final_pnl_pct)}`}>{s.final_pnl_pct > 0 ? '+' : ''}{s.final_pnl_pct}%</p>
-          <p className={`text-[11px] font-semibold ${pnlColor(s.final_pnl_usd)}`}>{s.final_pnl_usd > 0 ? '+' : ''}{fmtUsd(s.final_pnl_usd)}</p>
-        </div>
-      </button>
+    <Card className={`border-0 bg-slate-900/60 p-4 ring-1 transition-colors ${selected ? 'ring-sky-500/60' : 'ring-slate-800'}`}>
+      <div className="flex items-center gap-3">
+        {selectable && (
+          <button onClick={() => onToggleSelect(s.id)}
+            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${selected ? 'border-sky-400 bg-sky-500/25' : 'border-slate-600'}`}>
+            {selected && <Check className="h-3 w-3 text-sky-300" />}
+          </button>
+        )}
+        <button onClick={() => setOpen((v) => !v)} className="flex flex-1 items-center gap-3 text-left">
+          <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${win ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
+            {win ? <TrendingUp className="h-4 w-4" /> : <TrendingDown className="h-4 w-4" />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[14px] font-bold text-slate-100">{s.title}</p>
+            <p className="text-[11px] text-slate-500 capitalize">{s.position} · {s.perf?.days_active}d · closed {s.close_reason?.replace('_', ' ')}</p>
+          </div>
+          <div className="text-right">
+            <p className={`text-lg font-black leading-tight ${pnlColor(s.final_pnl_pct)}`}>{s.final_pnl_pct > 0 ? '+' : ''}{s.final_pnl_pct}%</p>
+            <p className={`text-[11px] font-semibold ${pnlColor(s.final_pnl_usd)}`}>{s.final_pnl_usd > 0 ? '+' : ''}{fmtUsd(s.final_pnl_usd)}</p>
+          </div>
+        </button>
+      </div>
       {open && (
         <div className="mt-3 space-y-3 border-t border-slate-800 pt-3">
           <p className="text-[13px] leading-relaxed text-slate-300">{s.thesis}</p>
@@ -207,6 +215,55 @@ function HistoryCard({ s }) {
   );
 }
 
+function CompareCol({ s }) {
+  const win = (s.final_pnl_usd ?? 0) >= 0;
+  const targetsHit = (s.targets || []).filter((t) => t.hit).length;
+  const rows = [
+    ['Outcome', <span key="o" className={`font-bold ${win ? 'text-emerald-400' : 'text-red-400'}`}>{win ? 'WIN' : 'LOSS'}</span>],
+    ['Final P&L', <span key="p" className={`font-black ${pnlColor(s.final_pnl_pct)}`}>{s.final_pnl_pct > 0 ? '+' : ''}{s.final_pnl_pct}% ({s.final_pnl_usd > 0 ? '+' : ''}{fmtUsd(s.final_pnl_usd)})</span>],
+    ['Bias / Position', <span key="b" className="capitalize text-slate-200">{s.bias} · {s.position}</span>],
+    ['Entry → Close', <span key="e" className="text-slate-200">{fmtUsd(s.entry_price)} → {fmtUsd(s.close_price)}</span>],
+    ['Duration', <span key="d" className="text-slate-200">{s.perf?.days_active}d of {s.horizon_days}d</span>],
+    ['Targets hit', <span key="t" className="text-slate-200">{targetsHit}/{(s.targets || []).length}</span>],
+    ['Stop', <span key="s" className="text-slate-200">{s.stop ? (s.stop.hit ? 'Hit' : 'Held') : '—'}</span>],
+    ['Closed by', <span key="c" className="capitalize text-slate-200">{(s.close_reason || '').replace('_', ' ')}</span>],
+    ['Rules fired', <span key="r" className="text-slate-200">{(s.rules || []).filter((r) => r.status === 'fired').length}/{(s.rules || []).length}</span>],
+  ];
+  return (
+    <div className="flex-1 rounded-xl border border-slate-800 bg-slate-900/50 p-3">
+      <p className="truncate text-[14px] font-bold text-white">{s.title}</p>
+      <p className="mb-2 text-[11px] text-slate-500">{(() => { try { return new Date(s.created_at + 'Z').toLocaleDateString(); } catch { return ''; } })()}</p>
+      <div className="space-y-1.5">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex items-center justify-between gap-2 border-b border-slate-800/60 pb-1 text-[12px]">
+            <span className="text-slate-500">{k}</span><span className="text-right">{v}</span>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 line-clamp-4 text-[11px] leading-snug text-slate-400">{s.thesis}</p>
+    </div>
+  );
+}
+
+function CompareModal({ a, b, onClose }) {
+  const aWins = (a.final_pnl_pct ?? 0) >= (b.final_pnl_pct ?? 0);
+  return (
+    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm" onClick={onClose}>
+      <div className="relative max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <button onClick={onClose} className="absolute right-3 top-3 rounded-full bg-black/40 p-1.5 text-slate-300 hover:text-white"><X className="h-4 w-4" /></button>
+        <h2 className="mb-1 flex items-center gap-2 text-base font-black text-white"><Scale className="h-4 w-4 text-sky-400" />Compare strategies</h2>
+        <p className="mb-4 text-[12px] text-slate-400">
+          <span className={aWins ? 'font-bold text-emerald-300' : 'font-bold text-emerald-300'}>{(aWins ? a : b).title}</span> was the stronger play by P&L.
+        </p>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <CompareCol s={a} />
+          <CompareCol s={b} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function StrategiesSection() {
   const symbol = React.useContext(SymbolContext);
   const [data, setData] = React.useState(null);   // {active, history, stats}
@@ -215,6 +272,11 @@ export default function StrategiesSection() {
   const [building, setBuilding] = React.useState(false);
   const [draft, setDraft] = React.useState(null);
   const [closing, setClosing] = React.useState(false);
+  const [compareMode, setCompareMode] = React.useState(false);
+  const [selected, setSelected] = React.useState([]);
+  const [compareOpen, setCompareOpen] = React.useState(false);
+
+  const toggleSelect = (id) => setSelected((cur) => cur.includes(id) ? cur.filter((x) => x !== id) : (cur.length >= 2 ? [cur[1], id] : [...cur, id]));
 
   const load = React.useCallback(async () => {
     try {
@@ -344,6 +406,12 @@ export default function StrategiesSection() {
         <div className="mb-2 flex flex-wrap items-center gap-2">
           <History className="h-4 w-4 text-slate-400" />
           <h3 className="text-sm font-bold text-white">Past {coinName} strategies</h3>
+          {history.length >= 2 && (
+            <button onClick={() => { setCompareMode((v) => !v); setSelected([]); }}
+              className={`ml-1 inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors ${compareMode ? 'border-sky-500/60 bg-sky-500/15 text-sky-200' : 'border-slate-700 text-slate-300 hover:text-white'}`}>
+              <Scale className="h-3 w-3" />{compareMode ? 'Cancel compare' : 'Compare'}
+            </button>
+          )}
           {stats.total > 0 && (
             <div className="ml-auto flex items-center gap-2 text-[11px]">
               <span className="flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/60 px-2 py-0.5 text-slate-300"><Trophy className="h-3 w-3 text-amber-400" />{stats.win_rate}% win rate</span>
@@ -352,14 +420,32 @@ export default function StrategiesSection() {
             </div>
           )}
         </div>
+        {compareMode && (
+          <div className="mb-2 flex items-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-[12px] text-sky-200">
+            <span>Pick two to compare — {selected.length}/2 selected.</span>
+            <Button size="sm" disabled={selected.length !== 2} onClick={() => setCompareOpen(true)}
+              className="ml-auto h-7 gap-1 bg-sky-500 text-white hover:bg-sky-400 disabled:opacity-40">
+              <Scale className="h-3.5 w-3.5" />Compare
+            </Button>
+          </div>
+        )}
         {history.length ? (
-          <div className="space-y-2">{history.map((s) => <HistoryCard key={s.id} s={s} />)}</div>
+          <div className="space-y-2">{history.map((s) => (
+            <HistoryCard key={s.id} s={s} selectable={compareMode} selected={selected.includes(s.id)} onToggleSelect={toggleSelect} />
+          ))}</div>
         ) : (
           <Card className="border-0 bg-slate-900/40 p-6 text-center ring-1 ring-slate-800">
             <p className="text-sm text-slate-500">No past strategies for {coinName} yet. Build one above and Albert will start keeping score.</p>
           </Card>
         )}
       </div>
+
+      {compareOpen && selected.length === 2 && (
+        <CompareModal
+          a={history.find((h) => h.id === selected[0])}
+          b={history.find((h) => h.id === selected[1])}
+          onClose={() => setCompareOpen(false)} />
+      )}
 
       {draft && (
         <DraftModal draft={draft} symbol={symbol} regenerating={building}
