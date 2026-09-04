@@ -25,7 +25,7 @@ function CompositePriceCard() {
     <Card className="border-0 bg-gradient-to-br from-slate-900 to-slate-950 p-6 ring-1 ring-slate-800">
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Layers className="h-5 w-5 text-sky-400" />
-        <h3 className="flex items-center gap-1 font-semibold text-white">BTCIQ Composite Price<InfoTip below text="A single trust-scored Bitcoin price built from the median of independent venues (Coinbase, Kraken, OKX, CoinGecko). Venues more than 0.75% from the median are flagged as outliers and excluded from the composite." /></h3>
+        <h3 className="flex items-center gap-1 font-semibold text-white">Ask Albert Composite Price<InfoTip below text="A single trust-scored Bitcoin price built from the median of independent venues (Coinbase, Kraken, OKX, CoinGecko). Venues more than 0.75% from the median are flagged as outliers and excluded from the composite." /></h3>
         {d && d.confidence && <ConfTag level={d.confidence} />}
         <span className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-emerald-300">Live · Keyless</span>
       </div>

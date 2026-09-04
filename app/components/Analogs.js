@@ -438,7 +438,7 @@ function AnalogsSection() {
               {bandActive
                 ? <> The shaded {band.color === '#10b981' ? 'green' : band.color === '#f43f5e' ? 'red' : ''} band shows the spread of ALL {band.n} matching past setups: the darker core is the middle 50% of outcomes, the lighter halo the 10–90% range, and the dashed line the median path.</>
                 : <> Turn on “Outcome band” to shade the range of every past matching setup around these paths.</>}
-              {modelActive && <> The white dotted line is BTCIQ’s own base-case forecast for today — see where the model sits versus what history did.</>}
+              {modelActive && <> The white dotted line is Ask Albert’s own base-case forecast for today — see where the model sits versus what history did.</>}
             </p>
             {bandActive && (
               <div className="mt-2 rounded-lg bg-slate-950/50 px-3 py-2 text-xs text-slate-300 ring-1 ring-slate-800">
@@ -468,7 +468,7 @@ function AnalogsSection() {
                   <div className="mt-2 border-t border-slate-800 pt-2">
                     <span className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold text-white">
                       Model vs history
-                      <InfoTip below={false} text="For each horizon we take BTCIQ's own base-case price, rebase it to 100 like the chart, and rank it against the matching past setups' actual outcomes at that horizon. “bearish X%” means the model projects a lower result than X% of those look-alikes; “bullish X%” means higher than X% of them." />
+                      <InfoTip below={false} text="For each horizon we take Ask Albert's own base-case price, rebase it to 100 like the chart, and rank it against the matching past setups' actual outcomes at that horizon. “bearish X%” means the model projects a lower result than X% of those look-alikes; “bullish X%” means higher than X% of them." />
                     </span>
                     <div className="flex flex-wrap gap-2">
                       {verdicts.map((v) => (v.ok ? (

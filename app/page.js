@@ -66,7 +66,7 @@ class ErrorBoundary extends React.Component {
   }
   componentDidCatch(error, info) {
     // eslint-disable-next-line no-console
-    console.error('BTCIQ ErrorBoundary caught:', this.props.label || '', error, info);
+    console.error('Ask Albert ErrorBoundary caught:', this.props.label || '', error, info);
   }
   componentDidUpdate(prevProps) {
     // Reset the boundary when the key context (e.g. active section) changes.
@@ -80,7 +80,7 @@ class ErrorBoundary extends React.Component {
       return (
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-5 text-sm">
           <p className="font-semibold text-amber-300">This panel hit a snag{this.props.label ? ` (${this.props.label})` : ''}.</p>
-          <p className="mt-1 text-slate-400">The rest of BTCIQ is still live. You can retry just this panel.</p>
+          <p className="mt-1 text-slate-400">The rest of Ask Albert is still live. You can retry just this panel.</p>
           <button onClick={() => this.setState({ hasError: false })}
             className="mt-3 rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-800">Retry</button>
         </div>
@@ -98,8 +98,8 @@ function DashboardSkeleton({ ticker }) {
     <div className="flex min-h-screen bg-slate-950">
       {/* Sidebar */}
       <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-800 bg-slate-900/40 px-4 py-5 md:flex">
-        <img src="/btciq-logo.png" alt="BTCIQ" className="mb-1 h-9 w-auto object-contain" />
-        <div className="mb-6 text-[10px] text-slate-600">Powered by BitCentAI</div>
+        <img src="/ask-albert-logo.png" alt="Ask Albert" className="mb-1 h-14 w-auto object-contain" />
+        <div className="mb-6 text-[10px] text-slate-600">Hucentai Crypto IQ</div>
         <div className="space-y-1.5">
           {navRows.map((_, i) => (
             <div key={i} className="flex items-center gap-3 rounded-lg px-3 py-2">
@@ -601,7 +601,7 @@ function NotificationBell({ alertsData, onAck, onViewAll, onOpenBrief }) {
     // Browser push: fire an OS notification for new, meaningful market alerts + briefs.
     if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
       [...meaningful, ...briefs.slice(0, 3)].forEach((a) => {
-        try { new Notification(`BTCIQ · ${a.title}`, { body: a.message, icon: '/btciq-logo.png', tag: a.id }); } catch (e) { /* noop */ }
+        try { new Notification(`Ask Albert · ${a.title}`, { body: a.message, icon: '/ask-albert-logo.png', tag: a.id }); } catch (e) { /* noop */ }
       });
     }
     // Audible chime (respecting the user's mute preference) — briefs get a gentler tone.
@@ -868,7 +868,7 @@ function AlbertIntroCard() {
           <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-300">Quant Analyst · Market Mentor</span>
         </div>
         <p className="mt-1 text-sm text-slate-300">Albert blends BitMarkAI’s live numbers with 100+ years of market wisdom — macro, cycles, on-chain and strategy — and live web search, to be your candid trading companion and sounding board. “Let us examine the evidence — probability is not certainty, and capital preservation comes first.”</p>
-        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Albert is an original fictional BTCIQ HuCentAI Quant character. He is not based on, and does not represent, any real or other fictional person or character.</p>
+        <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Albert is an original fictional Ask Albert HuCentAI Quant character. He is not based on, and does not represent, any real or other fictional person or character.</p>
       </div>
     </Card>
   );
@@ -2267,7 +2267,7 @@ function AskQuantSection({ d }) {
       <Card className="flex h-[560px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
         <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3">
           <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-sky-500/40" />
-          <div><p className="text-sm font-semibold text-white">Albert · BTCIQ HuCentAI Quant</p><p className="text-[10px] text-slate-500">Crypto strategist & advisor · live dashboard + web search · fast by default, Deep dive for depth</p></div>
+          <div><p className="text-sm font-semibold text-white">Albert · Ask Albert HuCentAI Quant</p><p className="text-[10px] text-slate-500">Crypto strategist & advisor · live dashboard + web search · fast by default, Deep dive for depth</p></div>
           <span className="ml-auto flex items-center gap-1 text-[10px] font-bold text-emerald-400"><span className="h-2 w-2 rounded-full bg-emerald-400" />LIVE</span>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
@@ -2342,7 +2342,7 @@ function AskQuantSection({ d }) {
             />
             <Button onClick={() => send()} disabled={loading || !input.trim() || rateSecondsLeft > 0} className="gap-1.5 bg-sky-500 hover:bg-sky-400"><Send className="h-4 w-4" />Send</Button>
           </div>
-          <p className="mt-2 text-center text-[10px] text-slate-600">Albert blends the live BTCIQ dashboard with real-time web search · powerful, but markets are uncertain — always do your own research.</p>
+          <p className="mt-2 text-center text-[10px] text-slate-600">Albert blends the live Ask Albert dashboard with real-time web search · powerful, but markets are uncertain — always do your own research.</p>
         </div>
       </Card>
     </div>
@@ -2665,8 +2665,8 @@ function SettingsSection({ onManualRun }) {
       <NotificationSettings />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
-        <p className="text-xs leading-relaxed text-slate-400">BTCIQ — Bitcoin Market Analysis, powered by BitCentAI, our Bitcoin-Centred Intelligence Engine. BitMarkAI measures the market and produces probability-based forecasts. Albert is BTCIQ’s HuCentAI Quant Analyst.</p>
-        <p className="mt-3 text-[11px] leading-relaxed text-slate-500">BTCIQ provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes. Albert is an original fictional BTCIQ HuCentAI Quant character and does not represent any real or other fictional person or character.</p>
+        <p className="text-xs leading-relaxed text-slate-400">Ask Albert — Bitcoin Market Analysis, powered by Hucentai, our Bitcoin-Centred Intelligence Engine. BitMarkAI measures the market and produces probability-based forecasts. Albert is Ask Albert’s HuCentAI Quant Analyst.</p>
+        <p className="mt-3 text-[11px] leading-relaxed text-slate-500">Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes. Albert is an original fictional Ask Albert HuCentAI Quant character and does not represent any real or other fictional person or character.</p>
         <a href="https://btciq.app" target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300"><Globe className="h-3 w-3" />btciq.app</a>
       </Card>
     </div>
@@ -3032,7 +3032,7 @@ export default function DashboardPage() {
     const coin = coins.find((c) => c.symbol === symbol);
     const name = (coin && coin.name) || (data && data.coin_name) || symbol;
     const price = ticker && ticker.price;
-    document.title = price ? `${symbol} ${fmtUsd(price)} · BTCIQ` : `${name} · BTCIQ`;
+    document.title = price ? `${symbol} ${fmtUsd(price)} · Ask Albert` : `${name} · Ask Albert`;
     try {
       const href = `https://cdn.jsdelivr.net/gh/spothq/cryptocurrency-icons@master/128/color/${symbol.toLowerCase()}.png`;
       const links = document.querySelectorAll("link[rel~='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']");
@@ -3278,10 +3278,9 @@ export default function DashboardPage() {
         {/* Sidebar */}
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-900/40 p-4 backdrop-blur-sm md:flex">
           <div className="mb-6 flex flex-col gap-1 px-1">
-            <img src="/btciq-logo.png" alt="BTCIQ" className="h-11 w-auto object-contain" />
+            <img src="/ask-albert-logo.png" alt="Ask Albert" className="h-16 w-auto object-contain" />
             <p className="pl-0.5 text-[11px] font-semibold">
-              <span className="bg-gradient-to-r from-amber-400 via-sky-400 to-violet-400 bg-clip-text text-transparent">BTCIQ</span>
-              <span className="text-slate-500"> · Powered by BitCentAI</span>
+              <span className="text-slate-500">Hucentai Crypto IQ</span>
             </p>
             <PublishStamp />
             <EnvBadge />
@@ -3316,7 +3315,7 @@ export default function DashboardPage() {
         <div className="min-w-0 flex-1">
           {/* Top bar */}
           <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/80 px-4 py-3 backdrop-blur md:px-8">
-            <div className="flex items-center gap-2 md:hidden"><img src="/btciq-logo.png" alt="BTCIQ" className="h-6 w-auto object-contain" /></div>
+            <div className="flex items-center gap-2 md:hidden"><img src="/ask-albert-logo.png" alt="Ask Albert" className="h-6 w-auto object-contain" /></div>
             <CoinPicker coins={coins} symbol={symbol} onSelect={setSymbol} />
             {symbol !== 'BTC' && (
               <button onClick={() => setCompareOpen(true)} title="Overlay this coin vs Bitcoin"
@@ -3402,9 +3401,9 @@ export default function DashboardPage() {
           <main className="mx-auto max-w-6xl px-4 py-6 md:px-8"><ErrorBoundary label={activeSection?.label || active} resetKey={active}>{renderSection()}</ErrorBoundary></main>
           <footer className="space-y-2 px-4 pb-8 text-center md:px-8">
             <p className="mx-auto max-w-3xl rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-2.5 text-[11px] leading-relaxed text-slate-500">
-              BTCIQ provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes.
+              Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes.
             </p>
-            <p className="text-xs text-slate-600">BTCIQ — Bitcoin Market Analysis · powered by BitCentAI · BitMarkAI forecast engine · real data via {d.data_source}</p>
+            <p className="text-xs text-slate-600">Ask Albert — Bitcoin Market Analysis · powered by Hucentai · BitMarkAI forecast engine · real data via {d.data_source}</p>
           </footer>
         </div>
       </div>
@@ -3493,13 +3492,13 @@ function AlbertBioModal({ onClose }) {
           <div className="mt-3 text-center">
             <h2 className="text-2xl font-black text-white">Albert</h2>
             <p className="flex items-center justify-center gap-1.5 text-sm font-semibold text-sky-300">
-              <Sparkles className="h-4 w-4" />BTCIQ HuCentAI Quant Analyst
+              <Sparkles className="h-4 w-4" />Ask Albert HuCentAI Quant Analyst
             </p>
           </div>
         </div>
         <div className="space-y-3 p-5">
           <p className="text-[14px] leading-relaxed text-slate-200">
-            Meet <span className="font-semibold text-white">Albert</span> — BTCIQ&apos;s resident quant analyst. He reads the live dashboard end to end (price action, on-chain flows, derivatives positioning, macro and sentiment) and turns it into plain-English calls you can actually act on.
+            Meet <span className="font-semibold text-white">Albert</span> — Ask Albert&apos;s resident quant analyst. He reads the live dashboard end to end (price action, on-chain flows, derivatives positioning, macro and sentiment) and turns it into plain-English calls you can actually act on.
           </p>
           <p className="text-[14px] leading-relaxed text-slate-300">
             Ask him anything — &ldquo;Is it time to buy or sell?&rdquo;, &ldquo;Why did the score fall?&rdquo;, &ldquo;What could move Bitcoin next?&rdquo; He grounds every answer strictly in real dashboard numbers, logs his directional calls, and grades himself honestly so you can see his track record over time.
@@ -3515,7 +3514,7 @@ function AlbertBioModal({ onClose }) {
             <MessageCircle className="h-4 w-4" />Got it
           </button>
           <p className="text-center text-[10px] leading-relaxed text-slate-500">
-            Albert is an original fictional BTCIQ HuCentAI Quant character and does not represent any real or other fictional person or character. Educational analysis — not financial advice.
+            Albert is an original fictional Ask Albert HuCentAI Quant character and does not represent any real or other fictional person or character. Educational analysis — not financial advice.
           </p>
         </div>
       </div>

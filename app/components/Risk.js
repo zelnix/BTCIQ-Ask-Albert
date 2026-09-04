@@ -16,7 +16,7 @@ function RiskSection({ d }) {
   const lvlColor = riskStateColor(r.level);
   return (
     <div className="space-y-5">
-      <SectionHead icon={ShieldAlert} title="BTCIQ Risk" blurb={sec('risk').blurb} coin={d.symbol || 'BTC'} />
+      <SectionHead icon={ShieldAlert} title="Ask Albert Risk" blurb={sec('risk').blurb} coin={d.symbol || 'BTC'} />
       <AiReview section="risk" text="Albert is reviewing current risk…" voice />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <div className="flex flex-wrap items-center gap-6">

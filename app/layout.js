@@ -1,13 +1,13 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'BTCIQ — Bitcoin Intelligence, powered by BitCentAI',
-  description: 'BTCIQ: real Bitcoin data, a unified decision engine, probability forecasts, news-linked odds and an AI analyst — powered by BitCentAI, our Bitcoin-Centred Intelligence Engine.',
-  applicationName: 'BTCIQ',
+  title: 'Ask Albert — Hucentai Crypto IQ',
+  description: 'Ask Albert: real-time crypto market intelligence — a unified decision engine, probability forecasts, news-linked odds and an AI analyst you can ask anything. Hucentai Crypto IQ.',
+  applicationName: 'Ask Albert',
   manifest: '/manifest.webmanifest',
   appleWebApp: {
     capable: true,
-    title: 'BTCIQ',
+    title: 'Ask Albert',
     statusBarStyle: 'black-translucent',
   },
   icons: {

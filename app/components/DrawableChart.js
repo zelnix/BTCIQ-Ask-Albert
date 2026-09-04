@@ -118,7 +118,7 @@ function DrawableChart({ ohlc }) {
     const id = Date.now() + Math.random();
     setToasts((t) => [...t, { id, msg, up: side === 'above' }]);
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 8000);
-    try { if ('Notification' in window && Notification.permission === 'granted') new Notification('BTCIQ Price Alert', { body: msg }); } catch (e) { /* noop */ }
+    try { if ('Notification' in window && Notification.permission === 'granted') new Notification('Ask Albert Price Alert', { body: msg }); } catch (e) { /* noop */ }
     beep(side === 'above');
   };
 

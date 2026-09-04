@@ -10,7 +10,7 @@ import AlbertReplyMeta from './AlbertReplyMeta';
 // Human-readable scope label per screen, so the floating chat can tell Albert
 // (and the user) which screen the conversation is grounded in.
 const SECTION_LABELS = {
-  overview: 'all things BTCIQ', forecasts: 'Forecasts', 'market-intel': 'Market Intelligence',
+  overview: 'all things Ask Albert', forecasts: 'Forecasts', 'market-intel': 'Market Intelligence',
   crossmarket: 'Cross-Market', analogs: 'Happening Again', smartmoney: 'Smart Money',
   whales: 'Whale Watch', institutional: 'Institutional & Derivatives', leverage: 'Leverage',
   macro: 'Macro & Policy', news: 'News', risk: 'Risk', events: 'Events',
@@ -31,7 +31,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
   const [, setRateTick] = React.useState(0);
   const endRef = React.useRef(null);
   const isOverview = !active || active === 'overview';
-  const scopeLabel = SECTION_LABELS[active] || 'all things BTCIQ';
+  const scopeLabel = SECTION_LABELS[active] || 'all things Ask Albert';
 
   React.useEffect(() => { if (open) endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading, open]);
   // Reset the mini-thread when the user switches screens so context stays relevant.
@@ -108,7 +108,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
             <img src="/albert.png" alt="Albert" className="h-10 w-10 rounded-full object-cover ring-2 ring-sky-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-white">Ask Albert</p>
-              <p className="truncate text-[10px] text-sky-400">{isOverview ? 'Talking about all things BTCIQ' : `Focused on: ${scopeLabel}`}</p>
+              <p className="truncate text-[10px] text-sky-400">{isOverview ? 'Talking about all things Ask Albert' : `Focused on: ${scopeLabel}`}</p>
             </div>
             {onExpand && <button onClick={() => { setOpen(false); onExpand(); }} title="Open full chat" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><Maximize2 className="h-4 w-4" /></button>}
             <button onClick={() => setOpen(false)} title="Close" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><X className="h-4 w-4" /></button>

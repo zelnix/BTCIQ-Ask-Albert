@@ -1,9 +1,9 @@
 export default function manifest() {
   return {
-    name: 'BTCIQ — Bitcoin Intelligence',
-    short_name: 'BTCIQ',
+    name: 'Ask Albert — Hucentai Crypto IQ',
+    short_name: 'Ask Albert',
     description:
-      'Real Bitcoin data, a unified decision engine, probability forecasts, news-linked odds and an AI analyst — powered by BitCentAI.',
+      'Real-time crypto market intelligence — a unified decision engine, probability forecasts, news-linked odds and an AI analyst you can ask anything. Hucentai Crypto IQ.',
     start_url: '/',
     display: 'standalone',
     background_color: '#0b1220',

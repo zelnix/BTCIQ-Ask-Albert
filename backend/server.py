@@ -1985,7 +1985,7 @@ def get_smart_money_panel():
 
 
 # =====================================================================
-# FREE ON-CHAIN + DERIVATIVES ENGINE (BTCIQ)
+# FREE ON-CHAIN + DERIVATIVES ENGINE (Ask Albert)
 # Real Smart Money (on-chain) + Institutional/Derivatives panels from free,
 # server-reachable sources: BGeometrics (bitcoin-data.com), blockchain.com,
 # alternative.me (Fear & Greed), OKX public API, + Glassnode Light (bonus).
@@ -2489,9 +2489,9 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
         impact_label = 'Neutral'
     impact_expl = (
         (f"Elevated long positioning and {oi_state.lower()} open interest are adding modest downside risk to the broader "
-         f"BTCIQ assessment." if impact_points < 0 else
-         f"Crowded shorts into a firm tape are adding modest upside risk to the broader BTCIQ assessment." if impact_points > 0 else
-         "Leverage is broadly balanced and is a neutral input to the broader BTCIQ assessment.")
+         f"Ask Albert assessment." if impact_points < 0 else
+         f"Crowded shorts into a firm tape are adding modest upside risk to the broader Ask Albert assessment." if impact_points > 0 else
+         "Leverage is broadly balanced and is a neutral input to the broader Ask Albert assessment.")
         + " Leverage is only one of many signals in Albert's Call.")
 
     return {
@@ -3341,11 +3341,11 @@ def get_whale_tx_feed(refresh=False):
 
 CHAT_SYSTEM = (
     "You are 'Albert', an elite crypto Quant Analyst, Senior Market Strategist and DECISIVE trading advisor "
-    "built into the BTCIQ dashboard (powered by BitCentAI, a Bitcoin-Centred Intelligence Engine). You blend a "
+    "built into the Ask Albert dashboard (Hucentai Crypto IQ). You blend a "
     "century of aggregated market wisdom — classic tape reading, commodities, equities and macro credit cycles — "
     "with deep, current crypto expertise. You are warm, witty and professor-like, but above all a sharp, "
     "battle-tested mentor who GIVES A CLEAR OPINION and a direct call. If asked who you are, say you are Albert, "
-    "the BTCIQ HuCentAI Quant.\n\n"
+    "the Ask Albert HuCentAI Quant.\n\n"
     "### SCOPE — answer ANY crypto or market question\n"
     "Bitcoin, Ethereum, Solana and all altcoins; DeFi, L2s/rollups, staking/restaking, stablecoins, NFTs and "
     "tokenomics; spot and derivatives market structure & microstructure; on-chain analytics (MVRV, SOPR, realized "
@@ -5797,7 +5797,7 @@ def _confidence(n_ok, spread_pct):
 
 @app.get('/api/v1/composite-price')
 def composite_price():
-    """BTCIQ Composite Bitcoin Price — median of independent venues with outlier detection,
+    """Ask Albert Composite Bitcoin Price — median of independent venues with outlier detection,
     fallback chain and data-confidence/provenance. REAL, keyless."""
     venues = []
     def add(name, fn):
@@ -6401,7 +6401,7 @@ def check_model_decay_alert(quant_val):
         recips = [r.get('email') for r in _recipient_list() if r.get('email')]
         if not recips:
             return {'ok': False, 'error': 'no recipients'}
-        subject = '⚠️ BTCIQ model decay detected — rolling Brier rising'
+        subject = '⚠️ Ask Albert model decay detected — rolling Brier rising'
         html = (f"<div style='font-family:system-ui,sans-serif;color:#0f172a'>"
                 f"<h2 style='margin:0 0 8px'>Model decay alert</h2>"
                 f"<p>The walk-forward model's <b>rolling Brier score is trending up</b> "
@@ -6409,8 +6409,8 @@ def check_model_decay_alert(quant_val):
                 f"(0.25 = a coin flip).</p>"
                 f"<p>Decaying horizons are being auto-down-weighted in the ensemble. Review the "
                 f"Quant-Grade Validation panel on the Performance screen.</p>"
-                f"<p style='color:#64748b;font-size:12px'>Sent automatically by BTCIQ.</p></div>")
-        text = (f"BTCIQ model decay alert. Rolling Brier slope {slope}, latest {latest} "
+                f"<p style='color:#64748b;font-size:12px'>Sent automatically by Ask Albert.</p></div>")
+        text = (f"Ask Albert model decay alert. Rolling Brier slope {slope}, latest {latest} "
                 f"(>0.24 decay threshold). Decaying horizons are auto-down-weighted.")
         result = _send_to_recipients(recips, subject, html, text)
         if result.get('ok'):
@@ -6471,17 +6471,17 @@ def check_drift_circuit_alert(drift):
             return {'ok': False, 'error': 'no recipients'}
         reasons = '<br>'.join('• ' + r for r in (drift.get('reasons') or [])) or 'Distribution shift / feed gap.'
         fb = drift.get('fallback_signal') or {}
-        subject = '🛑 BTCIQ circuit breaker tripped — model reverted to rule-based'
+        subject = '🛑 Ask Albert circuit breaker tripped — model reverted to rule-based'
         html = (f"<div style='font-family:system-ui,sans-serif;color:#0f172a'>"
                 f"<h2 style='margin:0 0 8px'>Feature-drift circuit breaker</h2>"
-                f"<p>The ML model tripped its safety breaker and BTCIQ has fallen back to a "
+                f"<p>The ML model tripped its safety breaker and Ask Albert has fallen back to a "
                 f"<b>conservative rule-based trend model</b>. Model confidence is downgraded to "
                 f"<b>Low</b> on the dashboard.</p>"
                 f"<p><b>Why:</b><br>{reasons}</p>"
                 f"<p><b>Fallback call:</b> {fb.get('signal')} ({fb.get('confidence')}% — {fb.get('basis')})</p>"
-                f"<p style='color:#64748b;font-size:12px'>Sent automatically by BTCIQ. Auto-recovers when "
+                f"<p style='color:#64748b;font-size:12px'>Sent automatically by Ask Albert. Auto-recovers when "
                 f"feature distributions normalise (PSI &lt; 0.25) and feeds are healthy.</p></div>")
-        text = (f"BTCIQ circuit breaker tripped. Reverted to rule-based trend model; confidence downgraded to Low. "
+        text = (f"Ask Albert circuit breaker tripped. Reverted to rule-based trend model; confidence downgraded to Low. "
                 f"Reasons: {' | '.join(drift.get('reasons') or [])}. Fallback: {fb.get('signal')} ({fb.get('confidence')}%).")
         result = _send_to_recipients(recips, subject, html, text)
         if result.get('ok'):
@@ -6545,7 +6545,7 @@ def check_liq_cascade_alert():
         short_usd = liq.get('short_usd_1m') or 0
         dom = 'long' if long_usd >= short_usd else 'short'
         px = snap.get('last_price')
-        subject = '⚡ BTCIQ real-time liquidation cascade detected'
+        subject = '⚡ Ask Albert real-time liquidation cascade detected'
         html = (f"<div style='font-family:system-ui,sans-serif;color:#0f172a'>"
                 f"<h2 style='margin:0 0 8px'>Liquidation cascade in progress</h2>"
                 f"<p>The live order-flow feed just detected a rapid liquidation cascade "
@@ -6554,9 +6554,9 @@ def check_liq_cascade_alert():
                 f"<b>${'{:,.0f}'.format(px) if px else 'n/a'}</b>.</p>"
                 f"<p>1-minute totals — longs ${round(long_usd):,}, shorts ${round(short_usd):,}. "
                 f"Expect elevated volatility and slippage.</p>"
-                f"<p style='color:#64748b;font-size:12px'>Sent automatically by BTCIQ (Coinbase + Bybit "
+                f"<p style='color:#64748b;font-size:12px'>Sent automatically by Ask Albert (Coinbase + Bybit "
                 f"live streams). 1-hour cooldown between cascade alerts.</p></div>")
-        text = (f"BTCIQ real-time liquidation cascade: >{round((liq.get('cascade_10s_usd') or 0)/1e6, 2)}M in ~10s, "
+        text = (f"Ask Albert real-time liquidation cascade: >{round((liq.get('cascade_10s_usd') or 0)/1e6, 2)}M in ~10s, "
                 f"dominated by {dom}. Longs ${round(long_usd):,} / shorts ${round(short_usd):,}. Price ~{px}.")
         result = _send_to_recipients(recips, subject, html, text)
         if result.get('ok'):
@@ -6851,7 +6851,7 @@ def audit_log(limit: int = 20):
 
 
 _SECTION_FOCUS = {
-    'overview': None,  # general — all things BTCIQ
+    'overview': None,  # general — all things Ask Albert
     'forecasts': 'the price FORECASTS (BitMarkAI probability ranges from 1 week to 5 years — odds, bull/base/bear ranges, invalidation levels)',
     'market-intel': 'the MARKET INTELLIGENCE / technical picture (chart structure, key support/resistance levels, cycle position and the raw indicators)',
     'crossmarket': 'the CROSS-MARKET comparison of Bitcoin vs traditional assets (S&P 500, Nasdaq, Gold, US Dollar) — correlation, relative performance and volatility',
@@ -6869,7 +6869,7 @@ _SECTION_FOCUS = {
     'network': 'NETWORK health & sentiment (hashrate, difficulty, mempool/fees and the Fear & Greed crowd read)',
     'dataaudit': 'the DATA AUDIT (the trust-scored composite Bitcoin price and its venues/outliers, cross-asset context, GDELT news tone and FRED macro — and how confident each signal is: HIGH/MEDIUM/LOW)',
     'admin': 'the ADMIN / platform view (integrations, data-source freshness, usage and costs)',
-    'settings': 'BTCIQ settings, data sources and compliance information',
+    'settings': 'Ask Albert settings, data sources and compliance information',
 }
 
 
@@ -7800,7 +7800,7 @@ def _daily_brief_autopost():
 # ALBERT SECTION INSIGHTS  (AI-generated, cached per compute-run)
 # =====================================================================
 ALBERT_INSIGHT_SYSTEM = (
-    "You are 'Albert', the friendly HuCentAI Quant analyst in the BTCIQ Bitcoin dashboard. You are explaining "
+    "You are 'Albert', the friendly HuCentAI Quant analyst in the Ask Albert Bitcoin dashboard. You are explaining "
     "this section to a curious NON-TRADER who does not know market jargon. Your goal is to be genuinely "
     "INSIGHTFUL — do NOT simply restate the numbers already on screen. Instead:\n"
     "1) Explain in plain English WHAT is actually driving Bitcoin right now / WHY it is where it is (lean on "
@@ -7826,7 +7826,7 @@ ALBERT_INSIGHT_SYSTEM = (
 )
 
 ALBERT_SECTION_SYSTEM = (
-    "You are 'Albert', the friendly HuCentAI Quant analyst in the BTCIQ dashboard, explaining ONE specific panel "
+    "You are 'Albert', the friendly HuCentAI Quant analyst in the Ask Albert dashboard, explaining ONE specific panel "
     "to a curious NON-TRADER. You are NOT giving a general Bitcoin market update.\n"
     "Your entire answer MUST be about this panel and the 'SECTION-SPECIFIC DATA' block below. Lead with, and build "
     "the whole explanation around, that block's concrete specifics — the actual counts, values, names and signals. "
@@ -7855,7 +7855,7 @@ ALBERT_DATA_SECTIONS = {'alerts', 'scorecard', 'performance', 'whales', 'smartmo
                         'institutional', 'events', 'risk'}
 
 ALBERT_TECH_SYSTEM = (
-    "You are 'Albert', the HuCentAI Quant analyst in the BTCIQ Bitcoin dashboard, now giving a MORE TECHNICAL "
+    "You are 'Albert', the HuCentAI Quant analyst in the Ask Albert Bitcoin dashboard, now giving a MORE TECHNICAL "
     "briefing for a reader who understands markets. Be precise and quantitative:\n"
     "1) Reference the concrete numbers — scores, probabilities, confidence, backtest hit-rates, key price levels, "
     "invalidation points, regime/volatility read, and any relevant macro/liquidity or on-chain style signals.\n"
@@ -8129,7 +8129,7 @@ async def albert_insight(request: Request, section: str = 'overview', mode: str 
 
 
 ALBERT_BRIEF_SYSTEM = (
-    "You are 'Albert', the friendly market guide in the BTCIQ Bitcoin dashboard, writing a short PLAIN-ENGLISH "
+    "You are 'Albert', the friendly market guide in the Ask Albert Bitcoin dashboard, writing a short PLAIN-ENGLISH "
     "MORNING BRIEF for a complete beginner — a 30-second read of what's going on with Bitcoin today. Use ONLY the "
     "data below. If a data source is unavailable or marked 'no data', simply skip it (do not mention it). "
     "AVOID JARGON completely: never use terms like MVRV, SOPR, funding, open interest, basis, liquidity, hashrate, "
@@ -8147,7 +8147,7 @@ ALBERT_BRIEF_SYSTEM = (
 )
 
 ALBERT_BRIEF_TECH_SYSTEM = (
-    "You are 'Albert', the HuCentAI Quant analyst in the BTCIQ Bitcoin dashboard, writing a MORE TECHNICAL "
+    "You are 'Albert', the HuCentAI Quant analyst in the Ask Albert Bitcoin dashboard, writing a MORE TECHNICAL "
     "MORNING BRIEF for a reader who understands markets. Use ONLY the data below; if a source is unavailable or "
     "marked 'no data', say 'no [X] data available' and do NOT invent values. Be precise and quantitative — cite "
     "the concrete numbers: decision/confidence, risk score & realised vol, whale & exchange net flows (BTC), ETF $ "
@@ -8162,7 +8162,7 @@ ALBERT_BRIEF_TECH_SYSTEM = (
 
 
 ALBERT_BRIEF_COIN_SYSTEM = (
-    "You are 'Albert', the friendly market guide in the BTCIQ dashboard, writing a short PLAIN-ENGLISH "
+    "You are 'Albert', the friendly market guide in the Ask Albert dashboard, writing a short PLAIN-ENGLISH "
     "MORNING BRIEF for a complete beginner — a 30-second read of what's going on with {coin} today. Use ONLY the "
     "data below. AVOID JARGON completely: translate every number into what it MEANS for a normal person. "
     "Output EXACTLY this shape and nothing else:\n"
@@ -8176,7 +8176,7 @@ ALBERT_BRIEF_COIN_SYSTEM = (
 )
 
 ALBERT_BRIEF_COIN_TECH_SYSTEM = (
-    "You are 'Albert', the HuCentAI Quant analyst in the BTCIQ dashboard, writing a MORE TECHNICAL "
+    "You are 'Albert', the HuCentAI Quant analyst in the Ask Albert dashboard, writing a MORE TECHNICAL "
     "MORNING BRIEF on {coin} for a reader who understands markets. Use ONLY the data below; do NOT invent values. "
     "Be precise and quantitative — cite the concrete numbers: quant score, regime, 24H/7D forecast direction & "
     "confidence, nearest support/resistance, and the key tailwinds/risks. Output EXACTLY this shape and nothing "

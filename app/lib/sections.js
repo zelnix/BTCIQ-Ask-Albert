@@ -8,7 +8,7 @@ const SECTIONS = [
   { id: 'briefing', label: 'Albert\u2019s Morning Brief', icon: Sparkles,
     blurb: 'Your one-screen executive briefing: market bias, price, Albert’s read, the levels that matter, live sentiment and the decision engine — each card drills into the full analysis.' },
   { id: 'ask', label: 'Ask Albert', icon: MessageCircle,
-    blurb: 'Chat with Albert, BTCIQ’s HuCentAI Quant Analyst, in plain English — "Why did the score fall?", "What could move Bitcoin next?" — grounded strictly in the live dashboard numbers. He never invents data.' },
+    blurb: 'Chat with Albert, Ask Albert’s HuCentAI Quant Analyst, in plain English — "Why did the score fall?", "What could move Bitcoin next?" — grounded strictly in the live dashboard numbers. He never invents data.' },
   { id: 'overview', label: 'Overview', icon: LayoutDashboard,
     blurb: 'Your 10-second snapshot of Bitcoin right now: the price, the market "mood", one simple score, the near-term odds, how risky things are and how sure the model is. Start here.' },
   { id: 'forecasts', label: 'Forecasts', icon: Target,
@@ -48,16 +48,16 @@ const SECTIONS = [
   { id: 'dataaudit', label: 'Data Audit', icon: Database,
     blurb: 'Where every number comes from and how much to trust it. A trust-scored composite Bitcoin price (median of Coinbase, Kraken, OKX, CoinGecko with outlier detection), broader cross-asset context, global news tone (GDELT) and US macro (FRED) — each tagged HIGH / MEDIUM / LOW confidence. No fabricated data.' },
   { id: 'settings', label: 'Settings', icon: Cpu,
-    blurb: 'Admin passcode for manual forecast runs, plus BTCIQ’s about & compliance information. (Live data-source status now lives in the Admin screen.)' },
+    blurb: 'Admin passcode for manual forecast runs, plus Ask Albert’s about & compliance information. (Live data-source status now lives in the Admin screen.)' },
   { id: 'admin', label: 'Admin', icon: ShieldCheck,
-    blurb: 'Integrations, data-source freshness, usage, costs and system health for the BTCIQ platform.' },
+    blurb: 'Integrations, data-source freshness, usage, costs and system health for the Ask Albert platform.' },
 ];
 
 // Legacy section metadata for sub-panels that are now grouped under the new nav
 // (their components still look up a blurb/label by id).
 const LEGACY_SECTIONS = [
   { id: 'bitmark', label: 'BitMarkAI', icon: Sparkles,
-    blurb: 'BitMarkAI is BTCIQ’s adaptive Bitcoin Price Prediction Engine — probability-based forecasts from one week to five years. Each horizon is weighted differently, updated weekly, on demand, or when a major event hits — and every change is explained. It never gives a single guaranteed price.' },
+    blurb: 'BitMarkAI is Ask Albert’s adaptive Bitcoin Price Prediction Engine — probability-based forecasts from one week to five years. Each horizon is weighted differently, updated weekly, on demand, or when a major event hits — and every change is explained. It never gives a single guaranteed price.' },
   { id: 'chart', label: 'Chart Intelligence', icon: CandlestickChart,
     blurb: 'An automatic read of the daily chart in plain language: support and resistance zones, trend, breakouts and momentum — plus how often similar setups played out historically.' },
   { id: 'cycle', label: 'Cycle', icon: Globe,
