@@ -1,9 +1,18 @@
 'use client';
 
 import React from 'react';
-import { Volume2, VolumeX, ExternalLink, BellPlus, Check, Loader2 } from 'lucide-react';
+import { Volume2, VolumeX, ExternalLink, BellPlus, Check, Loader2, Crosshair } from 'lucide-react';
 import { API_BASE } from '../lib/api';
 import { speakAlbert, stopAlbert } from '../lib/albertVoice';
+
+// Detect whether Albert's answer contains an actionable directional call worth
+// turning into a tracked strategy (buy/sell/long/short/accumulate + a level).
+function hasDirectionalCall(text) {
+  const t = String(text || '').toLowerCase();
+  const dir = /\b(buy|sell|long|short|accumulate|take profit|add here|entry|enter|target|stop[- ]?loss|invalidat|breakout|breakdown)\b/.test(t);
+  const hasLevel = /\$\s?\d/.test(t);
+  return dir && hasLevel;
+}
 
 // Pull dollar levels Albert mentions (e.g. "$74,000", "$77411") so we can offer
 // one-tap price alerts for them.
@@ -24,6 +33,15 @@ export default function AlbertReplyMeta({ text, sources = [], symbol = 'BTC', pi
   const [warming, setWarming] = React.useState(false);
   const [alerted, setAlerted] = React.useState({});
   const levels = React.useMemo(() => extractLevels(text || ''), [text]);
+  const showStrategy = React.useMemo(() => hasDirectionalCall(text || ''), [text]);
+
+  const saveAsStrategy = () => {
+    try {
+      window.dispatchEvent(new CustomEvent('albert:build-strategy', {
+        detail: { symbol: symbol || 'BTC', seed: String(text || '').slice(0, 1200) },
+      }));
+    } catch (e) { /* noop */ }
+  };
 
   React.useEffect(() => () => { try { stopAlbert(); } catch (e) { /* noop */ } }, []);
   // Warm up the TTS voice list (some browsers load voices asynchronously).
@@ -62,6 +80,12 @@ export default function AlbertReplyMeta({ text, sources = [], symbol = 'BTC', pi
           className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${warming ? 'border-amber-500/50 bg-amber-500/10 text-amber-200' : 'border-slate-700 bg-slate-800/60 text-slate-300 hover:text-white'}`}>
           {warming ? <><Loader2 className="h-3 w-3 animate-spin" />Warming up…</> : speaking ? <><VolumeX className="h-3 w-3" />Stop</> : <><Volume2 className="h-3 w-3" />Listen</>}
         </button>
+        {showStrategy && (
+          <button onClick={saveAsStrategy}
+            className="inline-flex items-center gap-1 rounded-full border border-violet-500/40 bg-violet-500/10 px-2 py-0.5 text-[11px] font-medium text-violet-200 transition-colors hover:bg-violet-500/20">
+            <Crosshair className="h-3 w-3" />Save as strategy
+          </button>
+        )}
         {levels.map((lv) => (
           <button key={lv} onClick={() => setAlert(lv)} disabled={!!alerted[lv]}
             className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors ${alerted[lv] ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300' : 'border-sky-600/40 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20'}`}>

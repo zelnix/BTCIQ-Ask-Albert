@@ -114,7 +114,7 @@ function PerfHeadline({ perf, position }) {
   );
 }
 
-function DraftModal({ draft, symbol, onClose, onActivated, onRegenerate, regenerating }) {
+export function DraftModal({ draft, symbol, onClose, onActivated, onRegenerate, regenerating }) {
   const [activating, setActivating] = React.useState(false);
   const activate = async () => {
     setActivating(true);

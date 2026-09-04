@@ -35,6 +35,7 @@ import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } f
 import { speakAlbert, stopAlbert, prefetchAlbert, getVoicePref, setVoicePref, previewVoice } from './lib/albertVoice';
 import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, DemoBadge, Spark, LevGauge, ComingSoonSection } from './components/shared';
 import StrategiesSection from './components/Strategies';
+import { DraftModal as StrategyDraftModal } from './components/Strategies';
 import AnalogsSection from './components/Analogs';
 import CrossMarketSection from './components/CrossMarket';
 import RiskSection from './components/Risk';
@@ -2971,6 +2972,8 @@ export default function DashboardPage() {
   const [passAutoClear, setPassAutoClear] = useState(false);
   const [ticker, setTicker] = useState(__tickerCache);
   const [active, setActive] = useState('briefing');
+  const [chatStrategy, setChatStrategy] = useState(null); // {draft, symbol} — from "Save as strategy" in chat
+  const [chatStrategyBuilding, setChatStrategyBuilding] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [news, setNews] = useState(__newsCache);
   const [newsStatus, setNewsStatus] = useState(__newsCache ? 'ready' : 'loading');
@@ -3019,6 +3022,29 @@ export default function DashboardPage() {
     setActive((a) => (!btc && BTC_ONLY_SECTIONS.includes(a) ? 'overview' : a));
     if (btc) setCompareOpen(false);
   }, [symbol]);
+
+  // "Save as strategy" from a chat answer -> build a draft, then open the review modal.
+  useEffect(() => {
+    const onBuild = async (e) => {
+      const sym = (e.detail && e.detail.symbol) || symbol;
+      const seed = (e.detail && e.detail.seed) || '';
+      setChatStrategyBuilding(true);
+      setChatStrategy({ draft: null, symbol: sym });
+      try {
+        const r = await fetch(`${API_BASE}/v1/albert/strategy/build`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ symbol: sym, goal: seed ? `Turn my own analysis below into a concrete strategy:\n${seed}` : '' }),
+        });
+        const j = await r.json();
+        if (j && j.status === 'ready') setChatStrategy({ draft: j.draft, symbol: sym });
+        else setChatStrategy(null);
+      } catch (err) { setChatStrategy(null); }
+      finally { setChatStrategyBuilding(false); }
+    };
+    window.addEventListener('albert:build-strategy', onBuild);
+    return () => window.removeEventListener('albert:build-strategy', onBuild);
+  }, [symbol]);
+
 
   // Clear the coin-switch overlay once the new coin's data is ready (or errors out).
   useEffect(() => {
