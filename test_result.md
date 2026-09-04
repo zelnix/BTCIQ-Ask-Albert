@@ -142,6 +142,21 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED comprehensive Alert Engine v2 validation via external URL (https://quant-features.preview.emergentagent.com/api). All 7 tests passed (7/7 including cleanup). STEP 1 - GET /api/v1/alert-engine/config: HTTP 200 ✅, status='ready' ✅, NEW v2 fields validated: settings.filters.btc_rs=true ✅, settings.corr_cap=3 ✅, settings.expiry_candles=2 ✅, settings.friction_bps=10 ✅. STEP 2 - GET /api/v1/alert-engine/backtest?symbol=BTC: HTTP 200 (0.3s) ✅, status='ready' ✅, candles=719 (>300, ideally ~700) ✅, from='2024-09-15', to='2026-09-03' ✅, detectors validated: gmma_crossover (triggers=25, win_5=56, avg_5=0.37, win_10=44, avg_10=-0.01) ✅, dip_buy (triggers=23, win_5=26, avg_5=-0.88, win_10=43, avg_10=-0.39) ✅, squeeze (triggers=108, win_5=99, avg_5=3.28, win_10=99, avg_10=4.2) ✅, rsi_oversold (triggers=6, win_5=33, avg_5=-4.82, win_10=17, avg_10=-3.23) ✅, rsi_overbought (triggers=3, win_5=67, avg_5=-0.2, win_10=50, avg_10=-2.67) ✅. All detectors have required keys (triggers, win_5, avg_5, win_10, avg_10) ✅. STEP 3 - GET /api/v1/alert-engine/backtest?symbol=SOL: HTTP 200 (2.6s) ✅, status='ready' ✅, detectors present with 5 items ✅. STEP 4 - GET /api/v1/alert-engine/readings?symbol=ETH: HTTP 200 (2.9s) ✅, status='ready' ✅, NEW v2 btc_rs filter fields validated: filters.btc_rs=-1.4 (number, ETH underperforming BTC by 1.4% over 7d) ✅, filters.btc_rs_suppress_long=true (boolean, correctly suppressing ETH longs) ✅. STEP 5 - GET /api/v1/alert-engine/digest: HTTP 200 ✅, status='ready' ✅, count=0 (acceptable, no signals in last 24h) ✅, coins=0 ✅, by_coin={} (dict) ✅, alerts=[] (list) ✅. STEP 6 - POST /api/v1/alert-engine/config (modify corr_cap): HTTP 200 ✅, POST with {settings:{corr_cap:5}} persists ✅, GET confirms corr_cap=5 ✅. CLEANUP - Reset config to defaults: POST with full default settings (including NEW v2 fields) ✅, GET confirms corr_cap=3, expiry_candles=2, friction_bps=10, filters.btc_rs=true ✅. All validations passed. Data is REAL (ccxt kraken/coinbase daily OHLCV for backtests, direction-adjusted forward returns net of friction). No HTTP 500 errors. Backtest endpoints are FAST (~0.3-2.9s, cached OHLCV). Feature is fully functional and production-ready."
+  - task: "Alert Engine v3 — Backtest Compare (edge/edge-board), Sector Rotation (sectors), Token-Unlock filter (unlocks, key-gated)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW Alert Engine v3 endpoints (real ccxt data; allow 60s timeouts). Test: 1) GET /api/v1/alert-engine/sectors -> 200 {status:'ready', sectors:[{sector, strength, hot, members[]}]}. Assert non-empty and each has 'strength' (number or null) + 'hot' bool + 'members'. 2) GET /api/v1/alert-engine/edge?symbol=BTC -> 200 {status:'ready', symbol, ranked:[{detector, win_10, avg_10, score}], best}. Assert ranked non-empty and sorted by score desc; best present. Repeat symbol=SOL. 3) GET /api/v1/alert-engine/edge-board -> 200 {status:'ready', board:[{symbol, best, ranked}]}. Assert board non-empty (may take ~10-20s first call), sorted by best.score desc. 4) GET /api/v1/alert-engine/unlocks?symbol=APT -> 200. Since NO Tokenomist key is set, expect {status:'ready', available:false, note:...}. (Key-gated — this is correct behaviour, NOT a failure.) 5) GET /api/v1/alert-engine/config -> confirm settings.filters now include 'sector' and 'unlock' (true), and settings has auto_prioritise (true), suppress_negative_edge (false), unlock_days (14), unlock_pct (1.0). 6) Regression: GET /api/v1/alert-engine/readings?symbol=ETH still returns readings+filters (btc_rs present); POST /api/v1/alert-engine/scan {\"symbol\":\"BTC\"} still 200. No settings changes needed (read-only tests)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Alert Engine v3 validation via external URL (https://quant-features.preview.emergentagent.com/api). All 6 tests passed (6/6). STEP 1 - GET /api/v1/alert-engine/sectors: HTTP 200 (0.3s) ✅, status='ready' ✅, sectors: 4 items (non-empty) ✅, first sector validated: sector='DeFi' (string) ✅, strength=11.45 (number) ✅, hot=true (bool) ✅, members=['UNI','AAVE','LINK'] (array with 3 items) ✅. STEP 2 - GET /api/v1/alert-engine/edge (BTC+SOL): BTC: HTTP 200 (0.2s) ✅, status='ready' ✅, symbol='BTC' ✅, ranked: 5 items (non-empty) ✅, first item: detector='squeeze', triggers=108, win_10=99, avg_10=4.2, score=8.316 ✅, ranked sorted by score descending: [8.316, -0.009, -0.335, -1.098, -2.67] ✅, best present: {detector:'squeeze', score:8.316} ✅. SOL: HTTP 200 (0.2s) ✅, status='ready' ✅, symbol='SOL' ✅, ranked: 5 items (non-empty) ✅, first item: detector='squeeze', score=18.82 ✅, ranked sorted by score descending: [18.82, 5.41, 1.814, -2.061, -5.584] ✅, best present ✅. STEP 3 - GET /api/v1/alert-engine/edge-board: HTTP 200 (0.1s) ✅, status='ready' ✅, board: 19 items (non-empty) ✅, first item validated: symbol='FIL', best={detector:'rsi_overbought', score:56.94}, ranked: 5 items ✅, board sorted by best.score descending: [56.94, 28.14, 28.02, 26.34, 23.2]... ✅. STEP 4 - GET /api/v1/alert-engine/unlocks (key-gated): HTTP 200 (0.2s) ✅, status='ready' ✅, available=false (correct - no Tokenomist key configured) ✅, note='Add TOKENOMIST_API_KEY to the backend to enable the token-unlock filter.' ✅. STEP 5 - GET /api/v1/alert-engine/config (v3 settings): HTTP 200 ✅, status='ready' ✅, settings.filters.sector=true ✅, settings.filters.unlock=true ✅, settings.auto_prioritise=true ✅, settings.suppress_negative_edge=false ✅, settings.unlock_days=14 ✅, settings.unlock_pct=1.0 ✅. STEP 6 - Regression tests: GET /api/v1/alert-engine/readings?symbol=ETH: HTTP 200 (0.7s) ✅, status='ready' ✅, readings present ✅, filters.btc_rs=-1.4 (present) ✅. POST /api/v1/alert-engine/scan {symbol:'BTC'}: HTTP 200 (0.5s) ✅, status='ready' ✅, scanned=['BTC'] ✅, result present ✅. All validations passed. Data is REAL (ccxt kraken/coinbase daily OHLCV for backtests, sector rotation analysis, edge scoring). No HTTP 500 errors. All endpoints are FAST (~0.1-0.7s, cached OHLCV). Feature is fully functional and production-ready."
+
   - task: "Alert Engine — daily technical signal detectors + context filters (config/readings/scan/recent + scheduler)"
     implemented: true
     working: true
@@ -7470,7 +7485,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Alert Engine v2 — Signal Backtest, Alert Digest, BTC relative-strength filter, correlation cap, perishability, look-ahead fix"
+    - "Alert Engine v3 — Backtest Compare (edge/edge-board), Sector Rotation (sectors), Token-Unlock filter (unlocks, key-gated)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -7478,7 +7493,16 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      NEW additions to the Alert Engine (see task "Alert Engine v2"). Test these; readings/backtest hit real ccxt data so allow ~60s timeouts.
+      NEW Alert Engine v3 endpoints (real ccxt data; allow 60s timeouts). Test:
+      1) GET /api/v1/alert-engine/sectors -> 200 {status:'ready', sectors:[{sector, strength, hot, members[]}]}. Assert non-empty and each has 'strength' (number or null) + 'hot' bool + 'members'.
+      2) GET /api/v1/alert-engine/edge?symbol=BTC -> 200 {status:'ready', symbol, ranked:[{detector, win_10, avg_10, score}], best}. Assert ranked non-empty and sorted by score desc; best present. Repeat symbol=SOL.
+      3) GET /api/v1/alert-engine/edge-board -> 200 {status:'ready', board:[{symbol, best, ranked}]}. Assert board non-empty (may take ~10-20s first call), sorted by best.score desc.
+      4) GET /api/v1/alert-engine/unlocks?symbol=APT -> 200. Since NO Tokenomist key is set, expect {status:'ready', available:false, note:...}. (Key-gated — this is correct behaviour, NOT a failure.)
+      5) GET /api/v1/alert-engine/config -> confirm settings.filters now include 'sector' and 'unlock' (true), and settings has auto_prioritise (true), suppress_negative_edge (false), unlock_days (14), unlock_pct (1.0).
+      6) Regression: GET /api/v1/alert-engine/readings?symbol=ETH still returns readings+filters (btc_rs present); POST /api/v1/alert-engine/scan {"symbol":"BTC"} still 200.
+      No settings changes needed (read-only tests). Report pass/fail per step.
+
+
       1) GET /api/v1/alert-engine/config -> settings now include filters.btc_rs (true), corr_cap (3), expiry_candles (2), friction_bps (10). Assert present.
       2) GET /api/v1/alert-engine/backtest?symbol=BTC -> 200 {status:'ready', candles (expect > 300, ideally ~700), from, to, detectors{gmma_crossover, dip_buy, squeeze, rsi_oversold, rsi_overbought}} each with triggers + win_5/avg_5/win_10/avg_10 (numbers or null). Repeat symbol=SOL (should also return detectors).
       3) GET /api/v1/alert-engine/readings?symbol=ETH -> filters must now include 'btc_rs' (number or null) and 'btc_rs_suppress_long' (bool).
@@ -7650,5 +7674,42 @@ agent_communication:
       📊 Real daily OHLCV via ccxt (kraken/coinbase) for backtests
       📊 Direction-adjusted forward returns net of friction (friction_bps=10)
       📊 Look-ahead fix: only CLOSED candles used (today's still-forming candle dropped)
+      
+      NO ISSUES FOUND. Feature is fully functional and production-ready.
+
+
+    -agent: "testing"
+    -message: |
+      ✅ ALERT ENGINE V3 BACKEND TESTING COMPLETE - ALL TESTS PASSED (6/6)
+      
+      Tested all NEW Alert Engine v3 endpoints via external URL (https://quant-features.preview.emergentagent.com/api).
+      
+      TESTED FLOWS:
+      1. ✅ GET /api/v1/alert-engine/sectors - Returns 4 sectors with valid structure (sector, strength, hot, members)
+      2. ✅ GET /api/v1/alert-engine/edge?symbol=BTC - Returns ranked detectors sorted by score desc, best present
+      3. ✅ GET /api/v1/alert-engine/edge?symbol=SOL - Returns ranked detectors sorted by score desc, best present
+      4. ✅ GET /api/v1/alert-engine/edge-board - Returns 19 coins sorted by best.score desc
+      5. ✅ GET /api/v1/alert-engine/unlocks?symbol=APT - Returns available:false (correct key-gated response)
+      6. ✅ GET /api/v1/alert-engine/config - Returns NEW v3 settings (sector, unlock filters, auto_prioritise, suppress_negative_edge, unlock_days, unlock_pct)
+      7. ✅ Regression: GET /api/v1/alert-engine/readings?symbol=ETH - Returns readings+filters with btc_rs
+      8. ✅ Regression: POST /api/v1/alert-engine/scan - Returns scanned list and result
+      
+      KEY VALIDATIONS:
+      ✅ All NEW v3 endpoints return HTTP 200 with status='ready'
+      ✅ Sectors endpoint returns non-empty array with correct structure (sector, strength, hot, members)
+      ✅ Edge endpoint returns ranked detectors sorted by score descending for BTC and SOL
+      ✅ Edge-board returns board sorted by best.score descending (19 coins)
+      ✅ Unlocks endpoint correctly returns available:false (no Tokenomist key configured)
+      ✅ Config endpoint returns NEW v3 settings (filters.sector, filters.unlock, auto_prioritise, suppress_negative_edge, unlock_days, unlock_pct)
+      ✅ Regression tests confirm existing endpoints still working (readings with btc_rs, scan)
+      
+      PERFORMANCE:
+      ⏱️  All endpoints are FAST (~0.1-0.7s) due to OHLCV caching (3h TTL)
+      ⏱️  No timeout issues (all requests completed well under 60s timeout)
+      
+      DATA SOURCES:
+      📊 Real daily OHLCV via ccxt (kraken/coinbase) for backtests
+      📊 Sector rotation analysis based on real price data
+      📊 Edge scoring based on backtest win rates and average returns
       
       NO ISSUES FOUND. Feature is fully functional and production-ready.

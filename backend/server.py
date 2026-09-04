@@ -8937,7 +8937,7 @@ ALERT_ENGINE_DEFAULTS = {
     'enabled': True,
     'timeframe': '1D',
     'signals': {'gmma_crossover': True, 'dip_buy': True, 'squeeze': True, 'rsi_exhaustion': True},
-    'filters': {'volume': True, 'funding': True, 'netflow': True, 'fng': True, 'btc_rs': True},
+    'filters': {'volume': True, 'funding': True, 'netflow': True, 'fng': True, 'btc_rs': True, 'sector': True, 'unlock': True},
     'volume_mult': 1.5,
     'rsi_low': 30, 'rsi_high': 80,
     'funding_threshold': 0.05,   # % per interval — above this, suppress longs
@@ -8947,6 +8947,10 @@ ALERT_ENGINE_DEFAULTS = {
     'corr_cap': 3,              # max simultaneous ALT long signals per day
     'expiry_candles': 2,        # alert perishability — valid for N daily closes
     'friction_bps': 10,        # round-trip fees+slippage used in backtest R:R
+    'auto_prioritise': True,    # annotate/boost alerts by historical detector edge
+    'suppress_negative_edge': False,  # block signals whose backtested edge is clearly negative
+    'unlock_days': 14,         # suppress alt longs if a big unlock lands within N days
+    'unlock_pct': 1.0,         # ... and it is >= this % of max supply
     'watchlist': ALERT_COINS[:],
 }
 
@@ -9193,6 +9197,20 @@ def _scan_symbol(symbol, settings=None, fire=False, corr_state=None):
     fcfg = st.get('filters', {})
     name = ALERT_COIN_NAMES.get(sym, sym)
     long_block = _long_suppression(filt, st)
+    if st.get('filters', {}).get('sector') and sym != 'BTC':
+        try:
+            sstr = _sector_strength().get(_coin_sector(sym))
+            if sstr is not None and sstr <= 0:
+                long_block.append(f"sector cold ({_coin_sector(sym)} {sstr}%/7d)")
+        except Exception:  # noqa
+            pass
+    if st.get('filters', {}).get('unlock') and sym != 'BTC':
+        try:
+            u = _token_unlock(sym, st.get('unlock_days', 14))
+            if u and u.get('within') and (u.get('percent_of_supply') or 0) >= st.get('unlock_pct', 1.0):
+                long_block.append(f"token unlock {u['percent_of_supply']:.1f}% of supply in {u.get('days_until')}d")
+        except Exception:  # noqa
+            pass
     fired = []      # alerts that WILL fire
     candidates = [] # everything detected (for UI), incl. suppressed w/ reason
 
@@ -9245,11 +9263,21 @@ def _scan_symbol(symbol, settings=None, fire=False, corr_state=None):
     pushed = []
     expiry_n = int(st.get('expiry_candles', 2))
     cap = int(st.get('corr_cap', 3))
+    edge = _detector_edge(sym) if st.get('auto_prioritise') else {}
     if fire:
         for it in fired:
             sigkey = f"{sym}-{it['key']}-{sig['candle_date']}-{it['direction']}"
             if sigkey in already:
                 continue
+            # Auto-prioritise by historical detector edge.
+            edge_suffix = ''
+            e = edge.get(it['key'])
+            if e and e.get('avg_10') is not None:
+                if st.get('suppress_negative_edge') and e['avg_10'] < 0 and (e.get('win_10') or 0) < 40:
+                    continue
+                edge_suffix = f" [hist edge: {e.get('win_10')}% win, {'+' if e['avg_10'] > 0 else ''}{e['avg_10']}%/10d]"
+                if e['avg_10'] > 0 and (e.get('win_10') or 0) >= 55:
+                    it['severity'] = 'high'
             # Correlation / concentration cap: throttle simultaneous ALT longs per day.
             if it['direction'] == 'long' and sym not in ('BTC', 'ETH') and corr_state is not None:
                 cnt = corr_state.get(sig['candle_date'], 0)
@@ -9260,6 +9288,7 @@ def _scan_symbol(symbol, settings=None, fire=False, corr_state=None):
             msg = it['message']
             if it['direction'] in ('long', 'short'):
                 msg = f"{msg} Setup valid for the next {expiry_n} daily closes."
+            msg = f"{msg}{edge_suffix}"
             push_alert('signal', it['severity'], it['title'], msg, sigkey, sym)
             already.add(sigkey)
             pushed.append(sigkey)
@@ -9470,6 +9499,165 @@ def alert_engine_recent(limit: int = 30):
     except Exception:  # noqa
         rows = []
     return {'status': 'ready', 'alerts': rows}
+
+
+# --- Sector rotation, detector edge ranking, and token-unlock filter --------
+ALERT_SECTORS = {
+    'BTC': 'Store of Value',
+    'ETH': 'Smart-Contract L1', 'SOL': 'Smart-Contract L1', 'ADA': 'Smart-Contract L1',
+    'AVAX': 'Smart-Contract L1', 'DOT': 'Smart-Contract L1', 'NEAR': 'Smart-Contract L1',
+    'ATOM': 'Smart-Contract L1', 'APT': 'Smart-Contract L1', 'MATIC': 'Smart-Contract L1',
+    'XRP': 'Payments', 'XLM': 'Payments', 'LTC': 'Payments', 'BCH': 'Payments', 'DOGE': 'Payments',
+    'UNI': 'DeFi', 'AAVE': 'DeFi', 'LINK': 'DeFi',
+    'FIL': 'Infrastructure', 'ETC': 'Infrastructure',
+}
+_SECTOR_CACHE = {'ts': 0, 'data': None}
+_EDGE_CACHE = {}   # sym -> (ts, {detector: {...}})
+_UNLOCK_CACHE = {}  # sym -> (ts, dict)
+TOKENOMIST_API_KEY = os.environ.get('TOKENOMIST_API_KEY', '')
+TOKENOMIST_SLUGS = {
+    'ETH': 'ethereum', 'SOL': 'solana', 'ADA': 'cardano', 'AVAX': 'avalanche-2', 'DOT': 'polkadot',
+    'NEAR': 'near', 'ATOM': 'cosmos', 'APT': 'aptos', 'MATIC': 'matic-network', 'XRP': 'ripple',
+    'XLM': 'stellar', 'LTC': 'litecoin', 'BCH': 'bitcoin-cash', 'DOGE': 'dogecoin', 'UNI': 'uniswap',
+    'AAVE': 'aave', 'LINK': 'chainlink', 'FIL': 'filecoin', 'ETC': 'ethereum-classic',
+}
+
+
+def _coin_sector(symbol):
+    return ALERT_SECTORS.get((symbol or '').upper(), 'Other')
+
+
+def _sector_strength():
+    """Mean [ALT]/BTC 7d relative strength per sector — >0 means capital rotating in."""
+    now = _time_mod.time()
+    if _SECTOR_CACHE['data'] is not None and (now - _SECTOR_CACHE['ts']) < 3600:
+        return _SECTOR_CACHE['data']
+    buckets = {}
+    for sym, sec in ALERT_SECTORS.items():
+        if sym == 'BTC':
+            continue
+        rs = _btc_rel_strength(sym, 7)
+        if rs is None:
+            continue
+        buckets.setdefault(sec, []).append(rs)
+    out = {sec: round(sum(v) / len(v), 2) for sec, v in buckets.items() if v}
+    _SECTOR_CACHE['ts'] = now
+    _SECTOR_CACHE['data'] = out
+    return out
+
+
+def _detector_edge(symbol):
+    """Backtest-derived edge per detector for a coin (cached ~6h)."""
+    sym = (symbol or 'BTC').upper()
+    now = _time_mod.time()
+    c = _EDGE_CACHE.get(sym)
+    if c and (now - c[0]) < 6 * 3600:
+        return c[1]
+    edge = {}
+    try:
+        df = _daily_ohlcv(sym)
+        if df is not None and len(df) >= 80:
+            res = _backtest_detector(df, _get_alert_settings()) or {}
+            for k, r in res.items():
+                score = None
+                if r.get('avg_10') is not None:
+                    score = round((r.get('avg_10') or 0) * ((r.get('win_10') or 50) / 50.0), 3)
+                edge[k] = {'triggers': r.get('triggers'), 'win_10': r.get('win_10'),
+                           'avg_10': r.get('avg_10'), 'score': score}
+    except Exception:  # noqa
+        pass
+    _EDGE_CACHE[sym] = (now, edge)
+    return edge
+
+
+def _token_unlock(symbol, days=14):
+    """Next token unlock within `days` (Tokenomist, key-gated). Returns None if no key / no event."""
+    sym = (symbol or '').upper()
+    if not TOKENOMIST_API_KEY or sym not in TOKENOMIST_SLUGS:
+        return None
+    now = _time_mod.time()
+    c = _UNLOCK_CACHE.get(sym)
+    if c and (now - c[0]) < 12 * 3600:
+        return c[1]
+    result = None
+    try:
+        slug = TOKENOMIST_SLUGS[sym]
+        start = datetime.date.today()
+        end = start + datetime.timedelta(days=int(days))
+        r = requests.get(f'https://api.tokenomist.ai/v5/unlock/events/{slug}',
+                         params={'start': start.isoformat(), 'end': end.isoformat(), 'page': 1, 'pageSize': 100},
+                         headers={'x-api-key': TOKENOMIST_API_KEY}, timeout=15)
+        if r.status_code == 200:
+            rows = (r.json() or {}).get('data', []) or []
+            rows.sort(key=lambda x: x.get('unlockDate', ''))
+            if rows:
+                ev = rows[0]
+                cliff = ev.get('cliffUnlocks') or {}
+                amt = float(cliff.get('cliffAmount') or 0)
+                pct = cliff.get('valueToMarketCap')
+                try:
+                    ud = datetime.datetime.fromisoformat(str(ev.get('unlockDate', '')).replace('Z', ''))
+                    days_until = max(0, (ud.date() - start).days)
+                except Exception:
+                    days_until = None
+                result = {'symbol': sym, 'unlock_date': ev.get('unlockDate'), 'amount': amt,
+                          'percent_of_supply': round(float(pct), 2) if pct is not None else None,
+                          'days_until': days_until, 'within': True, 'source': ev.get('dataSource')}
+    except Exception:  # noqa
+        result = None
+    _UNLOCK_CACHE[sym] = (now, result)
+    return result
+
+
+@app.get('/api/v1/alert-engine/sectors')
+def alert_engine_sectors():
+    strengths = _sector_strength()
+    members = {}
+    for sym, sec in ALERT_SECTORS.items():
+        members.setdefault(sec, []).append(sym)
+    out = [{'sector': sec, 'strength': strengths.get(sec), 'hot': (strengths.get(sec) or 0) > 0,
+            'members': members.get(sec, [])} for sec in members if sec != 'Store of Value']
+    out.sort(key=lambda x: (x['strength'] if x['strength'] is not None else -999), reverse=True)
+    return {'status': 'ready', 'sectors': out}
+
+
+@app.get('/api/v1/alert-engine/edge')
+def alert_engine_edge(symbol: str = 'BTC'):
+    sym = (symbol or 'BTC').upper()
+    if sym not in ALERT_COIN_PAIRS:
+        return JSONResponse({'status': 'error'}, status_code=400)
+    edge = _detector_edge(sym)
+    ranked = sorted([{'detector': k, **v} for k, v in edge.items() if v.get('score') is not None],
+                    key=lambda x: x['score'], reverse=True)
+    return {'status': 'ready', 'symbol': sym, 'ranked': ranked, 'best': ranked[0] if ranked else None}
+
+
+@app.get('/api/v1/alert-engine/edge-board')
+def alert_engine_edge_board():
+    st = _get_alert_settings()
+    board = []
+    for sym in st.get('watchlist', []):
+        try:
+            edge = _detector_edge(sym)
+            ranked = sorted([{'detector': k, **v} for k, v in edge.items() if v.get('score') is not None],
+                            key=lambda x: x['score'], reverse=True)
+            if ranked:
+                board.append({'symbol': sym, 'best': ranked[0], 'ranked': ranked})
+        except Exception:  # noqa
+            continue
+    board.sort(key=lambda x: (x['best']['score'] if x['best'] else -999), reverse=True)
+    return {'status': 'ready', 'board': board}
+
+
+@app.get('/api/v1/alert-engine/unlocks')
+def alert_engine_unlocks(symbol: str = 'ETH'):
+    sym = (symbol or 'ETH').upper()
+    if not TOKENOMIST_API_KEY:
+        return {'status': 'ready', 'available': False, 'unlock': None,
+                'note': 'Add TOKENOMIST_API_KEY to the backend to enable the token-unlock filter.'}
+    u = _token_unlock(sym, 30)
+    return {'status': 'ready', 'available': True, 'symbol': sym, 'unlock': u}
+
 
 
 

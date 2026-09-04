@@ -22,6 +22,8 @@ const FILTER_META = {
   netflow: { label: 'Exchange Netflow (BTC)', icon: Droplet, desc: 'Large BTC exchange inflows flag sell-pressure and override short-term buys. BTC-only for now.' },
   fng: { label: 'Fear & Greed', icon: Gauge, desc: 'Fade the crowd — suppress longs at extreme greed; treat extreme fear as a high-conviction accumulation window.' },
   btc_rs: { label: 'BTC Relative Strength', icon: TrendingUp, desc: 'Only fire alt LONG alerts when the coin is outperforming Bitcoin (rising [ALT]/BTC) — proves capital is rotating into it, not just riding BTC.' },
+  sector: { label: 'Sector Rotation', icon: Radar, desc: 'Only fire alt LONGs in sectors that are actually rotating in (positive aggregate strength vs BTC) — skip dead large-cap sectors.' },
+  unlock: { label: 'Token-Unlock Guard', icon: ShieldAlert, desc: 'Suppress long alerts when a large token unlock (≥1% of supply) lands within ~2 weeks. Needs a Tokenomist API key.' },
 };
 
 function Toggle({ on, onClick }) {
@@ -56,6 +58,9 @@ export default function AlertEngineSection() {
   const [recent, setRecent] = React.useState([]);
   const [backtest, setBacktest] = React.useState(null);
   const [btLoading, setBtLoading] = React.useState(false);
+  const [sectors, setSectors] = React.useState(null);
+  const [board, setBoard] = React.useState(null);
+  const [boardLoading, setBoardLoading] = React.useState(false);
 
   const loadConfig = React.useCallback(async () => {
     try {
@@ -77,7 +82,15 @@ export default function AlertEngineSection() {
     } catch (e) { /* noop */ }
   }, []);
 
-  React.useEffect(() => { loadConfig(); loadRecent(); }, [loadConfig, loadRecent]);
+  React.useEffect(() => { loadConfig(); loadRecent(); fetch(`${API_BASE}/v1/alert-engine/sectors`).then((r) => r.json()).then((j) => setSectors(j.sectors || [])).catch(() => {}); }, [loadConfig, loadRecent]);
+
+  const loadBoard = async () => {
+    setBoardLoading(true);
+    try {
+      const j = await (await fetch(`${API_BASE}/v1/alert-engine/edge-board`, { cache: 'no-store' })).json();
+      setBoard(j.board || []);
+    } catch (e) { /* noop */ } finally { setBoardLoading(false); }
+  };
   React.useEffect(() => { loadReadings(coin); setBacktest(null); }, [coin, loadReadings]);
 
   const runBacktest = async () => {
@@ -148,7 +161,56 @@ export default function AlertEngineSection() {
             <input type="number" value={settings.expiry_candles} onChange={(e) => save({ expiry_candles: Number(e.target.value) })} className="w-14 rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-slate-100" />daily closes</span>
           <span className="flex items-center gap-1.5">Backtest friction
             <input type="number" value={settings.friction_bps} onChange={(e) => save({ friction_bps: Number(e.target.value) })} className="w-16 rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-slate-100" />bps</span>
+          <button onClick={() => save({ auto_prioritise: !settings.auto_prioritise })} className="flex items-center gap-1.5">
+            <Toggle on={settings.auto_prioritise} onClick={() => save({ auto_prioritise: !settings.auto_prioritise })} />Auto-prioritise by backtested edge</button>
+          <button onClick={() => save({ suppress_negative_edge: !settings.suppress_negative_edge })} className="flex items-center gap-1.5">
+            <Toggle on={settings.suppress_negative_edge} onClick={() => save({ suppress_negative_edge: !settings.suppress_negative_edge })} />Mute negative-edge signals</button>
         </div>
+      </Card>
+
+      {/* Sector rotation */}
+      <Card className="border-0 bg-slate-900/60 p-4 ring-1 ring-slate-800">
+        <h3 className="mb-1 text-sm font-bold text-white">Sector rotation (live)</h3>
+        <p className="mb-2 text-[11px] text-slate-500">Aggregate 7-day strength of each sector vs BTC. Alt longs only fire in <span className="text-emerald-400">hot</span> sectors when the filter is on.</p>
+        {sectors ? (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {sectors.map((s) => (
+              <div key={s.sector} className={`rounded-lg border p-2.5 ${s.hot ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-slate-800 bg-slate-900/40'}`}>
+                <p className="text-[12px] font-semibold text-slate-100">{s.sector}</p>
+                <p className={`text-lg font-black ${s.strength > 0 ? 'text-emerald-400' : s.strength < 0 ? 'text-red-400' : 'text-slate-400'}`}>{s.strength > 0 ? '+' : ''}{s.strength ?? '—'}%</p>
+                <p className="truncate text-[10px] text-slate-500">{s.members.join(' ')}</p>
+              </div>
+            ))}
+          </div>
+        ) : <Loader2 className="h-5 w-5 animate-spin text-slate-500" />}
+      </Card>
+
+      {/* Edge board */}
+      <Card className="border-0 bg-slate-900/60 p-4 ring-1 ring-slate-800">
+        <div className="mb-1 flex items-center gap-2">
+          <h3 className="text-sm font-bold text-white">Edge board — strongest detectors</h3>
+          <Button onClick={loadBoard} disabled={boardLoading} size="sm" className="ml-auto h-7 gap-1 bg-violet-500 text-white hover:bg-violet-400">
+            {boardLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}Rank coins
+          </Button>
+        </div>
+        <p className="mb-2 text-[11px] text-slate-500">Which detector has the best historical edge on each coin (score = avg 10-day return × win-rate weight). Auto-prioritise uses this to boost strong signals.</p>
+        {board ? (
+          board.length ? (
+            <div className="space-y-1.5">
+              {board.slice(0, 12).map((b, i) => (
+                <div key={b.symbol} className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2">
+                  <span className="w-5 text-center text-[12px] font-bold text-slate-500">{i + 1}</span>
+                  <span className="w-12 text-[13px] font-bold text-slate-100">{b.symbol}</span>
+                  <span className="flex-1 text-[12px] text-slate-300">{({ gmma_crossover: 'GMMA crossover', dip_buy: 'Dip-buy', squeeze: 'Squeeze', rsi_oversold: 'RSI oversold', rsi_overbought: 'RSI overbought' })[b.best.detector] || b.best.detector}</span>
+                  <span className="text-[11px] text-slate-500">{b.best.win_10}% win</span>
+                  <span className={`w-16 text-right text-[13px] font-bold ${b.best.score > 0 ? 'text-emerald-400' : 'text-red-400'}`}>{b.best.score > 0 ? '+' : ''}{b.best.score}</span>
+                </div>
+              ))}
+            </div>
+          ) : <p className="py-3 text-center text-[12px] text-slate-500">No edge data yet.</p>
+        ) : (
+          <p className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-3 text-center text-[12px] text-slate-500">Tap <span className="font-semibold text-slate-300">Rank coins</span> to see which detector is sharpest per coin.</p>
+        )}
       </Card>
 
       {/* Live readings */}
