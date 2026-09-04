@@ -98,7 +98,7 @@ function DashboardSkeleton({ ticker }) {
     <div className="flex min-h-screen bg-slate-950">
       {/* Sidebar */}
       <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-800 bg-slate-900/40 px-4 py-5 md:flex">
-        <img src="/ask-albert-logo.png" alt="Ask Albert" className="mb-1 h-14 w-auto object-contain" />
+        <img src="/ask-albert-logo.png" alt="Ask Albert" className="mb-1 h-20 w-auto object-contain" />
         <div className="mb-6 text-[10px] text-slate-600">Hucentai Crypto IQ</div>
         <div className="space-y-1.5">
           {navRows.map((_, i) => (
@@ -3278,7 +3278,7 @@ export default function DashboardPage() {
         {/* Sidebar */}
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-900/40 p-4 backdrop-blur-sm md:flex">
           <div className="mb-6 flex flex-col gap-1 px-1">
-            <img src="/ask-albert-logo.png" alt="Ask Albert" className="h-16 w-auto object-contain" />
+            <img src="/ask-albert-logo.png" alt="Ask Albert" className="h-24 w-auto object-contain" />
             <p className="pl-0.5 text-[11px] font-semibold">
               <span className="text-slate-500">Hucentai Crypto IQ</span>
             </p>
@@ -3315,7 +3315,7 @@ export default function DashboardPage() {
         <div className="min-w-0 flex-1">
           {/* Top bar */}
           <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/80 px-4 py-3 backdrop-blur md:px-8">
-            <div className="flex items-center gap-2 md:hidden"><img src="/ask-albert-logo.png" alt="Ask Albert" className="h-6 w-auto object-contain" /></div>
+            <div className="flex items-center gap-2 md:hidden"><img src="/ask-albert-logo.png" alt="Ask Albert" className="h-9 w-auto object-contain" /></div>
             <CoinPicker coins={coins} symbol={symbol} onSelect={setSymbol} />
             {symbol !== 'BTC' && (
               <button onClick={() => setCompareOpen(true)} title="Overlay this coin vs Bitcoin"
