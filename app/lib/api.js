@@ -20,6 +20,10 @@ export function setReadingLevel(v) {
 export function getPid() {
   if (typeof window === 'undefined') return '';
   try {
+    // When signed in, scope all per-user data (portfolio, watchlist, strategies)
+    // to the authenticated user id. Falls back to a stable per-device id otherwise.
+    const uid = window.localStorage.getItem('btciq_user_id');
+    if (uid) return 'u_' + uid;
     let pid = window.localStorage.getItem('btciq_pid');
     if (!pid) {
       pid = 'pid_' + Math.random().toString(36).slice(2) + Date.now().toString(36);

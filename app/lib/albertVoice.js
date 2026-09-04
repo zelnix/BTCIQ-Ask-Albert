@@ -145,11 +145,16 @@ function notifyFallback(reason) {
 function chunkText(text) {
   const sentences = (text.match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [text])
     .map((s) => s.trim()).filter(Boolean);
-  if (sentences.length === 0) return [text];
+  if (sentences.length <= 1) return [text];
+  // First chunk is a single sentence so audio starts almost immediately. The
+  // REST is grouped into large ~3000-char chunks to minimise the number of TTS
+  // requests — Gemini TTS is metered per request, so fewer/larger calls make a
+  // limited daily quota go much further (typically ~2 calls per read).
   const chunks = [sentences[0]];
   let buf = '';
+  const MAX = 3000;
   for (let i = 1; i < sentences.length; i++) {
-    if (buf && (buf + ' ' + sentences[i]).length > 220) { chunks.push(buf); buf = sentences[i]; }
+    if (buf && (buf + ' ' + sentences[i]).length > MAX) { chunks.push(buf); buf = sentences[i]; }
     else buf = (buf ? buf + ' ' : '') + sentences[i];
   }
   if (buf) chunks.push(buf);

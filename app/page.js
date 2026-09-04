@@ -13,7 +13,7 @@ import {
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
   Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet, Plus, Clock,
-  ChevronDown, Coins, Fish, Zap, Loader2,
+  ChevronDown, Coins, Fish, Zap, Loader2, LogOut,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -24,6 +24,8 @@ import { SymbolContext } from './lib/context';
 import { useFetch } from './lib/useFetch';
 import FloatingAlbert from './components/FloatingAlbert';
 import AlbertText from './components/AlbertText';
+import HomePage from './components/HomePage';
+import { fetchMe, logout as authLogout, rememberUser } from './lib/auth';
 import AlbertReplyMeta from './components/AlbertReplyMeta';
 import PortfolioPanel from './components/PortfolioPanel';
 import AlbertTrackRecord from './components/AlbertTrackRecord';
@@ -2600,7 +2602,7 @@ function ModelSwitcher() {
 
 
 // ---- Data Audit (Composite Price · Provenance · GDELT · Cross-Asset · FRED Macro) ----
-function AdminSection() {
+function AdminSection({ user, onSignOut }) {
   const [d, loading] = useFetch(`${API_BASE}/v1/admin/overview`);
   const stColor = (s) => s === 'Active' ? 'text-emerald-400' : 'text-slate-500';
   const ageColor = (m) => m == null ? 'text-slate-600' : m < 60 ? 'text-emerald-400' : m < 360 ? 'text-amber-400' : 'text-red-400';
@@ -2608,6 +2610,24 @@ function AdminSection() {
   return (
     <div className="space-y-5">
       <SectionHead icon={ShieldCheck} title="Admin" blurb={sec('admin').blurb} coin="BTC" />
+      {user && (
+        <Card className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              {user.picture
+                ? <img src={user.picture} alt={user.name || user.email} className="h-10 w-10 rounded-full ring-1 ring-slate-700" referrerPolicy="no-referrer" />
+                : <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-500/20 text-sm font-semibold text-sky-300">{(user.name || user.email || '?').slice(0, 1).toUpperCase()}</div>}
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-white">{user.name || 'Signed in'}</div>
+                <div className="truncate text-[11px] text-slate-500">{user.email}</div>
+              </div>
+            </div>
+            <Button onClick={onSignOut} variant="outline" className="shrink-0 border-slate-700 bg-transparent text-slate-300 hover:bg-slate-800">
+              <LogOut className="mr-1.5 h-3.5 w-3.5" />Sign out
+            </Button>
+          </div>
+        </Card>
+      )}
       {loading ? <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-sm text-slate-500">Loading admin overview…</p></Card> : !d || d.status !== 'ready' ? <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-sm text-slate-500">Admin data unavailable.</p></Card> : (<>
         {/* KPIs */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -3065,6 +3085,22 @@ export default function DashboardPage() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [albertBioOpen, setAlbertBioOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+  // Auth gate: undefined = checking, null = signed out, {user} = signed in.
+  const [authUser, setAuthUser] = useState(undefined);
+  React.useEffect(() => {
+    let alive = true;
+    fetchMe().then((u) => {
+      if (!alive) return;
+      if (u) rememberUser(u);
+      setAuthUser(u || null);
+    });
+    return () => { alive = false; };
+  }, []);
+  const handleSignOut = React.useCallback(async () => {
+    await authLogout();
+    setAuthUser(null);
+    try { window.location.reload(); } catch (e) { /* noop */ }
+  }, []);
   React.useEffect(() => {
     const onDocClick = (e) => {
       const t = e.target;
@@ -3320,6 +3356,18 @@ export default function DashboardPage() {
     doRefresh(p, passRemember, passAutoClear);
   };
 
+  if (authUser === undefined) {
+    return (
+      <main className="flex min-h-screen flex-col items-center justify-center gap-3 bg-slate-950">
+        <img src="/albert.png" alt="Albert" className="h-16 w-16 animate-pulse rounded-full ring-2 ring-sky-500/40" />
+        <p className="text-sm text-slate-400">Waking Albert…</p>
+      </main>
+    );
+  }
+  if (!authUser) {
+    return <HomePage onAuthed={(u) => { rememberUser(u); setAuthUser(u); }} />;
+  }
+
   if (!data && (status === 'loading' || status === 'computing')) {
     return (
       <>
@@ -3353,7 +3401,7 @@ export default function DashboardPage() {
     if (active === 'whales') return <WhaleWatch />;
     if (active === 'network') return <NetworkSentimentSection />;
     if (active === 'dataaudit') return <DataAuditSection />;
-    if (active === 'admin') return <AdminSection />;
+    if (active === 'admin') return <AdminSection user={authUser} onSignOut={handleSignOut} />;
     if (active === 'leverage') return <LeverageSection />;
     if (active === 'institutional') return (<div className="space-y-5"><DemoMetricsCard title="Institutional & Derivatives" icon={Landmark} panel={d.institutional} sectionId="institutional" />{(d.symbol || 'BTC') === 'BTC' && <EtfFlowsCard />}</div>);
     if (active === 'macro') return <PolicySection d={d} />;

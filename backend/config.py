@@ -81,6 +81,18 @@ price_watch_col = db['price_watches']  # "alert me at $X" watches created from A
 albert_calls_col = db['albert_calls']  # Albert's self-logged buy/sell calls + graded outcomes (track record)
 recap_col = db['albert_recap']  # cached weekly recap note
 
+# ---- Native Google Sign-In (GIS ID-token flow) ----
+users_col = db['users']            # {_id(uuid), google_sub, email, name, picture, created_at, updated_at}
+auth_sessions_col = db['auth_sessions']  # {_id(uuid), token, user_id, created_at, expires_at}
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID', '')
+try:
+    users_col.create_index('google_sub', unique=True)
+    users_col.create_index('email')
+    auth_sessions_col.create_index('token', unique=True)
+    auth_sessions_col.create_index('expires_at', expireAfterSeconds=0)
+except Exception:  # noqa
+    pass
+
 # Glassnode on-chain data (Smart Money panel). Advanced Light tier: 14d daily history, low call budget.
 GLASSNODE_API_KEY = os.environ.get('GLASSNODE_API_KEY')
 # Admin passcode gate for manual forecast runs (Stage-1: passcode instead of full auth).

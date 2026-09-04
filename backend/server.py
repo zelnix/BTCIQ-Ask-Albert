@@ -42,7 +42,7 @@ from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import TimeSeriesSplit
-from fastapi import FastAPI, Body, Request
+from fastapi import FastAPI, Body, Request, Cookie, Header, Depends, Response, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -60,6 +60,7 @@ from config import (
     email_recipients_col, email_log_col, email_settings_col,
     PUBLIC_BASE_URL, UNSUB_SECRET, WEEKLY_HOUR, WEEKLY_MINUTE, regime_col,
     portfolio_col, price_watch_col, albert_calls_col, recap_col,
+    users_col, auth_sessions_col, GOOGLE_CLIENT_ID,
 )
 from email_service import send_email, resend_configured
 import regime_engine
@@ -3539,6 +3540,105 @@ def save_model_settings(payload: dict = Body(...)):
     if update:
         misc_col.update_one({'_id': 'ai_model_prefs'}, {'$set': update}, upsert=True)
     return {'status': 'ready', 'prefs': _get_model_prefs()}
+
+
+# =====================================================================
+# NATIVE GOOGLE SIGN-IN (Google Identity Services ID-token flow)
+# Frontend renders the Google button, gets a JWT credential, and POSTs it to
+# /api/auth/google. We verify it against GOOGLE_CLIENT_ID, upsert the user, and
+# issue our OWN opaque 7-day httpOnly session cookie. Sync pymongo throughout.
+# =====================================================================
+from google.oauth2 import id_token as _google_id_token
+from google.auth.transport import requests as _google_requests
+
+AUTH_COOKIE = 'albert_session'
+AUTH_SESSION_DAYS = 7
+
+
+def get_current_user(request: Request,
+                     albert_session: str = Cookie(default=None, alias=AUTH_COOKIE),
+                     authorization: str = Header(default=None)):
+    """FastAPI dependency: resolve the signed-in user from the session cookie
+    (or Authorization: Bearer <token>). Raises 401 when not authenticated."""
+    token = albert_session
+    if not token and authorization and authorization.lower().startswith('bearer '):
+        token = authorization[7:].strip()
+    if not token:
+        raise HTTPException(status_code=401, detail='Not authenticated')
+    row = auth_sessions_col.find_one({'token': token})
+    now = datetime.datetime.utcnow()
+    if not row or row.get('expires_at') and row['expires_at'] <= now:
+        if row:
+            auth_sessions_col.delete_one({'_id': row['_id']})
+        raise HTTPException(status_code=401, detail='Session expired')
+    user = users_col.find_one({'_id': row['user_id']},
+                              {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
+    if not user:
+        raise HTTPException(status_code=401, detail='User not found')
+    return user
+
+
+@app.post('/api/auth/google')
+def auth_google(payload: dict = Body(...)):
+    """Verify a Google ID-token credential, upsert the user, and set a session cookie."""
+    cred = (payload.get('credential') or '').strip()
+    if not cred:
+        raise HTTPException(status_code=400, detail='Missing Google credential')
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=503, detail='Google sign-in is not configured')
+    try:
+        info = _google_id_token.verify_oauth2_token(
+            cred, _google_requests.Request(), GOOGLE_CLIENT_ID)
+    except Exception:  # noqa
+        raise HTTPException(status_code=401, detail='Invalid Google token')
+    if not info.get('email_verified'):
+        raise HTTPException(status_code=400, detail='Google email not verified')
+    sub = info.get('sub')
+    if not sub:
+        raise HTTPException(status_code=401, detail='Invalid Google token')
+    now = datetime.datetime.utcnow()
+    users_col.update_one(
+        {'google_sub': sub},
+        {'$set': {'email': (info.get('email') or '').lower(), 'name': info.get('name'),
+                  'picture': info.get('picture'), 'updated_at': now},
+         '$setOnInsert': {'_id': str(uuid.uuid4()), 'google_sub': sub, 'created_at': now}},
+        upsert=True)
+    user = users_col.find_one({'google_sub': sub})
+    token = uuid.uuid4().hex + uuid.uuid4().hex
+    expires = now + datetime.timedelta(days=AUTH_SESSION_DAYS)
+    auth_sessions_col.insert_one({'_id': str(uuid.uuid4()), 'token': token,
+                                  'user_id': user['_id'], 'created_at': now,
+                                  'expires_at': expires})
+    resp = JSONResponse({'user': {'id': user['_id'], 'email': user.get('email'),
+                                  'name': user.get('name'), 'picture': user.get('picture')}})
+    resp.set_cookie(AUTH_COOKIE, token, max_age=AUTH_SESSION_DAYS * 86400,
+                    httponly=True, secure=True, samesite='lax', path='/')
+    return resp
+
+
+@app.get('/api/auth/me')
+def auth_me(user: dict = Depends(get_current_user)):
+    return {'id': user['_id'], 'email': user.get('email'),
+            'name': user.get('name'), 'picture': user.get('picture')}
+
+
+@app.get('/api/auth/config')
+def auth_config():
+    """Public: tells the frontend whether Google sign-in is configured + the client id."""
+    return {'configured': bool(GOOGLE_CLIENT_ID), 'client_id': GOOGLE_CLIENT_ID}
+
+
+@app.post('/api/auth/logout')
+def auth_logout(albert_session: str = Cookie(default=None, alias=AUTH_COOKIE)):
+    if albert_session:
+        try:
+            auth_sessions_col.delete_one({'token': albert_session})
+        except Exception:  # noqa
+            pass
+    resp = JSONResponse({'ok': True})
+    resp.delete_cookie(AUTH_COOKIE, path='/')
+    return resp
+
 
 
 
