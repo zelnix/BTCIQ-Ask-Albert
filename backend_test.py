@@ -1,387 +1,532 @@
+#!/usr/bin/env python3
 """
-Backend API Test Suite for Albert Voice Selection Endpoints
-Tests the new voice picker endpoints as per review request.
+Backend test for Albert Trading Strategies endpoints.
+Tests the complete flow: build -> activate -> get -> list -> close + cleanup.
 """
+import os
+import sys
 import requests
 import json
-import time
+from pymongo import MongoClient
 
-# Load base URL from .env
-BASE_URL = "https://quant-features.preview.emergentagent.com/api"
+# Configuration
+BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://quant-features.preview.emergentagent.com')
+API_BASE = f"{BASE_URL}/api"
+MONGO_URL = os.getenv('MONGO_URL', 'mongodb://localhost:27017')
+DB_NAME = os.getenv('DB_NAME', 'btciq')
 
-def test_tts_voices():
-    """
-    Test 1: GET /api/v1/tts/voices
-    Expect HTTP 200 JSON with keys {status:'ready', default:'Charon', tts_available:true, voices:[...]}
-    Assert voices is a non-empty array (should be 12), each item has 'id','name','desc'
-    Assert the list of ids includes 'Charon' and 'Fenrir'
-    """
-    print("\n" + "="*80)
-    print("TEST 1: GET /api/v1/tts/voices")
-    print("="*80)
+print(f"Testing Albert Trading Strategies endpoints")
+print(f"API Base URL: {API_BASE}")
+print(f"MongoDB: {MONGO_URL}/{DB_NAME}")
+print("=" * 80)
+
+# Track created strategy IDs for cleanup
+created_strategy_ids = []
+
+def test_step(step_num, description):
+    """Print test step header"""
+    print(f"\n{'='*80}")
+    print(f"STEP {step_num}: {description}")
+    print(f"{'='*80}")
+
+def assert_field(obj, field, expected_type=None, msg=""):
+    """Assert a field exists and optionally check its type"""
+    if field not in obj:
+        print(f"❌ FAIL: Missing field '{field}' {msg}")
+        return False
+    if expected_type and not isinstance(obj[field], expected_type):
+        print(f"❌ FAIL: Field '{field}' has wrong type. Expected {expected_type}, got {type(obj[field])} {msg}")
+        return False
+    return True
+
+def assert_non_empty(obj, field, msg=""):
+    """Assert a field exists and is non-empty"""
+    if not assert_field(obj, field, msg=msg):
+        return False
+    if isinstance(obj[field], (list, dict, str)) and len(obj[field]) == 0:
+        print(f"❌ FAIL: Field '{field}' is empty {msg}")
+        return False
+    return True
+
+try:
+    # ========================================================================
+    # STEP 1: Build BTC strategy
+    # ========================================================================
+    test_step(1, "POST /api/v1/albert/strategy/build with BTC")
+    
+    response = requests.post(f"{API_BASE}/v1/albert/strategy/build", 
+                            json={"symbol": "BTC"},
+                            timeout=60)
+    print(f"Status Code: {response.status_code}")
+    
+    if response.status_code != 200:
+        print(f"❌ FAIL: Expected 200, got {response.status_code}")
+        print(f"Response: {response.text}")
+        sys.exit(1)
+    
+    btc_build_data = response.json()
+    print(f"Response keys: {list(btc_build_data.keys())}")
+    
+    # Validate response structure
+    if not assert_field(btc_build_data, 'status', str):
+        sys.exit(1)
+    if btc_build_data['status'] != 'ready':
+        print(f"❌ FAIL: Expected status='ready', got '{btc_build_data['status']}'")
+        sys.exit(1)
+    print(f"✅ status='ready'")
+    
+    if not assert_field(btc_build_data, 'draft', dict):
+        sys.exit(1)
+    
+    btc_draft = btc_build_data['draft']
+    print(f"Draft keys: {list(btc_draft.keys())}")
+    
+    # Validate draft structure
+    required_fields = ['title', 'bias', 'position', 'thesis', 'horizon_days', 'targets', 'rules']
+    for field in required_fields:
+        if not assert_non_empty(btc_draft, field, f"in BTC draft"):
+            sys.exit(1)
+    
+    print(f"✅ Draft has all required fields: {required_fields}")
+    
+    # Validate targets array
+    if not isinstance(btc_draft['targets'], list) or len(btc_draft['targets']) == 0:
+        print(f"❌ FAIL: 'targets' must be a non-empty array")
+        sys.exit(1)
+    print(f"✅ targets is non-empty array with {len(btc_draft['targets'])} items")
+    
+    # Validate rules array
+    if not isinstance(btc_draft['rules'], list) or len(btc_draft['rules']) == 0:
+        print(f"❌ FAIL: 'rules' must be a non-empty array")
+        sys.exit(1)
+    print(f"✅ rules is non-empty array with {len(btc_draft['rules'])} items")
+    
+    print(f"✅ BTC draft structure validated:")
+    print(f"   - title: {btc_draft['title']}")
+    print(f"   - bias: {btc_draft['bias']}")
+    print(f"   - position: {btc_draft['position']}")
+    print(f"   - horizon_days: {btc_draft['horizon_days']}")
+    print(f"   - targets: {len(btc_draft['targets'])} items")
+    print(f"   - rules: {len(btc_draft['rules'])} items")
+    
+    # ========================================================================
+    # STEP 1b: Build ETH strategy with goal
+    # ========================================================================
+    test_step("1b", "POST /api/v1/albert/strategy/build with ETH and goal")
+    
+    response = requests.post(f"{API_BASE}/v1/albert/strategy/build", 
+                            json={"symbol": "ETH", "goal": "swing long"},
+                            timeout=60)
+    print(f"Status Code: {response.status_code}")
+    
+    if response.status_code != 200:
+        print(f"❌ FAIL: Expected 200, got {response.status_code}")
+        print(f"Response: {response.text}")
+        sys.exit(1)
+    
+    eth_build_data = response.json()
+    
+    if eth_build_data['status'] != 'ready':
+        print(f"❌ FAIL: Expected status='ready', got '{eth_build_data['status']}'")
+        sys.exit(1)
+    print(f"✅ status='ready'")
+    
+    eth_draft = eth_build_data['draft']
+    
+    # Validate ETH draft structure (same as BTC)
+    for field in required_fields:
+        if not assert_non_empty(eth_draft, field, f"in ETH draft"):
+            sys.exit(1)
+    
+    if not isinstance(eth_draft['targets'], list) or len(eth_draft['targets']) == 0:
+        print(f"❌ FAIL: ETH 'targets' must be a non-empty array")
+        sys.exit(1)
+    
+    if not isinstance(eth_draft['rules'], list) or len(eth_draft['rules']) == 0:
+        print(f"❌ FAIL: ETH 'rules' must be a non-empty array")
+        sys.exit(1)
+    
+    print(f"✅ ETH draft structure validated:")
+    print(f"   - title: {eth_draft['title']}")
+    print(f"   - bias: {eth_draft['bias']}")
+    print(f"   - position: {eth_draft['position']}")
+    print(f"   - horizon_days: {eth_draft['horizon_days']}")
+    print(f"   - targets: {len(eth_draft['targets'])} items")
+    print(f"   - rules: {len(eth_draft['rules'])} items")
+    
+    # ========================================================================
+    # STEP 2: Activate BTC strategy
+    # ========================================================================
+    test_step(2, "POST /api/v1/albert/strategy to activate BTC draft")
+    
+    response = requests.post(f"{API_BASE}/v1/albert/strategy", 
+                            json={"draft": btc_draft},
+                            timeout=30)
+    print(f"Status Code: {response.status_code}")
+    
+    if response.status_code != 200:
+        print(f"❌ FAIL: Expected 200, got {response.status_code}")
+        print(f"Response: {response.text}")
+        sys.exit(1)
+    
+    btc_activate_data = response.json()
+    
+    if btc_activate_data['status'] != 'ready':
+        print(f"❌ FAIL: Expected status='ready', got '{btc_activate_data['status']}'")
+        sys.exit(1)
+    print(f"✅ status='ready'")
+    
+    if not assert_field(btc_activate_data, 'strategy', dict):
+        sys.exit(1)
+    
+    btc_strategy = btc_activate_data['strategy']
+    print(f"Strategy keys: {list(btc_strategy.keys())}")
+    
+    # Track for cleanup
+    if 'id' in btc_strategy:
+        created_strategy_ids.append(btc_strategy['id'])
+        print(f"✅ Strategy ID: {btc_strategy['id']}")
+    
+    # Validate strategy structure
+    if not assert_field(btc_strategy, 'status', str):
+        sys.exit(1)
+    if btc_strategy['status'] != 'active':
+        print(f"❌ FAIL: Expected strategy.status='active', got '{btc_strategy['status']}'")
+        sys.exit(1)
+    print(f"✅ strategy.status='active'")
+    
+    if not assert_field(btc_strategy, 'entry_price', (int, float)):
+        sys.exit(1)
+    if btc_strategy['entry_price'] <= 0:
+        print(f"❌ FAIL: entry_price must be > 0, got {btc_strategy['entry_price']}")
+        sys.exit(1)
+    print(f"✅ entry_price={btc_strategy['entry_price']} (> 0)")
+    
+    if not assert_field(btc_strategy, 'perf', dict):
+        sys.exit(1)
+    print(f"✅ perf object present")
+    
+    if not assert_field(btc_strategy, 'events', list):
+        sys.exit(1)
+    if len(btc_strategy['events']) == 0:
+        print(f"❌ FAIL: events array must not be empty")
+        sys.exit(1)
+    
+    # Check for 'opened' event
+    opened_event = None
+    for event in btc_strategy['events']:
+        if event.get('type') == 'opened':
+            opened_event = event
+            break
+    
+    if not opened_event:
+        print(f"❌ FAIL: No 'opened' event found in events array")
+        print(f"Events: {btc_strategy['events']}")
+        sys.exit(1)
+    print(f"✅ events contains 'opened' event")
+    
+    print(f"✅ BTC strategy activated successfully")
+    
+    # ========================================================================
+    # STEP 3: ONE-ACTIVE-PER-COIN test
+    # ========================================================================
+    test_step(3, "ONE-ACTIVE-PER-COIN: Build and activate another BTC strategy")
+    
+    # Build another BTC strategy
+    response = requests.post(f"{API_BASE}/v1/albert/strategy/build", 
+                            json={"symbol": "BTC"},
+                            timeout=60)
+    if response.status_code != 200:
+        print(f"❌ FAIL: Build failed with {response.status_code}")
+        sys.exit(1)
+    
+    btc_draft_2 = response.json()['draft']
+    print(f"✅ Built second BTC draft")
+    
+    # Activate the second BTC strategy
+    response = requests.post(f"{API_BASE}/v1/albert/strategy", 
+                            json={"draft": btc_draft_2},
+                            timeout=30)
+    if response.status_code != 200:
+        print(f"❌ FAIL: Activate failed with {response.status_code}")
+        sys.exit(1)
+    
+    btc_strategy_2 = response.json()['strategy']
+    if 'id' in btc_strategy_2:
+        created_strategy_ids.append(btc_strategy_2['id'])
+    
+    print(f"✅ Activated second BTC strategy (ID: {btc_strategy_2.get('id')})")
+    
+    # Now GET /api/v1/albert/strategies?symbol=BTC to verify one-active-per-coin
+    response = requests.get(f"{API_BASE}/v1/albert/strategies?symbol=BTC", timeout=30)
+    if response.status_code != 200:
+        print(f"❌ FAIL: GET strategies failed with {response.status_code}")
+        sys.exit(1)
+    
+    strategies_data = response.json()
+    print(f"Strategies response keys: {list(strategies_data.keys())}")
+    
+    if strategies_data['status'] != 'ready':
+        print(f"❌ FAIL: Expected status='ready', got '{strategies_data['status']}'")
+        sys.exit(1)
+    
+    if not assert_field(strategies_data, 'active', (dict, type(None))):
+        sys.exit(1)
+    
+    if not assert_field(strategies_data, 'history', list):
+        sys.exit(1)
+    
+    # Verify exactly ONE active strategy
+    if strategies_data['active'] is None:
+        print(f"❌ FAIL: Expected one active strategy, got None")
+        sys.exit(1)
+    
+    active_strategy = strategies_data['active']
+    print(f"✅ Found ONE active strategy (ID: {active_strategy.get('id')})")
+    
+    # Verify the active strategy is the second one
+    if active_strategy.get('id') != btc_strategy_2.get('id'):
+        print(f"❌ FAIL: Active strategy ID mismatch. Expected {btc_strategy_2.get('id')}, got {active_strategy.get('id')}")
+        sys.exit(1)
+    print(f"✅ Active strategy is the second one (most recent)")
+    
+    # Verify the first strategy is now in history with status 'closed' and close_reason 'superseded'
+    first_strategy_in_history = None
+    for h in strategies_data['history']:
+        if h.get('id') == btc_strategy.get('id'):
+            first_strategy_in_history = h
+            break
+    
+    if not first_strategy_in_history:
+        print(f"❌ FAIL: First strategy (ID: {btc_strategy.get('id')}) not found in history")
+        print(f"History IDs: {[h.get('id') for h in strategies_data['history']]}")
+        sys.exit(1)
+    
+    if first_strategy_in_history.get('status') != 'closed':
+        print(f"❌ FAIL: First strategy status should be 'closed', got '{first_strategy_in_history.get('status')}'")
+        sys.exit(1)
+    print(f"✅ First strategy status='closed'")
+    
+    if first_strategy_in_history.get('close_reason') != 'superseded':
+        print(f"❌ FAIL: First strategy close_reason should be 'superseded', got '{first_strategy_in_history.get('close_reason')}'")
+        sys.exit(1)
+    print(f"✅ First strategy close_reason='superseded'")
+    
+    print(f"✅ ONE-ACTIVE-PER-COIN validation passed")
+    
+    # ========================================================================
+    # STEP 4: GET active strategy and list strategies
+    # ========================================================================
+    test_step(4, "GET /api/v1/albert/strategy?symbol=BTC (active strategy)")
+    
+    response = requests.get(f"{API_BASE}/v1/albert/strategy?symbol=BTC", timeout=30)
+    if response.status_code != 200:
+        print(f"❌ FAIL: Expected 200, got {response.status_code}")
+        sys.exit(1)
+    
+    active_data = response.json()
+    
+    if active_data['status'] != 'ready':
+        print(f"❌ FAIL: Expected status='ready', got '{active_data['status']}'")
+        sys.exit(1)
+    print(f"✅ status='ready'")
+    
+    if not assert_field(active_data, 'strategy', dict):
+        sys.exit(1)
+    
+    active_strat = active_data['strategy']
+    if active_strat.get('status') != 'active':
+        print(f"❌ FAIL: Expected strategy.status='active', got '{active_strat.get('status')}'")
+        sys.exit(1)
+    print(f"✅ Returned active strategy (ID: {active_strat.get('id')})")
+    
+    # Test GET /api/v1/albert/strategies?symbol=BTC (already tested above, but verify again)
+    test_step("4b", "GET /api/v1/albert/strategies?symbol=BTC (list)")
+    
+    response = requests.get(f"{API_BASE}/v1/albert/strategies?symbol=BTC", timeout=30)
+    if response.status_code != 200:
+        print(f"❌ FAIL: Expected 200, got {response.status_code}")
+        sys.exit(1)
+    
+    list_data = response.json()
+    
+    if list_data['status'] != 'ready':
+        print(f"❌ FAIL: Expected status='ready', got '{list_data['status']}'")
+        sys.exit(1)
+    
+    if not assert_field(list_data, 'active', (dict, type(None))):
+        sys.exit(1)
+    if not assert_field(list_data, 'history', list):
+        sys.exit(1)
+    if not assert_field(list_data, 'stats', dict):
+        sys.exit(1)
+    
+    print(f"✅ List response structure validated:")
+    print(f"   - active: {list_data['active'] is not None}")
+    print(f"   - history: {len(list_data['history'])} items")
+    print(f"   - stats: {list(list_data['stats'].keys())}")
+    
+    # ========================================================================
+    # STEP 5: Close active BTC strategy
+    # ========================================================================
+    test_step(5, "POST /api/v1/albert/strategy/{id}/close with reason='manual'")
+    
+    active_id = btc_strategy_2.get('id')
+    response = requests.post(f"{API_BASE}/v1/albert/strategy/{active_id}/close", 
+                            json={"reason": "manual"},
+                            timeout=30)
+    if response.status_code != 200:
+        print(f"❌ FAIL: Expected 200, got {response.status_code}")
+        print(f"Response: {response.text}")
+        sys.exit(1)
+    
+    close_data = response.json()
+    
+    if close_data['status'] != 'ready':
+        print(f"❌ FAIL: Expected status='ready', got '{close_data['status']}'")
+        sys.exit(1)
+    
+    closed_strategy = close_data['strategy']
+    
+    if closed_strategy.get('status') != 'closed':
+        print(f"❌ FAIL: Expected strategy.status='closed', got '{closed_strategy.get('status')}'")
+        sys.exit(1)
+    print(f"✅ strategy.status='closed'")
+    
+    if not assert_field(closed_strategy, 'final_pnl_pct', (int, float)):
+        sys.exit(1)
+    print(f"✅ final_pnl_pct present: {closed_strategy['final_pnl_pct']}")
+    
+    if not assert_field(closed_strategy, 'outcome', str):
+        sys.exit(1)
+    print(f"✅ outcome present: {closed_strategy['outcome']}")
+    
+    print(f"✅ Strategy closed successfully")
+    
+    # Verify GET /api/v1/albert/strategy?symbol=BTC now returns status='none'
+    test_step("5b", "Verify GET /api/v1/albert/strategy?symbol=BTC returns status='none'")
+    
+    response = requests.get(f"{API_BASE}/v1/albert/strategy?symbol=BTC", timeout=30)
+    if response.status_code != 200:
+        print(f"❌ FAIL: Expected 200, got {response.status_code}")
+        sys.exit(1)
+    
+    none_data = response.json()
+    
+    if none_data['status'] != 'none':
+        print(f"❌ FAIL: Expected status='none', got '{none_data['status']}'")
+        sys.exit(1)
+    print(f"✅ status='none' (no active BTC strategy)")
+    
+    # ========================================================================
+    # STEP 6: Activate and close ETH strategy
+    # ========================================================================
+    test_step(6, "Activate and close ETH strategy")
+    
+    # Activate ETH strategy
+    response = requests.post(f"{API_BASE}/v1/albert/strategy", 
+                            json={"draft": eth_draft},
+                            timeout=30)
+    if response.status_code != 200:
+        print(f"❌ FAIL: ETH activate failed with {response.status_code}")
+        sys.exit(1)
+    
+    eth_strategy = response.json()['strategy']
+    if 'id' in eth_strategy:
+        created_strategy_ids.append(eth_strategy['id'])
+    
+    if eth_strategy.get('status') != 'active':
+        print(f"❌ FAIL: ETH strategy status should be 'active', got '{eth_strategy.get('status')}'")
+        sys.exit(1)
+    print(f"✅ ETH strategy activated (ID: {eth_strategy.get('id')})")
+    
+    # Close ETH strategy
+    eth_id = eth_strategy.get('id')
+    response = requests.post(f"{API_BASE}/v1/albert/strategy/{eth_id}/close", 
+                            json={"reason": "manual"},
+                            timeout=30)
+    if response.status_code != 200:
+        print(f"❌ FAIL: ETH close failed with {response.status_code}")
+        sys.exit(1)
+    
+    eth_closed = response.json()['strategy']
+    
+    if eth_closed.get('status') != 'closed':
+        print(f"❌ FAIL: ETH strategy status should be 'closed', got '{eth_closed.get('status')}'")
+        sys.exit(1)
+    print(f"✅ ETH strategy closed successfully")
+    
+    # ========================================================================
+    # CLEANUP: Delete all created strategies from MongoDB
+    # ========================================================================
+    test_step("CLEANUP", "Delete all created strategies from MongoDB")
     
     try:
-        url = f"{BASE_URL}/v1/tts/voices"
-        print(f"Request: GET {url}")
+        client = MongoClient(MONGO_URL)
+        db = client[DB_NAME]
+        strategies_col = db['strategies']
         
-        response = requests.get(url, timeout=30)
-        print(f"Response Status: {response.status_code}")
+        # Delete all strategies we created
+        if created_strategy_ids:
+            result = strategies_col.delete_many({'id': {'$in': created_strategy_ids}})
+            print(f"✅ Deleted {result.deleted_count} strategies from MongoDB")
         
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-        
-        data = response.json()
-        print(f"Response Data: {json.dumps(data, indent=2)}")
-        
-        # Validate required keys
-        assert 'status' in data, "Missing 'status' key"
-        assert data['status'] == 'ready', f"Expected status='ready', got {data['status']}"
-        
-        assert 'default' in data, "Missing 'default' key"
-        assert data['default'] == 'Charon', f"Expected default='Charon', got {data['default']}"
-        
-        assert 'tts_available' in data, "Missing 'tts_available' key"
-        assert data['tts_available'] == True, f"Expected tts_available=true, got {data['tts_available']}"
-        
-        assert 'voices' in data, "Missing 'voices' key"
-        assert isinstance(data['voices'], list), "voices should be a list"
-        assert len(data['voices']) > 0, "voices array should not be empty"
-        assert len(data['voices']) == 12, f"Expected 12 voices, got {len(data['voices'])}"
-        
-        # Validate each voice has required fields
-        for voice in data['voices']:
-            assert 'id' in voice, f"Voice missing 'id': {voice}"
-            assert 'name' in voice, f"Voice missing 'name': {voice}"
-            assert 'desc' in voice, f"Voice missing 'desc': {voice}"
-        
-        # Check that Charon and Fenrir are in the list
-        voice_ids = [v['id'] for v in data['voices']]
-        assert 'Charon' in voice_ids, "Expected 'Charon' in voice ids"
-        assert 'Fenrir' in voice_ids, "Expected 'Fenrir' in voice ids"
-        
-        print("✅ TEST 1 PASSED: GET /api/v1/tts/voices returns correct structure with 12 voices including Charon and Fenrir")
-        return True
-        
-    except AssertionError as e:
-        print(f"❌ TEST 1 FAILED: {e}")
-        return False
-    except Exception as e:
-        print(f"❌ TEST 1 ERROR: {e}")
-        return False
-
-
-def test_get_voice_pref():
-    """
-    Test 2: GET /api/v1/albert/voice-pref
-    Expect HTTP 200 JSON with keys {status:'ready', engine, voice, browser_voice_uri}
-    """
-    print("\n" + "="*80)
-    print("TEST 2: GET /api/v1/albert/voice-pref")
-    print("="*80)
-    
-    try:
-        url = f"{BASE_URL}/v1/albert/voice-pref"
-        print(f"Request: GET {url}")
-        
-        response = requests.get(url, timeout=30)
-        print(f"Response Status: {response.status_code}")
-        
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-        
-        data = response.json()
-        print(f"Response Data: {json.dumps(data, indent=2)}")
-        
-        # Validate required keys
-        assert 'status' in data, "Missing 'status' key"
-        assert data['status'] == 'ready', f"Expected status='ready', got {data['status']}"
-        
-        assert 'engine' in data, "Missing 'engine' key"
-        assert 'voice' in data, "Missing 'voice' key"
-        assert 'browser_voice_uri' in data, "Missing 'browser_voice_uri' key"
-        
-        print("✅ TEST 2 PASSED: GET /api/v1/albert/voice-pref returns correct structure")
-        return True
-        
-    except AssertionError as e:
-        print(f"❌ TEST 2 FAILED: {e}")
-        return False
-    except Exception as e:
-        print(f"❌ TEST 2 ERROR: {e}")
-        return False
-
-
-def test_post_voice_pref_fenrir():
-    """
-    Test 3a: POST /api/v1/albert/voice-pref with body {"engine":"gemini","voice":"Fenrir"}
-    Expect 200 echoing voice:"Fenrir", engine:"gemini"
-    Then GET /api/v1/albert/voice-pref and confirm it now returns voice:"Fenrir"
-    """
-    print("\n" + "="*80)
-    print("TEST 3a: POST /api/v1/albert/voice-pref with valid voice (Fenrir)")
-    print("="*80)
-    
-    try:
-        url = f"{BASE_URL}/v1/albert/voice-pref"
-        payload = {"engine": "gemini", "voice": "Fenrir"}
-        print(f"Request: POST {url}")
-        print(f"Payload: {json.dumps(payload, indent=2)}")
-        
-        response = requests.post(url, json=payload, timeout=30)
-        print(f"Response Status: {response.status_code}")
-        
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-        
-        data = response.json()
-        print(f"Response Data: {json.dumps(data, indent=2)}")
-        
-        # Validate response
-        assert data.get('voice') == 'Fenrir', f"Expected voice='Fenrir', got {data.get('voice')}"
-        assert data.get('engine') == 'gemini', f"Expected engine='gemini', got {data.get('engine')}"
-        
-        # Now GET to confirm persistence
-        print("\nVerifying persistence with GET...")
-        get_response = requests.get(url, timeout=30)
-        assert get_response.status_code == 200, f"GET failed with {get_response.status_code}"
-        
-        get_data = get_response.json()
-        print(f"GET Response Data: {json.dumps(get_data, indent=2)}")
-        
-        assert get_data.get('voice') == 'Fenrir', f"Expected persisted voice='Fenrir', got {get_data.get('voice')}"
-        
-        print("✅ TEST 3a PASSED: POST with Fenrir persists correctly")
-        return True
-        
-    except AssertionError as e:
-        print(f"❌ TEST 3a FAILED: {e}")
-        return False
-    except Exception as e:
-        print(f"❌ TEST 3a ERROR: {e}")
-        return False
-
-
-def test_post_voice_pref_invalid():
-    """
-    Test 3b: POST /api/v1/albert/voice-pref with body {"engine":"gemini","voice":"NotARealVoice"}
-    Expect 200 and voice should have FALLEN BACK to "Charon" (invalid voice rejected)
-    """
-    print("\n" + "="*80)
-    print("TEST 3b: POST /api/v1/albert/voice-pref with invalid voice (NotARealVoice)")
-    print("="*80)
-    
-    try:
-        url = f"{BASE_URL}/v1/albert/voice-pref"
-        payload = {"engine": "gemini", "voice": "NotARealVoice"}
-        print(f"Request: POST {url}")
-        print(f"Payload: {json.dumps(payload, indent=2)}")
-        
-        response = requests.post(url, json=payload, timeout=30)
-        print(f"Response Status: {response.status_code}")
-        
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-        
-        data = response.json()
-        print(f"Response Data: {json.dumps(data, indent=2)}")
-        
-        # Validate fallback to Charon
-        assert data.get('voice') == 'Charon', f"Expected fallback to voice='Charon', got {data.get('voice')}"
-        
-        print("✅ TEST 3b PASSED: Invalid voice correctly falls back to Charon")
-        return True
-        
-    except AssertionError as e:
-        print(f"❌ TEST 3b FAILED: {e}")
-        return False
-    except Exception as e:
-        print(f"❌ TEST 3b ERROR: {e}")
-        return False
-
-
-def test_post_voice_pref_browser():
-    """
-    Test 3c: POST /api/v1/albert/voice-pref with body {"engine":"browser","browser_voice_uri":"com.apple.voice.x"}
-    Expect 200 with engine:"browser"
-    """
-    print("\n" + "="*80)
-    print("TEST 3c: POST /api/v1/albert/voice-pref with browser engine")
-    print("="*80)
-    
-    try:
-        url = f"{BASE_URL}/v1/albert/voice-pref"
-        payload = {"engine": "browser", "browser_voice_uri": "com.apple.voice.x"}
-        print(f"Request: POST {url}")
-        print(f"Payload: {json.dumps(payload, indent=2)}")
-        
-        response = requests.post(url, json=payload, timeout=30)
-        print(f"Response Status: {response.status_code}")
-        
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-        
-        data = response.json()
-        print(f"Response Data: {json.dumps(data, indent=2)}")
-        
-        # Validate engine is browser
-        assert data.get('engine') == 'browser', f"Expected engine='browser', got {data.get('engine')}"
-        
-        print("✅ TEST 3c PASSED: Browser engine set correctly")
-        return True
-        
-    except AssertionError as e:
-        print(f"❌ TEST 3c FAILED: {e}")
-        return False
-    except Exception as e:
-        print(f"❌ TEST 3c ERROR: {e}")
-        return False
-
-
-def test_post_tts_with_voice():
-    """
-    Test 4: POST /api/v1/tts with body {"text":"Hello from Albert","voice":"Puck"}
-    IDEALLY 200 with non-empty audio_base64
-    HOWEVER the GEMINI_API_KEY is FREE TIER, so a 429/502/503 (quota exhausted) response is ACCEPTABLE
-    Only flag a real failure if it returns 500 with a code error unrelated to quota, or 400 for valid non-empty text
-    """
-    print("\n" + "="*80)
-    print("TEST 4: POST /api/v1/tts with voice parameter (Puck)")
-    print("="*80)
-    
-    try:
-        url = f"{BASE_URL}/v1/tts"
-        payload = {"text": "Hello from Albert", "voice": "Puck"}
-        print(f"Request: POST {url}")
-        print(f"Payload: {json.dumps(payload, indent=2)}")
-        
-        response = requests.post(url, json=payload, timeout=60)
-        print(f"Response Status: {response.status_code}")
-        
-        # Acceptable status codes: 200 (success), 429/502/503 (quota/rate limit)
-        acceptable_codes = [200, 429, 502, 503]
-        
-        if response.status_code == 200:
-            data = response.json()
-            print(f"Response Data Keys: {list(data.keys())}")
-            
-            # Validate audio_base64 is present and non-empty
-            assert 'audio_base64' in data, "Missing 'audio_base64' key"
-            assert len(data['audio_base64']) > 0, "audio_base64 should not be empty"
-            
-            print(f"✅ TEST 4 PASSED: POST /api/v1/tts with voice='Puck' returns audio (audio_base64 length: {len(data['audio_base64'])} chars)")
-            return True
-            
-        elif response.status_code in [429, 502, 503]:
-            print(f"⚠️  TEST 4 ACCEPTABLE: Free-tier quota/rate limit hit (status {response.status_code})")
-            print("This is expected behavior for free-tier Gemini API key")
-            return True
-            
-        elif response.status_code == 400:
-            # 400 for valid non-empty text is a failure
-            print(f"❌ TEST 4 FAILED: Got 400 for valid non-empty text")
-            return False
-            
-        elif response.status_code == 500:
-            # 500 is a code error (not acceptable)
-            print(f"❌ TEST 4 FAILED: Got 500 (code error)")
-            return False
-            
+        # Verify collection is empty (or at least our strategies are gone)
+        remaining = strategies_col.count_documents({'id': {'$in': created_strategy_ids}})
+        if remaining > 0:
+            print(f"⚠️  WARNING: {remaining} strategies still remain in collection")
         else:
-            print(f"❌ TEST 4 FAILED: Unexpected status code {response.status_code}")
-            return False
+            print(f"✅ All created strategies removed from collection")
         
-    except AssertionError as e:
-        print(f"❌ TEST 4 FAILED: {e}")
-        return False
-    except Exception as e:
-        print(f"❌ TEST 4 ERROR: {e}")
-        return False
-
-
-def test_cleanup_reset_to_charon():
-    """
-    Cleanup: POST /api/v1/albert/voice-pref with {"engine":"gemini","voice":"Charon"}
-    to reset the user's default to clean state
-    """
-    print("\n" + "="*80)
-    print("CLEANUP: Reset voice preference to Charon")
-    print("="*80)
-    
-    try:
-        url = f"{BASE_URL}/v1/albert/voice-pref"
-        payload = {"engine": "gemini", "voice": "Charon"}
-        print(f"Request: POST {url}")
-        print(f"Payload: {json.dumps(payload, indent=2)}")
+        # Show total count in collection
+        total_count = strategies_col.count_documents({})
+        print(f"✅ Total strategies in collection: {total_count}")
         
-        response = requests.post(url, json=payload, timeout=30)
-        print(f"Response Status: {response.status_code}")
+        client.close()
         
-        assert response.status_code == 200, f"Expected 200, got {response.status_code}"
-        
-        data = response.json()
-        print(f"Response Data: {json.dumps(data, indent=2)}")
-        
-        assert data.get('voice') == 'Charon', f"Expected voice='Charon', got {data.get('voice')}"
-        assert data.get('engine') == 'gemini', f"Expected engine='gemini', got {data.get('engine')}"
-        
-        print("✅ CLEANUP PASSED: Voice preference reset to Charon")
-        return True
-        
-    except AssertionError as e:
-        print(f"❌ CLEANUP FAILED: {e}")
-        return False
     except Exception as e:
         print(f"❌ CLEANUP ERROR: {e}")
-        return False
-
-
-def main():
-    """Run all tests in sequence"""
-    print("\n" + "="*80)
-    print("ALBERT VOICE SELECTION ENDPOINTS - BACKEND TEST SUITE")
-    print("="*80)
-    print(f"Base URL: {BASE_URL}")
-    print(f"Test Time: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+        import traceback
+        traceback.print_exc()
     
-    results = []
+    # ========================================================================
+    # FINAL SUMMARY
+    # ========================================================================
+    print(f"\n{'='*80}")
+    print(f"✅ ALL TESTS PASSED")
+    print(f"{'='*80}")
+    print(f"Summary:")
+    print(f"  1. ✅ POST /api/v1/albert/strategy/build (BTC) - draft with targets and rules")
+    print(f"  2. ✅ POST /api/v1/albert/strategy/build (ETH with goal) - draft with targets and rules")
+    print(f"  3. ✅ POST /api/v1/albert/strategy (activate BTC) - active strategy with entry_price and 'opened' event")
+    print(f"  4. ✅ ONE-ACTIVE-PER-COIN - second BTC strategy supersedes first")
+    print(f"  5. ✅ GET /api/v1/albert/strategy?symbol=BTC - returns active strategy")
+    print(f"  6. ✅ GET /api/v1/albert/strategies?symbol=BTC - returns active + history + stats")
+    print(f"  7. ✅ POST /api/v1/albert/strategy/{{id}}/close - closes strategy with final_pnl_pct and outcome")
+    print(f"  8. ✅ GET /api/v1/albert/strategy?symbol=BTC after close - returns status='none'")
+    print(f"  9. ✅ ETH strategy activate and close - same flow works for ETH")
+    print(f" 10. ✅ CLEANUP - all created strategies deleted from MongoDB")
+    print(f"{'='*80}")
     
-    # Test 1: GET /api/v1/tts/voices
-    results.append(("GET /api/v1/tts/voices", test_tts_voices()))
+except Exception as e:
+    print(f"\n{'='*80}")
+    print(f"❌ TEST FAILED WITH EXCEPTION")
+    print(f"{'='*80}")
+    print(f"Error: {e}")
+    import traceback
+    traceback.print_exc()
     
-    # Test 2: GET /api/v1/albert/voice-pref
-    results.append(("GET /api/v1/albert/voice-pref", test_get_voice_pref()))
+    # Attempt cleanup even on failure
+    if created_strategy_ids:
+        print(f"\nAttempting cleanup of {len(created_strategy_ids)} strategies...")
+        try:
+            client = MongoClient(MONGO_URL)
+            db = client[DB_NAME]
+            strategies_col = db['strategies']
+            result = strategies_col.delete_many({'id': {'$in': created_strategy_ids}})
+            print(f"✅ Cleanup: Deleted {result.deleted_count} strategies")
+            client.close()
+        except Exception as cleanup_error:
+            print(f"❌ Cleanup failed: {cleanup_error}")
     
-    # Test 3a: POST valid voice (Fenrir)
-    results.append(("POST voice-pref (Fenrir)", test_post_voice_pref_fenrir()))
-    
-    # Test 3b: POST invalid voice (fallback to Charon)
-    results.append(("POST voice-pref (invalid)", test_post_voice_pref_invalid()))
-    
-    # Test 3c: POST browser engine
-    results.append(("POST voice-pref (browser)", test_post_voice_pref_browser()))
-    
-    # Test 4: POST /api/v1/tts with voice parameter
-    results.append(("POST /api/v1/tts (voice=Puck)", test_post_tts_with_voice()))
-    
-    # Cleanup: Reset to Charon
-    results.append(("CLEANUP (reset to Charon)", test_cleanup_reset_to_charon()))
-    
-    # Summary
-    print("\n" + "="*80)
-    print("TEST SUMMARY")
-    print("="*80)
-    
-    passed = sum(1 for _, result in results if result)
-    total = len(results)
-    
-    for test_name, result in results:
-        status = "✅ PASS" if result else "❌ FAIL"
-        print(f"{status}: {test_name}")
-    
-    print(f"\nTotal: {passed}/{total} tests passed")
-    
-    if passed == total:
-        print("\n🎉 ALL TESTS PASSED!")
-        return 0
-    else:
-        print(f"\n⚠️  {total - passed} test(s) failed")
-        return 1
-
-
-if __name__ == "__main__":
-    exit(main())
+    sys.exit(1)

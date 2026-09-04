@@ -4984,6 +4984,9 @@ def _startup():
         scheduler.add_job(_refresh_whale_tx_bg, 'interval', minutes=30, id='whale_tx_refresh')
         # Price-watch alerts created from Albert chat: check crossings every 60s.
         scheduler.add_job(_check_price_watches, 'interval', seconds=60, id='price_watch_check')
+        # Albert Trading Strategies: track active playbooks, fire nudges & paper-trade fills.
+        scheduler.add_job(_strategy_eval_job, 'interval', seconds=60, id='strategy_eval',
+                          replace_existing=True, coalesce=True, max_instances=1)
         # Albert self-check: grade his logged buy/sell calls once their horizon elapses.
         scheduler.add_job(_grade_albert_calls, 'interval', minutes=30, id='albert_call_grade')
         # Weekly recap auto-post: drop Albert's recap into the notification bell every Monday.
@@ -8355,6 +8358,524 @@ def set_brief_watchlist(payload: dict = Body(...)):
                             {'$set': {'_id': 'cfg:brief_watchlist', 'kind': 'config', 'coins': out,
                                       'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
     return {'status': 'ready', 'coins': out}
+
+
+# ============================================================================
+# Albert Trading Strategies — AI-authored playbooks that Albert tracks and
+# nudges you on. One ACTIVE strategy per coin; closed ones move to history.
+# Advisory / paper-trade only (no live exchange orders).
+# ============================================================================
+strategies_col = db['strategies']
+
+ALBERT_STRATEGY_SYSTEM = (
+    "You are Albert, a sharp crypto quant. Design a concrete, trackable TRADING STRATEGY for the "
+    "asset in focus using ONLY the live dashboard context provided. This is an advisory paper-trade "
+    "plan — never assume leverage or real orders.\n\n"
+    "Return STRICT minified JSON ONLY (no prose, no markdown, no code fences) with EXACTLY these keys:\n"
+    "{"
+    "\"title\": string (<=60 chars, punchy), "
+    "\"bias\": one of \"bullish\",\"bearish\",\"neutral\", "
+    "\"position\": one of \"long\",\"short\", "
+    "\"thesis\": string (2-3 plain-English sentences on why), "
+    "\"horizon_days\": integer (7-120), "
+    "\"targets\": [ {\"price\": number, \"label\": string, \"pct_of_position\": integer 1-100} ]  (1-3 profit targets, anchored ABOVE entry for long / BELOW for short, pct summing to ~100), "
+    "\"stop\": {\"price\": number} (a protective invalidation level below entry for long / above for short), "
+    "\"rules\": [ {\"kind\": one of \"price\",\"time\",\"signal\", \"op\": for price one of \"above\"/\"below\" | for signal one of \"above\"/\"below\"/\"flips_to\", \"level\": number (price rules), \"by_days\": integer (time rules — days from now), \"metric\": one of \"conviction\",\"regime\" (signal rules), \"value\": number-or-string (signal rules), \"then\": one of \"take_profit\",\"add\",\"exit\",\"reassess\",\"note\", \"action_note\": string (what Albert will tell the user to do when this fires, first person, <=140 chars) } ]  (2-5 rules — MUST include at least one time rule and at least one signal rule)"
+    "}\n"
+    "Anchor every price to the CURRENT PRICE given. Keep levels realistic (within sensible % of current). "
+    "Make action_note specific and human, e.g. 'Take half off here and trail the rest.'"
+)
+
+
+def _strat_coin_name(symbol):
+    symbol = (symbol or 'BTC').upper()
+    if symbol == 'BTC':
+        return 'Bitcoin'
+    return (COMPARE_COINS.get(symbol) or {}).get('name', symbol)
+
+
+def _rule_default_note(kind, then, op=None, level=None):
+    verb = {'take_profit': 'take profit', 'add': 'add to the position', 'exit': 'exit the trade',
+            'reassess': 'reassess the setup', 'note': 'note this'}.get(then, then)
+    if kind == 'time':
+        return f"If the plan hasn't played out yet, {verb}."
+    if kind == 'signal':
+        return f"If the signal shifts, {verb}."
+    return f"If price hits ${level:,.0f}, {verb}." if level else f"When triggered, {verb}."
+
+
+def _normalize_strategy_draft(raw, symbol, spot):
+    """Coerce an LLM (or fallback) draft into our stored schema. Not yet persisted."""
+    symbol = (symbol or 'BTC').upper()
+    position = (raw.get('position') or ('long' if (raw.get('bias') != 'bearish') else 'short')).lower()
+    if position not in ('long', 'short'):
+        position = 'long'
+    try:
+        horizon = int(raw.get('horizon_days') or 30)
+    except Exception:
+        horizon = 30
+    horizon = max(3, min(180, horizon))
+    targets = []
+    for t in (raw.get('targets') or [])[:3]:
+        try:
+            price = float(t.get('price'))
+        except Exception:
+            continue
+        try:
+            pct = int(t.get('pct_of_position') or 0)
+        except Exception:
+            pct = 0
+        targets.append({'price': round(price, 2), 'label': (t.get('label') or f'TP{len(targets)+1}')[:20],
+                        'pct_of_position': max(1, min(100, pct or 50)), 'hit': False, 'hit_at': None})
+    if targets:
+        tot = sum(t['pct_of_position'] for t in targets)
+        if tot and tot != 100:
+            for t in targets:
+                t['pct_of_position'] = max(1, round(t['pct_of_position'] / tot * 100))
+    stop = None
+    rawstop = raw.get('stop') or {}
+    try:
+        if rawstop.get('price') is not None:
+            stop = {'price': round(float(rawstop.get('price')), 2), 'hit': False, 'hit_at': None}
+    except Exception:
+        stop = None
+    rules = []
+    for r in (raw.get('rules') or [])[:6]:
+        kind = (r.get('kind') or '').lower()
+        if kind not in ('price', 'time', 'signal'):
+            continue
+        then = (r.get('then') or 'note').lower()
+        if then not in ('take_profit', 'add', 'exit', 'reassess', 'note'):
+            then = 'note'
+        rule = {'id': uuid.uuid4().hex[:8], 'kind': kind, 'then': then, 'status': 'pending', 'fired_at': None}
+        if kind == 'price':
+            try:
+                rule['level'] = round(float(r.get('level')), 2)
+            except Exception:
+                continue
+            opv = (r.get('op') or '').lower()
+            rule['op'] = 'above' if opv == 'above' else ('below' if opv == 'below' else ('above' if position == 'long' else 'below'))
+        elif kind == 'time':
+            try:
+                by_days = int(r.get('by_days') or horizon)
+            except Exception:
+                by_days = horizon
+            rule['by_days'] = max(1, min(365, by_days))
+        else:
+            metric = (r.get('metric') or 'conviction').lower()
+            rule['metric'] = metric if metric in ('conviction', 'regime') else 'conviction'
+            rule['op'] = (r.get('op') or 'below').lower()
+            rule['value'] = r.get('value')
+        rule['action_note'] = (r.get('action_note') or _rule_default_note(kind, then, rule.get('op'), rule.get('level')))[:180]
+        rules.append(rule)
+    draft = {
+        'symbol': symbol, 'coin_name': _strat_coin_name(symbol),
+        'title': (raw.get('title') or f'{_strat_coin_name(symbol)} Playbook')[:70],
+        'bias': (raw.get('bias') or 'neutral').lower(),
+        'position': position,
+        'thesis': (raw.get('thesis') or '')[:600],
+        'horizon_days': horizon,
+        'size_usd': 1000,
+        'entry_hint': round(spot, 2) if spot else None,
+        'targets': targets, 'stop': stop, 'rules': rules,
+    }
+    return draft
+
+
+def _fallback_strategy_draft(symbol, spot, goal=''):
+    """Rule-based strategy when the LLM is unavailable."""
+    spot = spot or 0
+    bull = 'bear' not in (goal or '').lower() and 'short' not in (goal or '').lower()
+    pos = 'long' if bull else 'short'
+    if pos == 'long':
+        targets = [{'price': round(spot * 1.08, 2), 'label': 'TP1', 'pct_of_position': 50},
+                   {'price': round(spot * 1.16, 2), 'label': 'TP2', 'pct_of_position': 50}]
+        stop = {'price': round(spot * 0.92, 2)}
+        add_level = round(spot * 1.03, 2)
+    else:
+        targets = [{'price': round(spot * 0.92, 2), 'label': 'TP1', 'pct_of_position': 50},
+                   {'price': round(spot * 0.84, 2), 'label': 'TP2', 'pct_of_position': 50}]
+        stop = {'price': round(spot * 1.08, 2)}
+        add_level = round(spot * 0.97, 2)
+    raw = {
+        'title': f'{_strat_coin_name(symbol)} {"Momentum Long" if pos=="long" else "Fade Short"}',
+        'bias': 'bullish' if pos == 'long' else 'bearish', 'position': pos,
+        'thesis': f"A disciplined {pos} on {_strat_coin_name(symbol)} anchored at ${spot:,.0f}: scale out into strength and cut it if the thesis breaks.",
+        'horizon_days': 30, 'targets': targets, 'stop': stop,
+        'rules': [
+            {'kind': 'price', 'op': 'above' if pos == 'long' else 'below', 'level': add_level, 'then': 'add',
+             'action_note': f"Momentum confirmed — add a small tranche near ${add_level:,.0f}."},
+            {'kind': 'time', 'by_days': 21, 'then': 'reassess',
+             'action_note': "3 weeks in — if it's going nowhere, reassess and free up the capital."},
+            {'kind': 'signal', 'metric': 'conviction', 'op': 'below', 'value': 35, 'then': 'exit',
+             'action_note': "Conviction has collapsed — step aside and protect capital."},
+        ],
+    }
+    return _normalize_strategy_draft(raw, symbol, spot)
+
+
+def _build_strategy_draft(symbol, goal=''):
+    symbol = (symbol or 'BTC').upper()
+    spot = _spot_price(symbol)
+    if not (EMERGENT_LLM_KEY and _HAS_LLM):
+        return _fallback_strategy_draft(symbol, spot, goal)
+    ctx = build_chat_context(symbol)
+    coin = _strat_coin_name(symbol)
+    umsg = (f"Asset in focus: {coin} ({symbol}). CURRENT PRICE: ${spot:,.2f}.\n"
+            + (f"User's goal/constraints: {goal}\n" if goal else '')
+            + f"\n=== LIVE DASHBOARD CONTEXT ===\n{ctx}\n\nDesign the strategy JSON now.")
+
+    def _call():
+        async def _go():
+            chat = (LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f'strategy-{uuid.uuid4().hex[:8]}',
+                            system_message=ALBERT_STRATEGY_SYSTEM)
+                    .with_model('gemini', CHAT_MODEL).with_params(temperature=0.5, max_tokens=3000))
+            return await chat.send_message(UserMessage(text=umsg))
+        return asyncio.run(_go())
+    try:
+        reply = _LLM_POOL.submit(_call).result(timeout=45)
+        text = (reply if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '')).strip()
+        s, e = text.find('{'), text.rfind('}')
+        raw = json.loads(text[s:e + 1])
+        draft = _normalize_strategy_draft(raw, symbol, spot)
+        if not draft.get('targets'):
+            return _fallback_strategy_draft(symbol, spot, goal)
+        return draft
+    except Exception:  # noqa
+        traceback.print_exc()
+        return _fallback_strategy_draft(symbol, spot, goal)
+
+
+def _strategy_perf(strat, spot=None):
+    """Compute live paper-trade performance for a strategy."""
+    if spot is None:
+        spot = _spot_price(strat.get('symbol', 'BTC'))
+    entry = strat.get('entry_price') or 0
+    size = strat.get('size_usd') or 1000
+    long = strat.get('position', 'long') == 'long'
+    remaining_pct = strat.get('remaining_pct', 100)
+    realized_usd = strat.get('realized_pnl_usd', 0.0)
+    sign = 1 if long else -1
+    cur = spot if strat.get('status') == 'active' else (strat.get('close_price') or spot)
+    unreal_pct = ((cur - entry) / entry * 100 * sign) if (entry and cur) else 0.0
+    unreal_usd = size * (remaining_pct / 100.0) * (unreal_pct / 100.0)
+    total_usd = realized_usd + unreal_usd
+    total_pct = (total_usd / size * 100.0) if size else 0.0
+    try:
+        created = datetime.datetime.fromisoformat(strat.get('created_at').replace('Z', ''))
+        end = datetime.datetime.utcnow() if strat.get('status') == 'active' else datetime.datetime.fromisoformat((strat.get('closed_at') or strat.get('created_at')).replace('Z', ''))
+        days_active = max(0, (end - created).days)
+    except Exception:
+        days_active = 0
+    days_left = None
+    try:
+        if strat.get('expires_at'):
+            days_left = max(0, (datetime.datetime.fromisoformat(strat['expires_at'].replace('Z', '')) - datetime.datetime.utcnow()).days)
+    except Exception:
+        days_left = None
+    return {
+        'current_price': round(cur, 2) if cur else None,
+        'entry_price': round(entry, 2) if entry else None,
+        'remaining_pct': remaining_pct,
+        'unrealized_pnl_pct': round(unreal_pct, 2), 'unrealized_pnl_usd': round(unreal_usd, 2),
+        'realized_pnl_usd': round(realized_usd, 2),
+        'total_pnl_usd': round(total_usd, 2), 'total_pnl_pct': round(total_pct, 2),
+        'days_active': days_active, 'days_left': days_left,
+    }
+
+
+def _strat_event(strat, etype, message, price=None):
+    strat.setdefault('events', []).append({
+        'ts': datetime.datetime.utcnow().isoformat(), 'type': etype, 'message': message,
+        'price': round(price, 2) if price else None})
+
+
+def _strat_signal_read(symbol):
+    """Latest conviction score + regime label for signal rules."""
+    conviction = None
+    regime = None
+    try:
+        if (symbol or 'BTC').upper() == 'BTC':
+            r = runs_col.find_one(sort=[('created_at', -1)], projection={'_id': 0})
+        else:
+            today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+            cd = coin_dash_col.find_one({'_id': f'{symbol.upper()}:{today}'}, {'_id': 0}) or {}
+            r = cd.get('data')
+        if r:
+            dec = r.get('decision') or {}
+            conviction = dec.get('overall_score') if dec.get('overall_score') is not None else r.get('quant_score')
+            regime = ((r.get('regime') or {}).get('regime'))
+    except Exception:
+        pass
+    return conviction, regime
+
+
+def _evaluate_strategy(strat, spot):
+    """Mutate strat in place: fire targets/stop/rules, generate nudges. Returns list of
+    (title, message, severity) alerts to push."""
+    alerts = []
+    if strat.get('status') != 'active' or not spot:
+        return alerts
+    long = strat.get('position', 'long') == 'long'
+    sign = 1 if long else -1
+    entry = strat.get('entry_price') or spot
+    size = strat.get('size_usd') or 1000
+
+    for t in strat.get('targets', []):
+        if t.get('hit'):
+            continue
+        reach = (spot >= t['price']) if long else (spot <= t['price'])
+        if reach:
+            t['hit'] = True
+            t['hit_at'] = datetime.datetime.utcnow().isoformat()
+            leg_pct = t.get('pct_of_position', 50)
+            leg_pnl_pct = (t['price'] - entry) / entry * 100 * sign
+            strat['realized_pnl_usd'] = strat.get('realized_pnl_usd', 0.0) + size * (leg_pct / 100.0) * (leg_pnl_pct / 100.0)
+            strat['remaining_pct'] = max(0, strat.get('remaining_pct', 100) - leg_pct)
+            msg = f"{t.get('label','Target')} hit at ${t['price']:,.0f} — booked {leg_pct}% ({leg_pnl_pct:+.1f}%). Take it off."
+            _strat_event(strat, 'target_hit', msg, spot)
+            alerts.append((f"{strat['symbol']} {t.get('label','target')} hit", msg, 'high'))
+            if strat['remaining_pct'] <= 0:
+                _close_strategy(strat, 'targets_hit', spot)
+                return alerts
+
+    st = strat.get('stop')
+    if st and not st.get('hit'):
+        reach = (spot <= st['price']) if long else (spot >= st['price'])
+        if reach:
+            st['hit'] = True
+            st['hit_at'] = datetime.datetime.utcnow().isoformat()
+            msg = f"Stop hit at ${st['price']:,.0f}. Thesis invalidated — close it and protect capital."
+            _strat_event(strat, 'stop_hit', msg, spot)
+            alerts.append((f"{strat['symbol']} stopped out", msg, 'high'))
+            _close_strategy(strat, 'stopped_out', spot)
+            return alerts
+
+    conviction, regime = (None, None)
+    read_signal = False
+    now = datetime.datetime.utcnow()
+    for r in strat.get('rules', []):
+        if r.get('status') != 'pending':
+            continue
+        fired = False
+        if r['kind'] == 'price':
+            fired = (spot >= r['level']) if r.get('op') == 'above' else (spot <= r['level'])
+        elif r['kind'] == 'time':
+            try:
+                by = datetime.datetime.fromisoformat(r.get('by', '').replace('Z', '')) if r.get('by') else None
+                fired = bool(by and now >= by)
+            except Exception:
+                fired = False
+        elif r['kind'] == 'signal':
+            if not read_signal:
+                conviction, regime = _strat_signal_read(strat['symbol'])
+                read_signal = True
+            if r.get('metric') == 'conviction' and conviction is not None:
+                try:
+                    v = float(r.get('value'))
+                    fired = (conviction >= v) if r.get('op') == 'above' else (conviction <= v)
+                except Exception:
+                    fired = False
+            elif r.get('metric') == 'regime' and regime:
+                fired = str(r.get('value', '')).lower() in str(regime).lower()
+        if fired:
+            r['status'] = 'fired'
+            r['fired_at'] = now.isoformat()
+            note = r.get('action_note') or 'Time to act on this rule.'
+            _strat_event(strat, 'rule_fired', note, spot)
+            alerts.append((f"{strat['symbol']} strategy nudge", note, 'medium'))
+            if r['then'] == 'add':
+                add_usd = size * 0.5
+                new_size = size + add_usd
+                strat['entry_price'] = round((entry * size + spot * add_usd) / new_size, 2)
+                strat['size_usd'] = round(new_size, 2)
+            elif r['then'] == 'exit':
+                _close_strategy(strat, 'rule_exit', spot)
+                return alerts
+
+    try:
+        if strat.get('expires_at'):
+            exp = datetime.datetime.fromisoformat(strat['expires_at'].replace('Z', ''))
+            if now >= exp:
+                _strat_event(strat, 'expired', f"Horizon reached — closing at ${spot:,.0f}.", spot)
+                alerts.append((f"{strat['symbol']} strategy expired", f"The {strat.get('horizon_days')}-day horizon is up — Albert closed the paper trade.", 'medium'))
+                _close_strategy(strat, 'expired', spot)
+    except Exception:
+        pass
+    return alerts
+
+
+def _close_strategy(strat, reason, price):
+    strat['status'] = 'closed'
+    strat['closed_at'] = datetime.datetime.utcnow().isoformat()
+    strat['close_price'] = round(price, 2) if price else None
+    strat['close_reason'] = reason
+    perf = _strategy_perf(strat, price)
+    strat['final_pnl_usd'] = perf['total_pnl_usd']
+    strat['final_pnl_pct'] = perf['total_pnl_pct']
+    strat['outcome'] = 'win' if perf['total_pnl_usd'] >= 0 else 'loss'
+
+
+def _persist_strategy(strat):
+    strat['updated_at'] = datetime.datetime.utcnow().isoformat()
+    strategies_col.update_one({'id': strat['id']}, {'$set': strat}, upsert=True)
+
+
+def _strategy_eval_job():
+    """Scheduler: evaluate every active strategy, fire nudges, persist."""
+    try:
+        active = list(strategies_col.find({'status': 'active'}, {'_id': 0}))
+    except Exception:  # noqa
+        return
+    price_cache = {}
+    for strat in active:
+        sym = strat.get('symbol', 'BTC')
+        if sym not in price_cache:
+            price_cache[sym] = _spot_price(sym)
+        spot = price_cache[sym]
+        if not spot:
+            continue
+        try:
+            alerts = _evaluate_strategy(strat, spot)
+            _persist_strategy(strat)
+            for (title, message, sev) in alerts:
+                push_alert('strategy', sev, title, message, f"{strat['id']}-{len(strat.get('events', []))}", strat.get('symbol', 'BTC'))
+        except Exception:  # noqa
+            traceback.print_exc()
+
+
+@app.post('/api/v1/albert/strategy/build')
+def albert_strategy_build(payload: dict = Body(default={})):
+    """Albert drafts a structured strategy for a coin (optionally guided by a goal).
+    Returns a DRAFT for the user to review — not yet saved."""
+    symbol = (payload.get('symbol') or 'BTC').upper()
+    goal = (payload.get('goal') or '').strip()[:400]
+    try:
+        draft = _build_strategy_draft(symbol, goal)
+        return {'status': 'ready', 'draft': draft}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return JSONResponse({'status': 'error'}, status_code=500)
+
+
+@app.post('/api/v1/albert/strategy')
+def albert_strategy_activate(payload: dict = Body(...)):
+    """Activate (save) a strategy for a coin. Closes any existing active strategy for
+    that coin (one active per coin). Logs the paper entry at the current price."""
+    draft = payload.get('draft') or payload
+    symbol = (draft.get('symbol') or 'BTC').upper()
+    spot = _spot_price(symbol)
+    if not spot:
+        return JSONResponse({'status': 'error', 'message': 'No live price available for this coin yet.'}, status_code=400)
+    now = datetime.datetime.utcnow()
+    try:
+        prev = strategies_col.find_one({'symbol': symbol, 'status': 'active'}, {'_id': 0})
+        if prev:
+            prev_spot = _spot_price(symbol) or spot
+            _strat_event(prev, 'superseded', 'Replaced by a newer strategy.', prev_spot)
+            _close_strategy(prev, 'superseded', prev_spot)
+            _persist_strategy(prev)
+    except Exception:  # noqa
+        traceback.print_exc()
+    norm = _normalize_strategy_draft(draft, symbol, spot)
+    horizon = norm['horizon_days']
+    for r in norm['rules']:
+        if r['kind'] == 'time':
+            r['by'] = (now + datetime.timedelta(days=r.get('by_days', horizon))).isoformat()
+    strat = {
+        'id': uuid.uuid4().hex,
+        **norm,
+        'status': 'active',
+        'entry_price': round(spot, 2),
+        'position': norm['position'],
+        'size_usd': norm.get('size_usd', 1000),
+        'remaining_pct': 100,
+        'realized_pnl_usd': 0.0,
+        'created_at': now.isoformat(),
+        'expires_at': (now + datetime.timedelta(days=horizon)).isoformat(),
+        'events': [],
+    }
+    _strat_event(strat, 'opened', f"Opened {strat['position'].upper()} paper trade at ${spot:,.0f}. Albert is now tracking it.", spot)
+    _persist_strategy(strat)
+    push_alert('strategy', 'info', f"{symbol} strategy activated",
+               f"Albert is now tracking '{strat['title']}' — you'll get a nudge when it's time to act.",
+               f"{strat['id']}-open", symbol)
+    out = {**strat}
+    out['perf'] = _strategy_perf(strat, spot)
+    return {'status': 'ready', 'strategy': out}
+
+
+@app.get('/api/v1/albert/strategy')
+def albert_strategy_active(symbol: str = 'BTC'):
+    """The current ACTIVE strategy for a coin (evaluated live), or status 'none'."""
+    symbol = (symbol or 'BTC').upper()
+    strat = strategies_col.find_one({'symbol': symbol, 'status': 'active'}, {'_id': 0})
+    if not strat:
+        return {'status': 'none', 'symbol': symbol}
+    spot = _spot_price(symbol)
+    try:
+        alerts = _evaluate_strategy(strat, spot)
+        _persist_strategy(strat)
+        for (title, message, sev) in alerts:
+            push_alert('strategy', sev, title, message, f"{strat['id']}-{len(strat.get('events', []))}", symbol)
+    except Exception:  # noqa
+        traceback.print_exc()
+    fresh = strategies_col.find_one({'id': strat['id']}, {'_id': 0}) or strat
+    if fresh.get('status') != 'active':
+        return {'status': 'none', 'symbol': symbol, 'just_closed': {**fresh, 'perf': _strategy_perf(fresh)}}
+    fresh['perf'] = _strategy_perf(fresh, spot)
+    return {'status': 'ready', 'strategy': fresh}
+
+
+@app.get('/api/v1/albert/strategies')
+def albert_strategies_list(symbol: str = 'BTC'):
+    """Active + past strategies for a coin, each with performance."""
+    symbol = (symbol or 'BTC').upper()
+    try:
+        rows = list(strategies_col.find({'symbol': symbol}, {'_id': 0}).sort('created_at', -1))
+    except Exception:  # noqa
+        rows = []
+    active = None
+    history = []
+    for r in rows:
+        r['perf'] = _strategy_perf(r)
+        if r.get('status') == 'active' and active is None:
+            active = r
+        else:
+            history.append(r)
+    closed = [h for h in history if h.get('status') in ('closed', 'expired')]
+    wins = sum(1 for c in closed if (c.get('final_pnl_usd', 0) or 0) >= 0)
+    stats = {'total': len(closed), 'wins': wins, 'losses': len(closed) - wins,
+             'win_rate': round(wins / len(closed) * 100) if closed else None,
+             'avg_pnl_pct': round(sum((c.get('final_pnl_pct', 0) or 0) for c in closed) / len(closed), 2) if closed else None}
+    return {'status': 'ready', 'symbol': symbol, 'active': active, 'history': history, 'stats': stats}
+
+
+@app.get('/api/v1/albert/strategy/{sid}')
+def albert_strategy_get(sid: str):
+    strat = strategies_col.find_one({'id': sid}, {'_id': 0})
+    if not strat:
+        return JSONResponse({'status': 'none'}, status_code=404)
+    strat['perf'] = _strategy_perf(strat)
+    return {'status': 'ready', 'strategy': strat}
+
+
+@app.post('/api/v1/albert/strategy/{sid}/close')
+def albert_strategy_close(sid: str, payload: dict = Body(default={})):
+    strat = strategies_col.find_one({'id': sid}, {'_id': 0})
+    if not strat:
+        return JSONResponse({'status': 'none'}, status_code=404)
+    if strat.get('status') != 'active':
+        strat['perf'] = _strategy_perf(strat)
+        return {'status': 'ready', 'strategy': strat}
+    spot = _spot_price(strat['symbol']) or strat.get('entry_price')
+    reason = (payload.get('reason') or 'manual')[:40]
+    _strat_event(strat, 'closed', f"You closed this strategy manually at ${spot:,.0f}.", spot)
+    _close_strategy(strat, reason, spot)
+    _persist_strategy(strat)
+    strat['perf'] = _strategy_perf(strat, spot)
+    return {'status': 'ready', 'strategy': strat}
+
 
 
 @app.get('/api/v1/albert/brief')
