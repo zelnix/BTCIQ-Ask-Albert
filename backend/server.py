@@ -4990,6 +4990,14 @@ def _startup():
         # Alert Engine: scan the watchlist's daily signals hourly and fire in-app alerts.
         scheduler.add_job(_alert_engine_job, 'interval', minutes=60, id='alert_engine',
                           replace_existing=True, coalesce=True, max_instances=1)
+        # Alert Engine daily digest — one consolidated in-app summary at the local morning hour.
+        try:
+            scheduler.add_job(_alert_digest_job, 'cron', hour=DIGEST_HOUR, minute=DIGEST_MINUTE,
+                              timezone=DIGEST_TZ, id='alert_digest', replace_existing=True,
+                              coalesce=True, max_instances=1)
+        except Exception:  # noqa
+            scheduler.add_job(_alert_digest_job, 'cron', hour=DIGEST_HOUR, minute=DIGEST_MINUTE,
+                              id='alert_digest', replace_existing=True, coalesce=True, max_instances=1)
         # Albert self-check: grade his logged buy/sell calls once their horizon elapses.
         scheduler.add_job(_grade_albert_calls, 'interval', minutes=30, id='albert_call_grade')
         # Weekly recap auto-post: drop Albert's recap into the notification bell every Monday.
@@ -8929,12 +8937,16 @@ ALERT_ENGINE_DEFAULTS = {
     'enabled': True,
     'timeframe': '1D',
     'signals': {'gmma_crossover': True, 'dip_buy': True, 'squeeze': True, 'rsi_exhaustion': True},
-    'filters': {'volume': True, 'funding': True, 'netflow': True, 'fng': True},
+    'filters': {'volume': True, 'funding': True, 'netflow': True, 'fng': True, 'btc_rs': True},
     'volume_mult': 1.5,
     'rsi_low': 30, 'rsi_high': 80,
     'funding_threshold': 0.05,   # % per interval — above this, suppress longs
     'greed_threshold': 78, 'fear_threshold': 22,
     'squeeze_lookback': 30,
+    'btc_rs_days': 7,            # [ALT]/BTC relative-strength lookback
+    'corr_cap': 3,              # max simultaneous ALT long signals per day
+    'expiry_candles': 2,        # alert perishability — valid for N daily closes
+    'friction_bps': 10,        # round-trip fees+slippage used in backtest R:R
     'watchlist': ALERT_COINS[:],
 }
 
@@ -8972,7 +8984,18 @@ def _save_alert_settings(patch):
     return st
 
 
-def _daily_ohlcv(symbol, limit=320):
+def _trim_forming(df):
+    """Look-ahead prevention: drop the still-forming (today, UTC) daily candle so all
+    signals/backtests use only CLOSED candles."""
+    try:
+        if len(df) and df['timestamp'].iloc[-1].date() >= datetime.datetime.utcnow().date():
+            df = df.iloc[:-1].reset_index(drop=True)
+    except Exception:  # noqa
+        pass
+    return df
+
+
+def _daily_ohlcv(symbol, limit=720):
     sym = (symbol or 'BTC').upper()
     now = _time_mod.time()
     c = _OHLCV_CACHE.get(sym)
@@ -8981,7 +9004,7 @@ def _daily_ohlcv(symbol, limit=320):
     if sym == 'BTC':
         try:
             df, _src = fetch_ohlcv()
-            df = df.tail(limit).reset_index(drop=True)
+            df = _trim_forming(df.tail(limit + 1).reset_index(drop=True))
             _OHLCV_CACHE[sym] = (now, df)
             return df
         except Exception:  # noqa
@@ -8989,11 +9012,11 @@ def _daily_ohlcv(symbol, limit=320):
     for name, pair in ALERT_COIN_PAIRS.get(sym, []):
         try:
             ex = getattr(ccxt, name)({'enableRateLimit': True})
-            bars = ex.fetch_ohlcv(pair, timeframe='1d', limit=limit)
+            bars = ex.fetch_ohlcv(pair, timeframe='1d', limit=limit + 1)
             if bars and len(bars) > 80:
                 df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                df = df.sort_values('timestamp').reset_index(drop=True)
+                df = _trim_forming(df.sort_values('timestamp').reset_index(drop=True))
                 _OHLCV_CACHE[sym] = (now, df)
                 return df
         except Exception:  # noqa
@@ -9084,12 +9107,32 @@ def compute_alert_signals(symbol, settings=None):
     }
 
 
+def _btc_rel_strength(symbol, days=7):
+    """Change in the [ALT]/BTC ratio over `days` closed candles. >0 = outperforming BTC."""
+    sym = (symbol or '').upper()
+    if sym == 'BTC':
+        return None
+    try:
+        a = _daily_ohlcv(sym)
+        b = _daily_ohlcv('BTC')
+        if a is None or b is None or len(a) <= days or len(b) <= days:
+            return None
+        ratio_now = float(a['close'].iloc[-1]) / float(b['close'].iloc[-1])
+        ratio_then = float(a['close'].iloc[-1 - days]) / float(b['close'].iloc[-1 - days])
+        if ratio_then <= 0:
+            return None
+        return round((ratio_now - ratio_then) / ratio_then * 100, 2)
+    except Exception:  # noqa
+        return None
+
+
 def compute_alert_filters(symbol, settings=None):
     st = settings or _get_alert_settings()
     sym = (symbol or 'BTC').upper()
     out = {'funding': None, 'funding_suppress_long': False,
            'fng_value': None, 'fng_label': None, 'fng_suppress_long': False, 'fng_accumulate': False,
-           'netflow_available': False, 'netflow_net7d': None, 'netflow_warning': False}
+           'netflow_available': False, 'netflow_net7d': None, 'netflow_warning': False,
+           'btc_rs': None, 'btc_rs_suppress_long': False}
     try:
         fr = _okx('/api/v5/public/funding-rate', {'instId': f'{sym}-USDT-SWAP'})
         if fr:
@@ -9116,6 +9159,10 @@ def compute_alert_filters(symbol, settings=None):
                 out['netflow_warning'] = bool((ef.get('net_7d') or 0) > 200)
         except Exception:  # noqa
             pass
+    else:
+        rs = _btc_rel_strength(sym, st.get('btc_rs_days', 7))
+        out['btc_rs'] = rs
+        out['btc_rs_suppress_long'] = bool(rs is not None and rs <= 0)
     return out
 
 
@@ -9128,10 +9175,12 @@ def _long_suppression(filters, st):
         reasons.append(f"extreme greed ({filters.get('fng_value')})")
     if f.get('netflow') and filters.get('netflow_warning'):
         reasons.append(f"BTC exchange inflows (+{filters.get('netflow_net7d')} BTC/7d)")
+    if f.get('btc_rs') and filters.get('btc_rs_suppress_long'):
+        reasons.append(f"not outperforming BTC ({filters.get('btc_rs')}%/7d)")
     return reasons
 
 
-def _scan_symbol(symbol, settings=None, fire=False):
+def _scan_symbol(symbol, settings=None, fire=False, corr_state=None):
     """Compute signals + filters for a coin, decide which alerts fire, persist readings,
     and (optionally) push in-app alerts. Returns the readings/decision dict."""
     st = settings or _get_alert_settings()
@@ -9194,12 +9243,24 @@ def _scan_symbol(symbol, settings=None, fire=False):
     doc = alert_engine_col.find_one({'_id': sym}) or {}
     already = set(doc.get('fired_sigs', []))
     pushed = []
+    expiry_n = int(st.get('expiry_candles', 2))
+    cap = int(st.get('corr_cap', 3))
     if fire:
         for it in fired:
             sigkey = f"{sym}-{it['key']}-{sig['candle_date']}-{it['direction']}"
             if sigkey in already:
                 continue
-            push_alert('signal', it['severity'], it['title'], it['message'], sigkey, sym)
+            # Correlation / concentration cap: throttle simultaneous ALT longs per day.
+            if it['direction'] == 'long' and sym not in ('BTC', 'ETH') and corr_state is not None:
+                cnt = corr_state.get(sig['candle_date'], 0)
+                if cnt >= cap:
+                    it['blocked'] = (it.get('blocked') or []) + [f"correlation cap ({cap} alt longs/day)"]
+                    continue
+                corr_state[sig['candle_date']] = cnt + 1
+            msg = it['message']
+            if it['direction'] in ('long', 'short'):
+                msg = f"{msg} Setup valid for the next {expiry_n} daily closes."
+            push_alert('signal', it['severity'], it['title'], msg, sigkey, sym)
             already.add(sigkey)
             pushed.append(sigkey)
     alert_engine_col.update_one({'_id': sym}, {'$set': {
@@ -9216,11 +9277,149 @@ def _alert_engine_job():
     st = _get_alert_settings()
     if not st.get('enabled'):
         return
+    corr_state = {}
     for sym in st.get('watchlist', []):
         try:
-            _scan_symbol(sym, st, fire=True)
+            _scan_symbol(sym, st, fire=True, corr_state=corr_state)
         except Exception:  # noqa
             traceback.print_exc()
+
+
+def _backtest_detector(df, st):
+    """Backtest every detector over ALL closed candles. For each trigger, grade the
+    direction-adjusted forward return at +5 and +10 candles, net of friction."""
+    close = df['close']; openp = df['open']; high = df['high']; low = df['low']
+    n = len(df)
+    if n < 80:
+        return None
+    fast_e = {s: _ema(close, s) for s in GMMA_FAST}
+    slow_e = {s: _ema(close, s) for s in GMMA_SLOW}
+    fast_min = pd.concat([fast_e[s] for s in GMMA_FAST], axis=1).min(axis=1)
+    fast_max = pd.concat([fast_e[s] for s in GMMA_FAST], axis=1).max(axis=1)
+    slow_min = pd.concat([slow_e[s] for s in GMMA_SLOW], axis=1).min(axis=1)
+    slow_max = pd.concat([slow_e[s] for s in GMMA_SLOW], axis=1).max(axis=1)
+    bull = fast_min > slow_max
+    bear = fast_max < slow_min
+    rsi = _rsi(close, 14)
+    bbw = _bollinger_width(close, 20, 2)
+    lookback = int(st.get('squeeze_lookback', 30))
+    vma = df['volume'].rolling(20).mean()
+    friction = float(st.get('friction_bps', 10)) / 100.0  # bps -> %
+    rsi_low = st.get('rsi_low', 30); rsi_high = st.get('rsi_high', 80)
+
+    horizons = [5, 10]
+    detectors = {k: {'triggers': 0, 'h': {h: [] for h in horizons}} for k in
+                 ['gmma_crossover', 'dip_buy', 'squeeze', 'rsi_oversold', 'rsi_overbought']}
+
+    def fwd(i, h, direction):
+        j = i + h
+        if j >= n:
+            return None
+        raw = (close.iloc[j] - close.iloc[i]) / close.iloc[i] * 100.0
+        r = raw if direction == 'long' else -raw
+        return round(r - friction, 3)
+
+    start = 61
+    for i in range(start, n - 1):
+        # GMMA crossover (state change on closed candles)
+        if bull.iloc[i] and not bull.iloc[i - 1]:
+            detectors['gmma_crossover']['triggers'] += 1
+            for h in horizons:
+                v = fwd(i, h, 'long');  detectors['gmma_crossover']['h'][h].append(v) if v is not None else None
+        elif bear.iloc[i] and not bear.iloc[i - 1]:
+            detectors['gmma_crossover']['triggers'] += 1
+            for h in horizons:
+                v = fwd(i, h, 'short'); detectors['gmma_crossover']['h'][h].append(v) if v is not None else None
+        # Dip-buy
+        slow_top_i = slow_max.iloc[i]
+        expanded = bull.iloc[i] and slow_e[60].iloc[i] > slow_e[60].iloc[i - 5]
+        if expanded and (low.iloc[i] <= slow_top_i * 1.01) and (close.iloc[i] > openp.iloc[i]) and (close.iloc[i] > slow_top_i):
+            detectors['dip_buy']['triggers'] += 1
+            for h in horizons:
+                v = fwd(i, h, 'long'); detectors['dip_buy']['h'][h].append(v) if v is not None else None
+        # Squeeze (measure absolute expansion -> treat as long-neutral magnitude)
+        recent = bbw.iloc[max(0, i - lookback + 1):i + 1]
+        if len(recent) and bbw.iloc[i] <= float(recent.min()) * 1.03:
+            detectors['squeeze']['triggers'] += 1
+            for h in horizons:
+                j = i + h
+                if j < n:
+                    detectors['squeeze']['h'][h].append(round(abs((close.iloc[j] - close.iloc[i]) / close.iloc[i] * 100.0) - friction, 3))
+        # RSI exhaustion
+        if rsi.iloc[i] < rsi_low and rsi.iloc[i - 1] >= rsi_low:
+            detectors['rsi_oversold']['triggers'] += 1
+            for h in horizons:
+                v = fwd(i, h, 'long'); detectors['rsi_oversold']['h'][h].append(v) if v is not None else None
+        if rsi.iloc[i] > rsi_high and rsi.iloc[i - 1] <= rsi_high:
+            detectors['rsi_overbought']['triggers'] += 1
+            for h in horizons:
+                v = fwd(i, h, 'short'); detectors['rsi_overbought']['h'][h].append(v) if v is not None else None
+
+    out = {}
+    for k, d in detectors.items():
+        row = {'triggers': d['triggers']}
+        for h in horizons:
+            arr = [x for x in d['h'][h] if x is not None]
+            if arr:
+                wins = sum(1 for x in arr if x > 0)
+                row[f'win_{h}'] = round(wins / len(arr) * 100)
+                row[f'avg_{h}'] = round(sum(arr) / len(arr), 2)
+            else:
+                row[f'win_{h}'] = None; row[f'avg_{h}'] = None
+        out[k] = row
+    return out
+
+
+@app.get('/api/v1/alert-engine/backtest')
+def alert_engine_backtest(symbol: str = 'BTC'):
+    sym = (symbol or 'BTC').upper()
+    if sym not in ALERT_COIN_PAIRS:
+        return JSONResponse({'status': 'error', 'message': 'unknown symbol'}, status_code=400)
+    df = _daily_ohlcv(sym)
+    if df is None or len(df) < 80:
+        return {'status': 'error', 'message': 'not enough data'}
+    st = _get_alert_settings()
+    res = _backtest_detector(df, st)
+    return {'status': 'ready', 'symbol': sym, 'candles': int(len(df)),
+            'from': df['timestamp'].iloc[0].strftime('%Y-%m-%d'),
+            'to': df['timestamp'].iloc[-1].strftime('%Y-%m-%d'),
+            'friction_bps': st.get('friction_bps', 10), 'horizons': [5, 10], 'detectors': res}
+
+
+def _build_digest():
+    since = (datetime.datetime.utcnow() - datetime.timedelta(hours=24)).isoformat()
+    try:
+        rows = list(smart_alerts_col.find({'category': 'signal', 'ts': {'$gte': since}}, {'_id': 0}).sort('ts', -1))
+    except Exception:  # noqa
+        rows = []
+    by_coin = {}
+    for a in rows:
+        by_coin.setdefault(a.get('symbol', '?'), []).append(a)
+    return {'count': len(rows), 'coins': len(by_coin), 'by_coin': by_coin, 'alerts': rows}
+
+
+@app.get('/api/v1/alert-engine/digest')
+def alert_engine_digest():
+    d = _build_digest()
+    return {'status': 'ready', **d}
+
+
+def _alert_digest_job():
+    """Once-a-day consolidated summary of everything the engine fired in the last 24h."""
+    try:
+        d = _build_digest()
+        if d['count'] <= 0:
+            push_alert('digest', 'info', 'Daily signal digest',
+                       'No technical signals fired across your watchlist in the last 24h — the market stayed quiet.',
+                       'digest', 'BTC')
+            return
+        parts = []
+        for sym, als in d['by_coin'].items():
+            parts.append(f"{sym}: " + ', '.join(a['title'].split('·')[-1].strip() for a in als[:4]))
+        msg = f"{d['count']} signal(s) across {d['coins']} coin(s) in the last 24h — " + ' · '.join(parts[:8])
+        push_alert('digest', 'medium', f"Daily signal digest — {d['count']} fired", msg, 'digest', 'BTC')
+    except Exception:  # noqa
+        traceback.print_exc()
 
 
 @app.get('/api/v1/alert-engine/config')

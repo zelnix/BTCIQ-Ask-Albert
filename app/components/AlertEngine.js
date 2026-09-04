@@ -21,6 +21,7 @@ const FILTER_META = {
   funding: { label: 'Funding Rate Filter', icon: Flame, desc: 'Suppress LONG alerts when perp funding is aggressively positive (a leverage flush is likely).' },
   netflow: { label: 'Exchange Netflow (BTC)', icon: Droplet, desc: 'Large BTC exchange inflows flag sell-pressure and override short-term buys. BTC-only for now.' },
   fng: { label: 'Fear & Greed', icon: Gauge, desc: 'Fade the crowd — suppress longs at extreme greed; treat extreme fear as a high-conviction accumulation window.' },
+  btc_rs: { label: 'BTC Relative Strength', icon: TrendingUp, desc: 'Only fire alt LONG alerts when the coin is outperforming Bitcoin (rising [ALT]/BTC) — proves capital is rotating into it, not just riding BTC.' },
 };
 
 function Toggle({ on, onClick }) {
@@ -53,6 +54,8 @@ export default function AlertEngineSection() {
   const [loadingR, setLoadingR] = React.useState(false);
   const [scanning, setScanning] = React.useState(false);
   const [recent, setRecent] = React.useState([]);
+  const [backtest, setBacktest] = React.useState(null);
+  const [btLoading, setBtLoading] = React.useState(false);
 
   const loadConfig = React.useCallback(async () => {
     try {
@@ -75,7 +78,15 @@ export default function AlertEngineSection() {
   }, []);
 
   React.useEffect(() => { loadConfig(); loadRecent(); }, [loadConfig, loadRecent]);
-  React.useEffect(() => { loadReadings(coin); }, [coin, loadReadings]);
+  React.useEffect(() => { loadReadings(coin); setBacktest(null); }, [coin, loadReadings]);
+
+  const runBacktest = async () => {
+    setBtLoading(true);
+    try {
+      const j = await (await fetch(`${API_BASE}/v1/alert-engine/backtest?symbol=${coin}`, { cache: 'no-store' })).json();
+      setBacktest(j && j.status === 'ready' ? j : null);
+    } catch (e) { setBacktest(null); } finally { setBtLoading(false); }
+  };
 
   const settings = cfg?.settings;
   const save = async (patch) => {
@@ -121,13 +132,23 @@ export default function AlertEngineSection() {
         blurb="Daily (1D) technical signal detectors — GMMA crossovers, trend dip-buys, volatility squeezes and RSI exhaustion — refined by volume, funding, exchange-netflow and Fear & Greed filters. Albert scans your watchlist hourly and fires in-app alerts when a signal triggers." />
 
       {/* Master enable */}
-      <Card className="flex items-center gap-3 border-0 bg-slate-900/60 p-4 ring-1 ring-slate-800">
-        <span className={`flex h-9 w-9 items-center justify-center rounded-full ${settings.enabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-800 text-slate-500'}`}><Radar className="h-4 w-4" /></span>
-        <div className="flex-1">
-          <p className="text-sm font-bold text-white">Engine {settings.enabled ? 'active' : 'paused'}</p>
-          <p className="text-[11px] text-slate-400">Scanning {settings.watchlist?.length || 0} coins on the Daily timeframe, hourly.</p>
+      <Card className="border-0 bg-slate-900/60 p-4 ring-1 ring-slate-800">
+        <div className="flex items-center gap-3">
+          <span className={`flex h-9 w-9 items-center justify-center rounded-full ${settings.enabled ? 'bg-emerald-500/15 text-emerald-400' : 'bg-slate-800 text-slate-500'}`}><Radar className="h-4 w-4" /></span>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-white">Engine {settings.enabled ? 'active' : 'paused'}</p>
+            <p className="text-[11px] text-slate-400">Scanning {settings.watchlist?.length || 0} coins on the Daily timeframe, hourly. Uses closed candles only.</p>
+          </div>
+          <Toggle on={settings.enabled} onClick={() => save({ enabled: !settings.enabled })} />
         </div>
-        <Toggle on={settings.enabled} onClick={() => save({ enabled: !settings.enabled })} />
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-slate-800 pt-3 text-[11px] text-slate-400">
+          <span className="flex items-center gap-1.5">Correlated alt-long cap
+            <input type="number" value={settings.corr_cap} onChange={(e) => save({ corr_cap: Number(e.target.value) })} className="w-14 rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-slate-100" />/day</span>
+          <span className="flex items-center gap-1.5">Alert valid for
+            <input type="number" value={settings.expiry_candles} onChange={(e) => save({ expiry_candles: Number(e.target.value) })} className="w-14 rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-slate-100" />daily closes</span>
+          <span className="flex items-center gap-1.5">Backtest friction
+            <input type="number" value={settings.friction_bps} onChange={(e) => save({ friction_bps: Number(e.target.value) })} className="w-16 rounded border border-slate-700 bg-slate-950 px-1.5 py-0.5 text-slate-100" />bps</span>
+        </div>
       </Card>
 
       {/* Live readings */}
@@ -158,6 +179,9 @@ export default function AlertEngineSection() {
               <Readout label="Volume" value={r.vol_ratio != null ? `${r.vol_ratio}×` : '—'} tone={r.vol_ratio >= (settings.volume_mult || 1.5) ? 'good' : 'neutral'} sub="vs 20-day avg" />
               <Readout label="Funding" value={f?.funding != null ? `${f.funding}%` : '—'} tone={f?.funding_suppress_long ? 'bad' : 'neutral'} sub={f?.funding_suppress_long ? 'hot — longs off' : 'normal'} />
               <Readout label="Fear & Greed" value={f?.fng_value ?? '—'} tone={f?.fng_suppress_long ? 'bad' : f?.fng_accumulate ? 'good' : 'neutral'} sub={f?.fng_label || ''} />
+              {coin !== 'BTC' && (
+                <Readout label="vs BTC (7d)" value={f?.btc_rs != null ? `${f.btc_rs > 0 ? '+' : ''}${f.btc_rs}%` : '—'} tone={f?.btc_rs_suppress_long ? 'bad' : f?.btc_rs > 0 ? 'good' : 'neutral'} sub={f?.btc_rs_suppress_long ? 'lagging BTC' : 'rel. strength'} />
+              )}
             </div>
             {f?.netflow_available && (
               <div className="mt-2 flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900/50 px-2.5 py-2 text-[12px] text-slate-300">
@@ -187,6 +211,47 @@ export default function AlertEngineSection() {
           </>
         ) : (
           <p className="py-4 text-center text-[12px] text-slate-500">Couldn&apos;t load {coin} data. Try Scan now.</p>
+        )}
+      </Card>
+
+      {/* Signal backtest */}
+      <Card className="border-0 bg-slate-900/60 p-4 ring-1 ring-slate-800">
+        <div className="mb-1 flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-bold text-white">Signal backtest — {coin}</h3>
+          {backtest && <span className="text-[11px] text-slate-500">{backtest.candles} candles · {backtest.from} → {backtest.to} · {backtest.friction_bps}bps friction</span>}
+          <Button onClick={runBacktest} disabled={btLoading} size="sm" className="ml-auto h-7 gap-1 bg-violet-500 text-white hover:bg-violet-400">
+            {btLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}Run backtest
+          </Button>
+        </div>
+        <p className="mb-2 text-[11px] text-slate-500">How each detector has performed on {coin}&apos;s closed daily candles — direction-adjusted forward return at +5 and +10 days, net of fees/slippage. Educational, past performance ≠ future results.</p>
+        {btLoading ? (
+          <div className="py-5 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin text-slate-500" /></div>
+        ) : backtest?.detectors ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12px]">
+              <thead>
+                <tr className="text-left text-[10px] uppercase tracking-wide text-slate-500">
+                  <th className="pb-1.5">Detector</th><th className="pb-1.5 text-center">Triggers</th>
+                  <th className="pb-1.5 text-center">Win% (5d)</th><th className="pb-1.5 text-center">Avg (5d)</th>
+                  <th className="pb-1.5 text-center">Win% (10d)</th><th className="pb-1.5 text-center">Avg (10d)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Object.entries(backtest.detectors).map(([k, r]) => (
+                  <tr key={k} className="border-t border-slate-800">
+                    <td className="py-1.5 font-semibold text-slate-200">{({ gmma_crossover: 'GMMA crossover', dip_buy: 'Dip-buy', squeeze: 'Squeeze (|move|)', rsi_oversold: 'RSI oversold', rsi_overbought: 'RSI overbought' })[k] || k}</td>
+                    <td className="text-center text-slate-300">{r.triggers}</td>
+                    <td className="text-center text-slate-300">{r.win_5 ?? '—'}{r.win_5 != null ? '%' : ''}</td>
+                    <td className={`text-center font-semibold ${r.avg_5 > 0 ? 'text-emerald-400' : r.avg_5 < 0 ? 'text-red-400' : 'text-slate-400'}`}>{r.avg_5 != null ? `${r.avg_5 > 0 ? '+' : ''}${r.avg_5}%` : '—'}</td>
+                    <td className="text-center text-slate-300">{r.win_10 ?? '—'}{r.win_10 != null ? '%' : ''}</td>
+                    <td className={`text-center font-semibold ${r.avg_10 > 0 ? 'text-emerald-400' : r.avg_10 < 0 ? 'text-red-400' : 'text-slate-400'}`}>{r.avg_10 != null ? `${r.avg_10 > 0 ? '+' : ''}${r.avg_10}%` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-3 text-center text-[12px] text-slate-500">Tap <span className="font-semibold text-slate-300">Run backtest</span> to grade each detector across {coin}&apos;s history.</p>
         )}
       </Card>
 

@@ -264,6 +264,50 @@ function CompareModal({ a, b, onClose }) {
   );
 }
 
+const GUARDRAILS = [
+  ['Macro & liquidity alignment', 'Anchor every trade to global liquidity & rate expectations — BTC is a high-beta liquidity asset.'],
+  ['Core vs tactical capital', 'Keep a never-sold DCA core stack separate from the tactical stack you trade signals with.'],
+  ['Leverage containment', 'Spot/paper only — cap leverage at 0 (or 1–2x if hedging). Albert never uses leverage.'],
+  ['Structural invalidation stop', 'Every setup has an objective invalidation (below the slow ribbon / swing). Cut instantly, no mental stops.'],
+  ['Sector rotation & narrative', 'Favour coins in sectors seeing real on-chain volume / inflows, not stagnant large-caps.'],
+  ['BTC relative strength', 'Only add alts that are outperforming BTC — enforced by the Alert Engine filter.'],
+  ['Liquidity tiering (A vs B)', 'Tier-A anchors (ETH/SOL/BNB) get normal size; thinner Tier-B (rank 11–20) get tighter stops & smaller size.'],
+  ['Altcoin-season filter', 'Prefer alt entries when breadth is rotating out of BTC dominance, not during "BTC season".'],
+  ['Token-unlock awareness', 'Avoid longs into a large supply unlock in the next 1–2 weeks.'],
+  ['Staking yield note', 'For PoS holds (ETH/SOL/L1s), factor native staking yield into multi-week theses.'],
+  ['Alert perishability', 'Setups expire after a set number of daily closes — no chasing stale signals.'],
+  ['Correlation / concentration cap', 'Limit simultaneous correlated alt-longs so you are not one big leveraged bet.'],
+  ['Friction included', 'Fees + slippage are baked into backtest risk-reward so paper edges are realistic.'],
+  ['Capital allocation ceiling', 'Keep total crypto to a fixed % of net worth (e.g. 5–15%) — a personal off-app rule.'],
+  ['Zero-emotional override', 'No impulsive manual changes for ~30 min after a shock — let the system work.'],
+  ['Mandatory journaling', 'Log every close (chart, thesis, emotion) so outcomes become data.'],
+  ['Custody & key rotation', 'Long-term stacks in multi-sig cold storage; nothing sitting long-term on exchanges.'],
+];
+
+function GuardrailsCard() {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <Card className="border-0 bg-slate-900/60 p-4 ring-1 ring-slate-800">
+      <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 text-left">
+        <ShieldAlert className="h-4 w-4 text-amber-400" />
+        <h3 className="text-sm font-bold text-white">Discipline guardrails</h3>
+        <span className="text-[11px] text-slate-500">the rulebook Albert holds every strategy to</span>
+        <span className="ml-auto text-[11px] text-sky-300">{open ? 'Hide' : 'Show'}</span>
+      </button>
+      {open && (
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          {GUARDRAILS.map(([t, d]) => (
+            <div key={t} className="rounded-lg border border-slate-800 bg-slate-900/40 p-2.5">
+              <p className="flex items-center gap-1.5 text-[12px] font-semibold text-slate-100"><Check className="h-3 w-3 text-emerald-400" />{t}</p>
+              <p className="text-[11px] leading-snug text-slate-400">{d}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function StrategiesSection() {
   const symbol = React.useContext(SymbolContext);
   const [data, setData] = React.useState(null);   // {active, history, stats}
@@ -326,6 +370,8 @@ export default function StrategiesSection() {
     <div className="space-y-4">
       <SectionHead icon={Crosshair} title="Trading Strategies"
         blurb={`Strategies Albert builds and babysits for ${coinName}. Each has an entry, profit targets, a stop and if-this-then-that rules on price, time and signals. Albert nudges you when it's time to act, paper-tracks the P&L, and keeps a history of how past plays performed.`} />
+
+      <GuardrailsCard />
 
       {loading && !data ? (
         <Card className="border-0 bg-slate-900 p-8 text-center ring-1 ring-slate-800"><Loader2 className="mx-auto h-6 w-6 animate-spin text-slate-500" /></Card>
