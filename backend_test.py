@@ -1,456 +1,465 @@
 #!/usr/bin/env python3
 """
-BitMarkAI Coverage-by-Horizon + Ensemble Weight Validation Test Suite
-Tests the latest additions to the BitMarkAI quant engine.
+Backend API Test Suite for NEW/CHANGED endpoints
+Tests the 6 new tasks from the current session via the /api proxy
 """
-
 import requests
+import json
+import base64
+import time
 import sys
-from typing import Dict, Any, List
 
-# Base URL from review request
+# Use the external URL with /api prefix (proxied to internal :8001)
 BASE_URL = "https://quant-features.preview.emergentagent.com/api"
 
-def test_validation_endpoint():
-    """
-    TEST 1: GET /api/v1/validation
-    Expect 200, status "ready":
-    - coverage_history_by_horizon present, a dict with keys "24H", "7D", "30D"
-    - Each horizon: non-empty list of {week, coverage, n}
-    - Report the latest coverage value for each horizon
-    - coverage_target == 90
-    - Existing fields still present (n_trades, brier_score, PSR, DSR, rolling_brier_history, benchmarks)
-    """
+def test_tts_endpoint():
+    """Test 1: POST /api/v1/tts - Gemini TTS endpoint"""
     print("\n" + "="*80)
-    print("TEST 1: GET /api/v1/validation (Coverage History by Horizon)")
+    print("TEST 1: POST /api/v1/tts - Gemini TTS endpoint")
     print("="*80)
     
+    # Test 1a: Valid text request
+    print("\n[1a] Testing valid text request...")
     try:
-        url = f"{BASE_URL}/v1/validation"
-        print(f"→ Requesting: {url}")
+        payload = {"text": "Good morning from Albert."}
+        response = requests.post(f"{BASE_URL}/v1/tts", json=payload, timeout=60)
+        print(f"Status Code: {response.status_code}")
         
-        response = requests.get(url, timeout=30)
-        print(f"✓ HTTP Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"❌ FAILED: Expected HTTP 200, got {response.status_code}")
-            return False
-        
-        data = response.json()
-        
-        # Check status
-        if data.get('status') != 'ready':
-            print(f"❌ FAILED: Expected status='ready', got '{data.get('status')}'")
-            return False
-        print(f"✓ status = 'ready'")
-        
-        # Check coverage_history_by_horizon
-        coverage_by_horizon = data.get('coverage_history_by_horizon')
-        if not coverage_by_horizon:
-            print(f"❌ FAILED: coverage_history_by_horizon not present")
-            return False
-        print(f"✓ coverage_history_by_horizon present")
-        
-        # Check it's a dict
-        if not isinstance(coverage_by_horizon, dict):
-            print(f"❌ FAILED: coverage_history_by_horizon is not a dict, got {type(coverage_by_horizon)}")
-            return False
-        print(f"✓ coverage_history_by_horizon is a dict")
-        
-        # Check required keys
-        required_horizons = ["24H", "7D", "30D"]
-        for horizon in required_horizons:
-            if horizon not in coverage_by_horizon:
-                print(f"❌ FAILED: Missing horizon '{horizon}' in coverage_history_by_horizon")
-                return False
-        print(f"✓ All required horizons present: {required_horizons}")
-        
-        # Validate each horizon's data
-        print("\n📊 COVERAGE BY HORIZON:")
-        for horizon in required_horizons:
-            history = coverage_by_horizon[horizon]
+        if response.status_code == 200:
+            data = response.json()
+            print(f"✅ Response keys: {list(data.keys())}")
             
-            # Check it's a non-empty list
-            if not isinstance(history, list) or len(history) == 0:
-                print(f"❌ FAILED: {horizon} history is not a non-empty list")
+            # Validate response structure
+            assert 'audio_base64' in data, "Missing audio_base64 field"
+            assert 'mime_type' in data, "Missing mime_type field"
+            assert 'cached' in data, "Missing cached field"
+            
+            # Validate audio_base64 is non-empty and valid base64
+            audio_b64 = data['audio_base64']
+            assert len(audio_b64) > 0, "audio_base64 is empty"
+            try:
+                audio_bytes = base64.b64decode(audio_b64)
+                assert len(audio_bytes) > 0, "Decoded audio is empty"
+                print(f"✅ audio_base64: non-empty ({len(audio_b64)} chars), decodes to {len(audio_bytes)} bytes")
+            except Exception as e:
+                print(f"❌ audio_base64 is not valid base64: {e}")
                 return False
             
-            # Check structure of items
-            for i, item in enumerate(history[:3]):  # Check first 3 items
-                if not all(key in item for key in ['week', 'coverage', 'n']):
-                    print(f"❌ FAILED: {horizon} item {i} missing required keys (week, coverage, n)")
-                    return False
-                
-                # Validate types
-                if not isinstance(item['week'], int):
-                    print(f"❌ FAILED: {horizon} item {i} week is not int")
-                    return False
-                if not isinstance(item['coverage'], (int, float)) or not (0 <= item['coverage'] <= 100):
-                    print(f"❌ FAILED: {horizon} item {i} coverage not in 0-100 range")
-                    return False
-                if not isinstance(item['n'], int):
-                    print(f"❌ FAILED: {horizon} item {i} n is not int")
-                    return False
+            # Validate mime_type
+            assert data['mime_type'] == 'audio/wav', f"Expected mime_type 'audio/wav', got '{data['mime_type']}'"
+            print(f"✅ mime_type: {data['mime_type']}")
             
-            # Report latest coverage value
-            latest = history[-1]
-            print(f"  {horizon}: {len(history)} weeks, latest coverage = {latest['coverage']}% (n={latest['n']})")
-        
-        # Check coverage_target
-        coverage_target = data.get('coverage_target')
-        if coverage_target != 90:
-            print(f"❌ FAILED: coverage_target should be 90, got {coverage_target}")
+            # Validate cached field
+            assert isinstance(data['cached'], bool), "cached field is not boolean"
+            print(f"✅ cached: {data['cached']} (first call, expected False)")
+            
+            print("✅ TEST 1a PASSED: Valid text returns 200 with non-empty audio_base64 (base64-decodable WAV)")
+        else:
+            print(f"❌ TEST 1a FAILED: Expected 200, got {response.status_code}")
+            print(f"Response: {response.text}")
             return False
-        print(f"\n✓ coverage_target = 90")
-        
-        # Check existing fields still present
-        existing_fields = [
-            'n_trades', 'brier_score', 'probabilistic_sharpe_ratio', 
-            'deflated_sharpe_ratio', 'rolling_brier_history', 'benchmarks'
-        ]
-        missing_fields = []
-        for field in existing_fields:
-            if field not in data:
-                missing_fields.append(field)
-        
-        if missing_fields:
-            print(f"❌ FAILED: Missing existing fields: {missing_fields}")
-            return False
-        print(f"✓ All existing fields present: {existing_fields}")
-        
-        print("\n✅ TEST 1 PASSED: /api/v1/validation")
-        return True
-        
     except Exception as e:
-        print(f"❌ TEST 1 FAILED with exception: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ TEST 1a FAILED with exception: {e}")
         return False
-
-
-def test_dashboard_decision_ensemble():
-    """
-    TEST 2: GET /api/v1/dashboard
-    Expect 200, status "ready":
-    - decision.overall_score present (int 0-100)
-    - decision.overall_score_raw present
-    - decision.ensemble_health present (0-1 float)
-    - Report all three values
-    - decision.label matches the adjusted overall_score band
-    - forecasts still have conformal, ensemble_weight (for matured horizons), 
-      calibrated, quantiles, ev, label_method=="triple_barrier"
-    """
-    print("\n" + "="*80)
-    print("TEST 2: GET /api/v1/dashboard (Decision Ensemble Fields + Forecasts)")
-    print("="*80)
     
+    # Test 1b: Repeat same text (should be cached)
+    print("\n[1b] Testing cache (repeat same text)...")
     try:
-        url = f"{BASE_URL}/v1/dashboard"
-        print(f"→ Requesting: {url}")
+        time.sleep(1)
+        payload = {"text": "Good morning from Albert."}
+        response = requests.post(f"{BASE_URL}/v1/tts", json=payload, timeout=60)
+        print(f"Status Code: {response.status_code}")
         
-        response = requests.get(url, timeout=30)
-        print(f"✓ HTTP Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"❌ FAILED: Expected HTTP 200, got {response.status_code}")
+        if response.status_code == 200:
+            data = response.json()
+            assert data.get('cached') == True, f"Expected cached=True, got {data.get('cached')}"
+            print(f"✅ cached: {data['cached']} (second call, expected True)")
+            print("✅ TEST 1b PASSED: Repeat text returns cached=True")
+        else:
+            print(f"❌ TEST 1b FAILED: Expected 200, got {response.status_code}")
             return False
-        
-        data = response.json()
-        
-        # Check status
-        if data.get('status') != 'ready':
-            print(f"❌ FAILED: Expected status='ready', got '{data.get('status')}'")
-            return False
-        print(f"✓ status = 'ready'")
-        
-        # Check decision object
-        decision = data.get('decision')
-        if not decision:
-            print(f"❌ FAILED: decision object not present")
-            return False
-        print(f"✓ decision object present")
-        
-        # Check overall_score
-        overall_score = decision.get('overall_score')
-        if not isinstance(overall_score, int) or not (0 <= overall_score <= 100):
-            print(f"❌ FAILED: overall_score should be int 0-100, got {overall_score} ({type(overall_score)})")
-            return False
-        print(f"✓ decision.overall_score = {overall_score} (int 0-100)")
-        
-        # Check overall_score_raw
-        overall_score_raw = decision.get('overall_score_raw')
-        if overall_score_raw is None:
-            print(f"❌ FAILED: overall_score_raw not present")
-            return False
-        if not isinstance(overall_score_raw, (int, float)) or not (0 <= overall_score_raw <= 100):
-            print(f"❌ FAILED: overall_score_raw should be number 0-100, got {overall_score_raw}")
-            return False
-        print(f"✓ decision.overall_score_raw = {overall_score_raw}")
-        
-        # Check ensemble_health
-        ensemble_health = decision.get('ensemble_health')
-        if ensemble_health is None:
-            print(f"❌ FAILED: ensemble_health not present")
-            return False
-        if not isinstance(ensemble_health, (int, float)) or not (0 <= ensemble_health <= 1):
-            print(f"❌ FAILED: ensemble_health should be float 0-1, got {ensemble_health}")
-            return False
-        print(f"✓ decision.ensemble_health = {ensemble_health:.3f} (0-1 float)")
-        
-        # Report all three
-        print(f"\n📊 DECISION ENSEMBLE METRICS:")
-        print(f"  overall_score (adjusted) = {overall_score}")
-        print(f"  overall_score_raw = {overall_score_raw}")
-        print(f"  ensemble_health = {ensemble_health:.3f}")
-        
-        # Check label matches score band
-        label = decision.get('label')
-        if not label:
-            print(f"❌ FAILED: decision.label not present")
-            return False
-        print(f"✓ decision.label = '{label}'")
-        
-        # Check forecasts
-        forecasts = data.get('forecasts')
-        if not forecasts or not isinstance(forecasts, list):
-            print(f"❌ FAILED: forecasts not present or not a list")
-            return False
-        print(f"\n✓ forecasts present ({len(forecasts)} items)")
-        
-        # Validate forecast fields
-        required_forecast_fields = ['conformal', 'calibrated', 'quantiles', 'ev', 'label_method']
-        
-        print("\n📊 FORECAST VALIDATION:")
-        for forecast in forecasts:
-            horizon = forecast.get('horizon', 'unknown')
-            
-            # Check required fields
-            for field in required_forecast_fields:
-                if field not in forecast:
-                    print(f"❌ FAILED: {horizon} forecast missing field '{field}'")
-                    return False
-            
-            # Check label_method
-            if forecast['label_method'] != 'triple_barrier':
-                print(f"❌ FAILED: {horizon} label_method should be 'triple_barrier', got '{forecast['label_method']}'")
-                return False
-            
-            # Check ensemble_weight (should be present for matured horizons like 24H, 7D)
-            ensemble_weight = forecast.get('ensemble_weight')
-            if horizon in ['24H', '7D']:
-                if ensemble_weight is None:
-                    print(f"⚠️  WARNING: {horizon} ensemble_weight is None (expected for matured horizons)")
-                else:
-                    if not isinstance(ensemble_weight, (int, float)) or not (0 <= ensemble_weight <= 1):
-                        print(f"❌ FAILED: {horizon} ensemble_weight should be 0-1, got {ensemble_weight}")
-                        return False
-                    print(f"  {horizon}: ensemble_weight = {ensemble_weight:.3f} ✓")
-            else:
-                # For longer horizons, ensemble_weight may be None
-                if ensemble_weight is not None:
-                    print(f"  {horizon}: ensemble_weight = {ensemble_weight:.3f} ✓")
-                else:
-                    print(f"  {horizon}: ensemble_weight = None (acceptable for longer horizons) ✓")
-            
-            # Verify other fields are present
-            print(f"  {horizon}: conformal={forecast.get('conformal') is not None}, "
-                  f"calibrated={forecast.get('calibrated')}, "
-                  f"quantiles={forecast.get('quantiles') is not None}, "
-                  f"ev={forecast.get('ev') is not None}, "
-                  f"label_method='{forecast.get('label_method')}' ✓")
-        
-        print("\n✅ TEST 2 PASSED: /api/v1/dashboard")
-        return True
-        
     except Exception as e:
-        print(f"❌ TEST 2 FAILED with exception: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"❌ TEST 1b FAILED with exception: {e}")
         return False
+    
+    # Test 1c: Empty text (should return 400)
+    print("\n[1c] Testing empty text (should return 400)...")
+    try:
+        payload = {"text": ""}
+        response = requests.post(f"{BASE_URL}/v1/tts", json=payload, timeout=30)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 400:
+            print("✅ TEST 1c PASSED: Empty text returns 400")
+        else:
+            print(f"❌ TEST 1c FAILED: Expected 400, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 1c FAILED with exception: {e}")
+        return False
+    
+    print("\n✅ ALL TTS TESTS PASSED")
+    return True
 
 
-def test_regression_endpoints():
-    """
-    TEST 3: Regression - all 200
-    - GET /api/v1/scorecard (ready, by_horizon has ensemble_weight, reliability present)
-    - GET /api/v1/forecast/regime (ready)
-    - GET /api/v1/data-audit (ready, 10 feeds)
-    - GET /api/v1/health
-    """
+def test_albert_brief():
+    """Test 2: GET /api/v1/albert/brief - Coin-specific Morning Brief"""
     print("\n" + "="*80)
-    print("TEST 3: Regression Tests")
+    print("TEST 2: GET /api/v1/albert/brief - Coin-specific Morning Brief")
     print("="*80)
     
-    all_passed = True
-    
-    # Test 3.1: GET /api/v1/scorecard
-    print("\n→ TEST 3.1: GET /api/v1/scorecard")
+    # Test 2a: BTC brief (default)
+    print("\n[2a] Testing BTC brief (default)...")
     try:
-        url = f"{BASE_URL}/v1/scorecard"
-        response = requests.get(url, timeout=30)
-        print(f"  HTTP Status: {response.status_code}")
+        response = requests.get(f"{BASE_URL}/v1/albert/brief", timeout=60)
+        print(f"Status Code: {response.status_code}")
         
-        if response.status_code != 200:
-            print(f"  ❌ FAILED: Expected HTTP 200, got {response.status_code}")
-            all_passed = False
-        else:
+        if response.status_code == 200:
             data = response.json()
+            print(f"Response keys: {list(data.keys())}")
             
-            if data.get('status') != 'ready':
-                print(f"  ❌ FAILED: Expected status='ready', got '{data.get('status')}'")
-                all_passed = False
-            else:
-                print(f"  ✓ status = 'ready'")
-            
-            # Check by_horizon has ensemble_weight
-            by_horizon = data.get('by_horizon')
-            if not by_horizon:
-                print(f"  ❌ FAILED: by_horizon not present")
-                all_passed = False
-            else:
-                print(f"  ✓ by_horizon present")
-                
-                # Check ensemble_weight in matured horizons
-                for horizon in ['24H', '7D']:
-                    if horizon in by_horizon:
-                        ew = by_horizon[horizon].get('ensemble_weight')
-                        if ew is not None:
-                            print(f"  ✓ by_horizon['{horizon}'].ensemble_weight = {ew:.3f}")
-                        else:
-                            print(f"  ⚠️  by_horizon['{horizon}'].ensemble_weight = None")
-            
-            # Check reliability present
-            if 'reliability' not in data:
-                print(f"  ❌ FAILED: reliability not present")
-                all_passed = False
-            else:
-                print(f"  ✓ reliability present")
-            
-            if all_passed:
-                print(f"  ✅ PASSED: /api/v1/scorecard")
-    
-    except Exception as e:
-        print(f"  ❌ FAILED with exception: {e}")
-        all_passed = False
-    
-    # Test 3.2: GET /api/v1/forecast/regime
-    print("\n→ TEST 3.2: GET /api/v1/forecast/regime")
-    try:
-        url = f"{BASE_URL}/v1/forecast/regime"
-        response = requests.get(url, timeout=30)
-        print(f"  HTTP Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"  ❌ FAILED: Expected HTTP 200, got {response.status_code}")
-            all_passed = False
+            assert data.get('status') == 'ready', f"Expected status='ready', got '{data.get('status')}'"
+            print(f"✅ status: {data['status']}")
+            print("✅ TEST 2a PASSED: BTC brief returns status='ready'")
         else:
+            print(f"❌ TEST 2a FAILED: Expected 200, got {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 2a FAILED with exception: {e}")
+        return False
+    
+    # Test 2b: ETH brief (first call may be slow ~15-25s)
+    print("\n[2b] Testing ETH brief (may take 15-25s on first call)...")
+    try:
+        response = requests.get(f"{BASE_URL}/v1/albert/brief?symbol=ETH", timeout=60)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
             data = response.json()
+            print(f"Response keys: {list(data.keys())}")
             
-            if data.get('status') != 'ready':
-                print(f"  ❌ FAILED: Expected status='ready', got '{data.get('status')}'")
-                all_passed = False
+            assert data.get('status') == 'ready', f"Expected status='ready', got '{data.get('status')}'"
+            assert data.get('coin') == 'Ethereum', f"Expected coin='Ethereum', got '{data.get('coin')}'"
+            print(f"✅ status: {data['status']}")
+            print(f"✅ coin: {data['coin']}")
+            
+            # Check if observations mention ETH
+            observations = data.get('observations', [])
+            text = data.get('text', '')
+            eth_mentioned = any('ETH' in str(obs).upper() or 'ETHEREUM' in str(obs).upper() for obs in observations) or 'ETH' in text.upper() or 'ETHEREUM' in text.upper()
+            if eth_mentioned:
+                print(f"✅ observations/text reference ETH/Ethereum")
             else:
-                print(f"  ✓ status = 'ready'")
-                print(f"  ✅ PASSED: /api/v1/forecast/regime")
-    
-    except Exception as e:
-        print(f"  ❌ FAILED with exception: {e}")
-        all_passed = False
-    
-    # Test 3.3: GET /api/v1/data-audit
-    print("\n→ TEST 3.3: GET /api/v1/data-audit")
-    try:
-        url = f"{BASE_URL}/v1/data-audit"
-        response = requests.get(url, timeout=30)
-        print(f"  HTTP Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"  ❌ FAILED: Expected HTTP 200, got {response.status_code}")
-            all_passed = False
+                print(f"⚠️  observations/text do not explicitly mention ETH (may be acceptable)")
+            
+            print("✅ TEST 2b PASSED: ETH brief returns status='ready', coin='Ethereum'")
         else:
+            print(f"❌ TEST 2b FAILED: Expected 200, got {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 2b FAILED with exception: {e}")
+        return False
+    
+    # Test 2c: Unsupported symbol (should return error)
+    print("\n[2c] Testing unsupported symbol (ZZZ)...")
+    try:
+        response = requests.get(f"{BASE_URL}/v1/albert/brief?symbol=ZZZ", timeout=30)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
             data = response.json()
-            
-            if data.get('status') != 'ready':
-                print(f"  ❌ FAILED: Expected status='ready', got '{data.get('status')}'")
-                all_passed = False
-            else:
-                print(f"  ✓ status = 'ready'")
-            
-            # Check 10 feeds
-            feeds = data.get('feeds')
-            if not feeds or len(feeds) != 10:
-                print(f"  ❌ FAILED: Expected 10 feeds, got {len(feeds) if feeds else 0}")
-                all_passed = False
-            else:
-                print(f"  ✓ 10 feeds present")
-                print(f"  ✅ PASSED: /api/v1/data-audit")
-    
-    except Exception as e:
-        print(f"  ❌ FAILED with exception: {e}")
-        all_passed = False
-    
-    # Test 3.4: GET /api/v1/health
-    print("\n→ TEST 3.4: GET /api/v1/health")
-    try:
-        url = f"{BASE_URL}/v1/health"
-        response = requests.get(url, timeout=30)
-        print(f"  HTTP Status: {response.status_code}")
-        
-        if response.status_code != 200:
-            print(f"  ❌ FAILED: Expected HTTP 200, got {response.status_code}")
-            all_passed = False
+            assert data.get('status') == 'error', f"Expected status='error', got '{data.get('status')}'"
+            print(f"✅ status: {data['status']}")
+            print("✅ TEST 2c PASSED: Unsupported symbol returns status='error'")
         else:
-            print(f"  ✅ PASSED: /api/v1/health")
-    
+            print(f"❌ TEST 2c FAILED: Expected 200 with status='error', got {response.status_code}")
+            return False
     except Exception as e:
-        print(f"  ❌ FAILED with exception: {e}")
-        all_passed = False
+        print(f"❌ TEST 2c FAILED with exception: {e}")
+        return False
     
-    if all_passed:
-        print("\n✅ TEST 3 PASSED: All regression tests")
-    else:
-        print("\n❌ TEST 3 FAILED: Some regression tests failed")
+    # Test 2d: Refresh parameter (regenerates)
+    print("\n[2d] Testing refresh=1 (regenerates)...")
+    try:
+        response = requests.get(f"{BASE_URL}/v1/albert/brief?refresh=1", timeout=60)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            assert data.get('status') == 'ready', f"Expected status='ready', got '{data.get('status')}'"
+            assert data.get('cached') == False, f"Expected cached=False with refresh=1, got {data.get('cached')}"
+            print(f"✅ status: {data['status']}")
+            print(f"✅ cached: {data['cached']} (refresh=1, expected False)")
+            print("✅ TEST 2d PASSED: refresh=1 regenerates (cached=False)")
+        else:
+            print(f"❌ TEST 2d FAILED: Expected 200, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 2d FAILED with exception: {e}")
+        return False
     
-    return all_passed
+    print("\n✅ ALL BRIEF TESTS PASSED")
+    return True
+
+
+def test_brief_watchlist():
+    """Test 3: GET/POST /api/v1/albert/brief-watchlist"""
+    print("\n" + "="*80)
+    print("TEST 3: GET/POST /api/v1/albert/brief-watchlist")
+    print("="*80)
+    
+    # Test 3a: GET watchlist
+    print("\n[3a] Testing GET watchlist...")
+    try:
+        response = requests.get(f"{BASE_URL}/v1/albert/brief-watchlist", timeout=30)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"Response keys: {list(data.keys())}")
+            
+            assert 'coins' in data, "Missing 'coins' field"
+            assert 'available' in data, "Missing 'available' field"
+            assert 'BTC' in data['coins'], "BTC should always be in coins list"
+            print(f"✅ coins: {data['coins']}")
+            print(f"✅ available: {[c['symbol'] for c in data['available']]}")
+            print("✅ TEST 3a PASSED: GET watchlist returns {coins, available} with BTC included")
+        else:
+            print(f"❌ TEST 3a FAILED: Expected 200, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 3a FAILED with exception: {e}")
+        return False
+    
+    # Test 3b: POST with valid coins (BTC should be forced in)
+    print("\n[3b] Testing POST with ['ETH', 'SOL'] (BTC should be forced in)...")
+    try:
+        payload = {"coins": ["ETH", "SOL"]}
+        response = requests.post(f"{BASE_URL}/v1/albert/brief-watchlist", json=payload, timeout=30)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            assert 'BTC' in data['coins'], "BTC should be forced into coins list"
+            assert 'ETH' in data['coins'], "ETH should be in coins list"
+            assert 'SOL' in data['coins'], "SOL should be in coins list"
+            print(f"✅ coins: {data['coins']}")
+            print("✅ TEST 3b PASSED: POST saves coins with BTC forced in")
+        else:
+            print(f"❌ TEST 3b FAILED: Expected 200, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 3b FAILED with exception: {e}")
+        return False
+    
+    # Test 3c: POST with invalid symbol (should return only BTC)
+    print("\n[3c] Testing POST with ['ZZZ'] (should return only BTC)...")
+    try:
+        payload = {"coins": ["ZZZ"]}
+        response = requests.post(f"{BASE_URL}/v1/albert/brief-watchlist", json=payload, timeout=30)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            assert data['coins'] == ['BTC'], f"Expected only ['BTC'], got {data['coins']}"
+            print(f"✅ coins: {data['coins']}")
+            print("✅ TEST 3c PASSED: Invalid symbol returns only BTC")
+        else:
+            print(f"❌ TEST 3c FAILED: Expected 200, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 3c FAILED with exception: {e}")
+        return False
+    
+    # Test 3d: Reset to default ['ETH', 'SOL']
+    print("\n[3d] Resetting watchlist to ['ETH', 'SOL']...")
+    try:
+        payload = {"coins": ["ETH", "SOL"]}
+        response = requests.post(f"{BASE_URL}/v1/albert/brief-watchlist", json=payload, timeout=30)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"✅ Reset complete. coins: {data['coins']}")
+            print("✅ TEST 3d PASSED: Watchlist reset to default")
+        else:
+            print(f"❌ TEST 3d FAILED: Expected 200, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 3d FAILED with exception: {e}")
+        return False
+    
+    print("\n✅ ALL WATCHLIST TESTS PASSED")
+    return True
+
+
+def test_track_record():
+    """Test 4: GET /api/v1/albert/track-record"""
+    print("\n" + "="*80)
+    print("TEST 4: GET /api/v1/albert/track-record")
+    print("="*80)
+    
+    print("\n[4] Testing track-record endpoint...")
+    try:
+        response = requests.get(f"{BASE_URL}/v1/albert/track-record", timeout=30)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"Response keys: {list(data.keys())}")
+            
+            # Validate required keys exist
+            required_keys = ['best_call', 'worst_call', 'streak', 'longest_win_streak']
+            for key in required_keys:
+                assert key in data, f"Missing required key: {key}"
+                print(f"✅ {key}: {data[key]} (may be null/None if no graded calls)")
+            
+            # Validate status
+            assert data.get('status') == 'ready', f"Expected status='ready', got '{data.get('status')}'"
+            print(f"✅ status: {data['status']}")
+            
+            print("✅ TEST 4 PASSED: track-record returns 200 with all required keys (best_call, worst_call, streak, longest_win_streak)")
+        else:
+            print(f"❌ TEST 4 FAILED: Expected 200, got {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 4 FAILED with exception: {e}")
+        return False
+    
+    return True
+
+
+def test_weekly_recap_history():
+    """Test 5: GET /api/v1/albert/weekly-recap/history"""
+    print("\n" + "="*80)
+    print("TEST 5: GET /api/v1/albert/weekly-recap/history")
+    print("="*80)
+    
+    print("\n[5] Testing weekly-recap/history endpoint...")
+    try:
+        response = requests.get(f"{BASE_URL}/v1/albert/weekly-recap/history", timeout=30)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"Response keys: {list(data.keys())}")
+            
+            # Validate required keys
+            assert 'status' in data, "Missing 'status' field"
+            assert 'recaps' in data, "Missing 'recaps' field"
+            assert data['status'] == 'ready', f"Expected status='ready', got '{data['status']}'"
+            assert isinstance(data['recaps'], list), "recaps should be a list"
+            
+            print(f"✅ status: {data['status']}")
+            print(f"✅ recaps: list with {len(data['recaps'])} items")
+            
+            print("✅ TEST 5 PASSED: weekly-recap/history returns 200 with {status:'ready', recaps:[...]}")
+        else:
+            print(f"❌ TEST 5 FAILED: Expected 200, got {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 5 FAILED with exception: {e}")
+        return False
+    
+    return True
+
+
+def test_regression_sanity():
+    """Test 6: Regression sanity checks (health, alerts)"""
+    print("\n" + "="*80)
+    print("TEST 6: Regression sanity checks (health, alerts)")
+    print("="*80)
+    
+    # Test 6a: GET /api/v1/health
+    print("\n[6a] Testing GET /api/v1/health...")
+    try:
+        response = requests.get(f"{BASE_URL}/v1/health", timeout=30)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"Response: {data}")
+            print("✅ TEST 6a PASSED: /api/v1/health returns 200")
+        else:
+            print(f"❌ TEST 6a FAILED: Expected 200, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 6a FAILED with exception: {e}")
+        return False
+    
+    # Test 6b: GET /api/v1/alerts
+    print("\n[6b] Testing GET /api/v1/alerts...")
+    try:
+        response = requests.get(f"{BASE_URL}/v1/alerts", timeout=30)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"Response keys: {list(data.keys())}")
+            print("✅ TEST 6b PASSED: /api/v1/alerts returns 200")
+        else:
+            print(f"❌ TEST 6b FAILED: Expected 200, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 6b FAILED with exception: {e}")
+        return False
+    
+    # Test 6c: GET /api/v1/alerts?limit=50
+    print("\n[6c] Testing GET /api/v1/alerts?limit=50...")
+    try:
+        response = requests.get(f"{BASE_URL}/v1/alerts?limit=50", timeout=30)
+        print(f"Status Code: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            print(f"Response keys: {list(data.keys())}")
+            print("✅ TEST 6c PASSED: /api/v1/alerts?limit=50 returns 200")
+        else:
+            print(f"❌ TEST 6c FAILED: Expected 200, got {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"❌ TEST 6c FAILED with exception: {e}")
+        return False
+    
+    print("\n✅ ALL REGRESSION TESTS PASSED")
+    return True
 
 
 def main():
-    """Run all tests"""
-    print("="*80)
-    print("BitMarkAI Coverage-by-Horizon + Ensemble Weight Validation")
-    print("Base URL:", BASE_URL)
+    """Run all backend tests"""
+    print("\n" + "="*80)
+    print("BACKEND API TEST SUITE - NEW/CHANGED ENDPOINTS")
+    print("Testing via external URL: " + BASE_URL)
     print("="*80)
     
     results = {
-        'test_1_validation': False,
-        'test_2_dashboard': False,
-        'test_3_regression': False
+        "TTS Endpoint": test_tts_endpoint(),
+        "Albert Brief": test_albert_brief(),
+        "Brief Watchlist": test_brief_watchlist(),
+        "Track Record": test_track_record(),
+        "Weekly Recap History": test_weekly_recap_history(),
+        "Regression Sanity": test_regression_sanity(),
     }
     
-    # Run tests
-    results['test_1_validation'] = test_validation_endpoint()
-    results['test_2_dashboard'] = test_dashboard_decision_ensemble()
-    results['test_3_regression'] = test_regression_endpoints()
-    
-    # Summary
     print("\n" + "="*80)
-    print("TEST SUMMARY")
+    print("FINAL SUMMARY")
     print("="*80)
     
-    passed = sum(1 for v in results.values() if v)
-    total = len(results)
-    
-    for test_name, result in results.items():
-        status = "✅ PASSED" if result else "❌ FAILED"
+    for test_name, passed in results.items():
+        status = "✅ PASSED" if passed else "❌ FAILED"
         print(f"{test_name}: {status}")
     
-    print(f"\nTotal: {passed}/{total} tests passed")
+    all_passed = all(results.values())
     
-    if passed == total:
-        print("\n🎉 ALL TESTS PASSED - Feature is production-ready")
+    if all_passed:
+        print("\n🎉 ALL TESTS PASSED 🎉")
         return 0
     else:
-        print(f"\n⚠️  {total - passed} test(s) failed")
+        print("\n❌ SOME TESTS FAILED")
         return 1
 
 

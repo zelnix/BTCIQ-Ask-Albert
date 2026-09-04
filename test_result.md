@@ -114,6 +114,91 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Gemini TTS endpoint (POST /api/v1/tts) — server-side Albert voice via Google AI Studio key"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "New POST /api/v1/tts accepts {text, voice?, style?} and returns {audio_base64, mime_type, cached}. Uses GEMINI_API_KEY (in /app/.env), model gemini-2.5-flash-preview-tts, voice Charon. Verify: 200 with non-empty audio_base64 that decodes to valid WAV; empty text -> 400; caching returns cached:true on repeat."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED all 3 tests via external URL. (1) Valid text 'Good morning from Albert.' returns HTTP 200 with audio_base64 (172,280 chars, decodes to 129,210 bytes valid WAV), mime_type='audio/wav', cached=False ✅ (2) Repeat same text returns cached=True ✅ (3) Empty text returns HTTP 400 ✅ All validations passed. Gemini TTS generation takes ~10s on first call, cached responses are instant."
+  - task: "Coin-specific Morning Brief (GET /api/v1/albert/brief?symbol=BTC|ETH|...&mode=plain|technical&refresh=1)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Brief now accepts symbol; BTC uses BTC engine, altcoins use compute_coin_summary context + coin-aware prompts. Returns coin+symbol fields. Verify: BTC brief ready; ETH brief ready with coin=Ethereum and ETH-specific observations; unsupported symbol -> error; refresh=1 regenerates (cached:false)."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED all 4 tests via external URL. (1) GET /api/v1/albert/brief (BTC default) returns HTTP 200, status='ready' ✅ (2) GET ?symbol=ETH returns HTTP 200, status='ready', coin='Ethereum', observations/text reference ETH/Ethereum ✅ (3) GET ?symbol=ZZZ (unsupported) returns HTTP 200, status='error' ✅ (4) GET ?refresh=1 returns HTTP 200, status='ready', cached=False (regenerates) ✅ NOTE: ETH first call can take 15-25s; refresh=1 can take up to 60-90s (Gemini API generation time). All validations passed."
+  - task: "Brief watchlist endpoints (GET/POST /api/v1/albert/brief-watchlist)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "GET returns {coins, available}; POST saves coins (BTC always forced in, invalid symbols dropped, deduped). Verify persistence and BTC-always behavior."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED all 4 tests via external URL. (1) GET /api/v1/albert/brief-watchlist returns HTTP 200 with {status:'ready', coins:['BTC','ETH','SOL'], available:[13 coins]} ✅ BTC always included ✅ (2) POST {coins:['ETH','SOL']} returns HTTP 200 with coins=['BTC','ETH','SOL'] (BTC forced in) ✅ (3) POST {coins:['ZZZ']} returns HTTP 200 with coins=['BTC'] (invalid symbols dropped) ✅ (4) Reset to ['ETH','SOL'] successful ✅ All validations passed. Persistence and BTC-always behavior confirmed."
+  - task: "Track-record best/worst calls + current win/loss streak (GET /api/v1/albert/track-record)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Added best_call/worst_call (ranked by target-progress), streak {type,count}, longest_win_streak. With no graded calls these are null/None — verify endpoint still returns 200 with the new keys present."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED via external URL. GET /api/v1/albert/track-record returns HTTP 200, status='ready' ✅ All required keys present: best_call=None, worst_call=None, streak=None, longest_win_streak=0 ✅ (null/None values are acceptable with no graded calls). Additional keys validated: n_calls, n_graded, n_correct, hit_rate, avg_move, trend, by_coin, recent, open ✅ All validations passed."
+  - task: "Weekly recap history (GET /api/v1/albert/weekly-recap/history)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "Returns all archived weekly recaps newest-first. Verify 200 and list shape."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED via external URL. GET /api/v1/albert/weekly-recap/history returns HTTP 200 with {status:'ready', recaps:[]} ✅ status='ready' ✅ recaps is a list (0 items, empty is acceptable) ✅ All validations passed."
+  - task: "Per-coin daily brief autopost + push_alert symbol param"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "push_alert now takes symbol kwarg (stored on alert doc for deep-link). Daily autopost loops the watchlist. Not directly callable via API; verify no import/definition errors and that existing alert endpoints still return 200."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED regression sanity checks via external URL. (1) GET /api/v1/health returns HTTP 200 with {status:'ok', compute_status:'idle', error:None, runs:21} ✅ (2) GET /api/v1/alerts returns HTTP 200 with {status:'ready', alerts:[], unseen:0, total:0} ✅ (3) GET /api/v1/alerts?limit=50 returns HTTP 200 ✅ No import/definition errors. push_alert signature change (added symbol kwarg) does not break existing alert endpoints. All validations passed."
+
   - task: "Albert insight endpoint: technical mode + refresh (GET /api/v1/albert/insight?section=X&mode=technical&refresh=1)"
     implemented: true
     working: "NA"
@@ -7202,3 +7287,41 @@ frontend:
           notification dropdown. ExecutiveSummary hero + MorningBriefCard listen and default to the technical
           briefing when Pro is selected (verified: selecting Pro auto-expanded the technical brief). Track
           Record shows "Win-rate by coin" chips (asset + hit% + n) from by_coin.
+
+## agent_communication:
+    -agent: "main"
+    -message: |
+      Please test the NEW/CHANGED backend endpoints from this session (see the six new tasks at the
+      top of the backend: section). Focus:
+      1. POST /api/v1/tts — body {"text":"Good morning from Albert."} -> 200, non-empty audio_base64
+         (base64 WAV), mime_type audio/wav. Repeat same text -> cached:true. Empty text -> 400.
+         (Uses GEMINI_API_KEY from /app/.env; generation can take ~10s, allow up to ~60s timeout.)
+      2. GET /api/v1/albert/brief -> BTC brief ready. GET /api/v1/albert/brief?symbol=ETH ->
+         status ready, coin "Ethereum", observations reference ETH. ?symbol=ZZZ -> error. ?refresh=1 regenerates.
+         (ETH first call is slow ~15-25s; allow generous timeout.)
+      3. GET /api/v1/albert/brief-watchlist -> {coins (incl BTC), available}. POST {"coins":["ETH","SOL"]} ->
+         saved with BTC forced in; POST {"coins":["ZZZ"]} -> BTC only. Reset to ["ETH","SOL"] when done.
+      4. GET /api/v1/albert/track-record -> 200 with keys best_call, worst_call, streak, longest_win_streak present
+         (may be null/None with no graded calls — that's OK).
+      5. GET /api/v1/albert/weekly-recap/history -> 200 with {status, recaps:[...]}.
+      6. Sanity: GET /api/v1/alerts and /api/v1/health still 200 (push_alert signature changed to add symbol kwarg).
+      Do NOT test frontend. Backend base is internal :8001 via the /api proxy.
+
+    -agent: "testing"
+    -message: |
+      ✅ ALL 6 NEW/CHANGED BACKEND ENDPOINTS TESTED AND PASSED via external URL (https://quant-features.preview.emergentagent.com/api).
+      
+      SUMMARY:
+      1. ✅ POST /api/v1/tts - Gemini TTS endpoint: Valid text returns 200 with non-empty audio_base64 (172,280 chars, decodes to 129,210 bytes valid WAV), mime_type='audio/wav', cached=False on first call, cached=True on repeat. Empty text returns 400. All tests passed.
+      
+      2. ✅ GET /api/v1/albert/brief - Coin-specific Morning Brief: BTC brief returns status='ready'. ETH brief returns status='ready', coin='Ethereum', observations reference ETH. Unsupported symbol (ZZZ) returns status='error'. refresh=1 regenerates (cached=False). NOTE: ETH first call can take 15-25s; refresh=1 can take up to 60-90s (Gemini API generation time). All tests passed.
+      
+      3. ✅ GET/POST /api/v1/albert/brief-watchlist: GET returns {status:'ready', coins:['BTC','ETH','SOL'], available:[13 coins]} with BTC always included. POST {coins:['ETH','SOL']} saves with BTC forced in. POST {coins:['ZZZ']} returns only ['BTC'] (invalid symbols dropped). Reset to ['ETH','SOL'] successful. All tests passed.
+      
+      4. ✅ GET /api/v1/albert/track-record: Returns 200, status='ready' with all required keys: best_call, worst_call, streak, longest_win_streak (null/None values acceptable with no graded calls). All tests passed.
+      
+      5. ✅ GET /api/v1/albert/weekly-recap/history: Returns 200 with {status:'ready', recaps:[]} (empty list acceptable). All tests passed.
+      
+      6. ✅ Regression sanity checks: GET /api/v1/health returns 200. GET /api/v1/alerts returns 200. GET /api/v1/alerts?limit=50 returns 200. push_alert signature change (added symbol kwarg) does not break existing alert endpoints. All tests passed.
+      
+      NO MAJOR ISSUES FOUND. All 6 tasks are working correctly. Backend APIs are production-ready.
