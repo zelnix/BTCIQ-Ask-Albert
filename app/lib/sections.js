@@ -12,7 +12,7 @@ const SECTIONS = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard,
     blurb: 'Your 10-second snapshot of Bitcoin right now: the price, the market "mood", one simple score, the near-term odds, how risky things are and how sure the model is. Start here.' },
   { id: 'forecasts', label: 'Forecasts', icon: Target,
-    blurb: 'BitMarkAI’s probability-based price forecasts from 1 week to 5 years — always shown as odds and price ranges (bull / base / bear), never a single guaranteed number. Longer horizons show wider uncertainty.' },
+    blurb: 'CryptoMarkAI’s probability-based price forecasts from 1 week to 5 years — always shown as odds and price ranges (bull / base / bear), never a single guaranteed number. Longer horizons show wider uncertainty.' },
   { id: 'compare', label: 'Compare Coins', icon: Scale,
     blurb: 'Run the same quant engine across Bitcoin, Ethereum and Solana side by side — score, market mood, near-term odds and key levels — so you can see how the majors stack up. Each coin computes its own model on first view, then caches.' },
   { id: 'market-intel', label: 'Market Intelligence', icon: BarChart3,
@@ -56,8 +56,8 @@ const SECTIONS = [
 // Legacy section metadata for sub-panels that are now grouped under the new nav
 // (their components still look up a blurb/label by id).
 const LEGACY_SECTIONS = [
-  { id: 'bitmark', label: 'BitMarkAI', icon: Sparkles,
-    blurb: 'BitMarkAI is Ask Albert’s adaptive Bitcoin Price Prediction Engine — probability-based forecasts from one week to five years. Each horizon is weighted differently, updated weekly, on demand, or when a major event hits — and every change is explained. It never gives a single guaranteed price.' },
+  { id: 'bitmark', label: 'CryptoMarkAI', icon: Sparkles,
+    blurb: 'CryptoMarkAI is Ask Albert’s adaptive Bitcoin Price Prediction Engine — probability-based forecasts from one week to five years. Each horizon is weighted differently, updated weekly, on demand, or when a major event hits — and every change is explained. It never gives a single guaranteed price.' },
   { id: 'chart', label: 'Chart Intelligence', icon: CandlestickChart,
     blurb: 'An automatic read of the daily chart in plain language: support and resistance zones, trend, breakouts and momentum — plus how often similar setups played out historically.' },
   { id: 'cycle', label: 'Cycle', icon: Globe,

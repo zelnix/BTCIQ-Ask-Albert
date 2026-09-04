@@ -286,7 +286,7 @@ function LeverageSection() {
       </div>
 
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <h3 className="mb-3 flex items-center gap-2 font-semibold text-white"><Brain className="h-5 w-5 text-sky-400" />BitMarkAI Leverage Intelligence</h3>
+        <h3 className="mb-3 flex items-center gap-2 font-semibold text-white"><Brain className="h-5 w-5 text-sky-400" />CryptoMarkAI Leverage Intelligence</h3>
         <ul className="space-y-1.5">{(bm.observations || []).map((o, i) => (<li key={i} className="flex gap-2 text-sm text-slate-300"><span className="text-sky-500">•</span>{o}</li>))}</ul>
         <div className="mt-4 rounded-lg border border-sky-500/20 bg-sky-500/[0.05] p-3"><div className="text-[11px] uppercase tracking-wider text-slate-500">Overall Leverage Assessment</div><div className="text-lg font-bold text-white">{bm.assessment_title}</div><p className="mt-1 text-sm text-slate-300">{bm.assessment_text}</p></div>
       </Card>

@@ -118,7 +118,7 @@ export default function EmailAlerts() {
         <Mail className="h-4 w-4 text-amber-400" />Email alert digest
       </h3>
       <p className="mb-4 text-xs leading-relaxed text-slate-500">
-        A daily brief of BitMarkAI alerts, price and Albert&rsquo;s outlook, emailed to the addresses below.
+        A daily brief of CryptoMarkAI alerts, price and Albert&rsquo;s outlook, emailed to the addresses below.
         High-severity alerts are also sent the moment they trigger. Requires the admin passcode (saved above).
         Sends automatically each day{cfg ? ` at ${cfg.digest_time} ${cfg.digest_tz}` : ''}.
       </p>

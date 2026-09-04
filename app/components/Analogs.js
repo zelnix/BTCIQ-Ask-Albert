@@ -102,7 +102,7 @@ function AnalogsSection() {
   const [showModel, setShowModel] = React.useState(true);
   const [fcPath, setFcPath] = React.useState(null);
 
-  // Today's own model forecast (BitMarkAI base scenario) rebased to 100 at now, so it can be
+  // Today's own model forecast (CryptoMarkAI base scenario) rebased to 100 at now, so it can be
   // overlaid against the historical median path.
   React.useEffect(() => {
     let alive = true;

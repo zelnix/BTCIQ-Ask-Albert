@@ -61,7 +61,7 @@ function NewsCard({ c, compact, onAnchor, pinned }) {
       <div className="mt-1 flex justify-between text-[11px] text-slate-500"><span className="text-emerald-400">▲ {ai.bullish_pct || 0}%</span><span>neutral {ai.neutral_pct || 0}%</span><span className="text-red-400">▼ {ai.bearish_pct || 0}%</span></div>
       {fi.note && (
         <div className={`mt-3 rounded-lg border p-2.5 text-xs ${fi.nudge_pts > 0 ? 'border-emerald-500/20 bg-emerald-500/5 text-emerald-300' : fi.nudge_pts < 0 ? 'border-red-500/20 bg-red-500/5 text-red-300' : 'border-slate-800 bg-slate-950/40 text-slate-400'}`}>
-          <span className="font-semibold">Effect on BitMarkAI forecast: </span>{fi.note}{fi.horizons?.length ? ` (${fi.horizons.join(', ')})` : ''}
+          <span className="font-semibold">Effect on CryptoMarkAI forecast: </span>{fi.note}{fi.horizons?.length ? ` (${fi.horizons.join(', ')})` : ''}
         </div>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
@@ -212,6 +212,6 @@ function NewsSection({ news, status, onRefresh, refreshing, ohlc }) {
   );
 }
 
-/* ----------------------------- BitMarkAI ----------------------------- */
+/* ----------------------------- CryptoMarkAI ----------------------------- */
 
 export default NewsSection;

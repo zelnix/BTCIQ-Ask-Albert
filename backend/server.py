@@ -68,7 +68,7 @@ import drift_monitor
 import orderflow
 import time_machine
 
-# BitMarkAI forecast trigger state (set by manual/event triggers, read by compute)
+# CryptoMarkAI forecast trigger state (set by manual/event triggers, read by compute)
 _forecast_trigger = {'reason': None}
 _bitmark_last_manual = {'ts': 0.0}
 _CORRIDOR_WIDEN = {}  # horizon label -> q_hat widen factor (self-heals corridors toward 90% coverage)
@@ -945,7 +945,7 @@ def fire_news_alerts(cards):
         fi = c.get('forecast_impact') or {}
         why = (c.get('ai') or {}).get('why_it_matters') or (c.get('ai') or {}).get('summary') or ''
         sev = 'high' if int(c.get('impact', 0)) >= 85 else 'warning'
-        msg = f"{why} Effect on BitMarkAI forecast: {fi.get('note', 'neutral')}".strip()
+        msg = f"{why} Effect on CryptoMarkAI forecast: {fi.get('note', 'neutral')}".strip()
         try:
             smart_alerts_col.update_one(
                 {'_id': key},
@@ -2461,7 +2461,7 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
                       "Negative funding means shorts are paying longs, indicating heavier leveraged short positioning."
                       if funding < 0 else "Funding is flat — neither side is paying a meaningful premium.")
 
-    # ---- BitMarkAI observations + assessment (from REAL data only) ----
+    # ---- CryptoMarkAI observations + assessment (from REAL data only) ----
     obs = []
     obs.append(f"Positioning is {long_pct:.0f}% long vs {short_pct:.0f}% short and has become {pos_trend.lower()} over the last {tf}.")
     obs.append(f"Open interest is {oi_state.lower()} ({(oi_change_tf or 0):+.1f}% over {tf}). " + _oi_price_read())
@@ -2525,7 +2525,7 @@ def compute_leverage(timeframe='4H', symbol='BTC'):
         'albert_call': {'impact_label': impact_label, 'impact_points': impact_points, 'explanation': impact_expl},
         'sources': ['OKX public API (open interest, funding, long/short account ratio, taker) — REAL',
                     'Liquidations, liquidation heatmap, estimated-leverage & size-weighted position ratio — NO DATA AVAILABLE (no free feed; connect a paid provider such as CoinGlass to activate)'],
-        'disclaimer': ('Market data and BitMarkAI analysis are provided for informational purposes only and should not be '
+        'disclaimer': ('Market data and CryptoMarkAI analysis are provided for informational purposes only and should not be '
                        'considered financial advice. Derivatives and leveraged trading involve substantial risk. Liquidation '
                        'levels and squeeze-risk indicators are estimates and may not reflect actual market outcomes.')}
 
@@ -3950,7 +3950,7 @@ def compute_event_calendar(cycle, policy, window=120):
             'counts': counts, 'generated': today.strftime('%Y-%m-%d')}
 
 
-# ---------------------------- BitMarkAI Engine ----------------------------
+# ---------------------------- CryptoMarkAI Engine ----------------------------
 BM_WEIGHTS = {
     '1W': [('Price & Technicals', 30), ('Momentum & Trend', 25), ('Volatility', 15), ('News & Sentiment', 13), ('Market Regime', 10), ('Macro & Policy', 5), ('Halving Cycle', 2)],
     '1M': [('Price & Technicals', 22), ('Momentum & Trend', 20), ('News & Sentiment', 13), ('Market Regime', 12), ('Macro & Policy', 12), ('Volatility', 10), ('Halving Cycle', 7), ('Dominance & Flows', 4)],
@@ -4042,7 +4042,7 @@ def compute_bitmark(quant, cycle, price, trigger='scheduled'):
         else:
             change_text = 'No material change since the previous forecast — probabilities and ranges are broadly stable.'
     else:
-        change_text = 'First BitMarkAI forecast recorded to the ledger.'
+        change_text = 'First CryptoMarkAI forecast recorded to the ledger.'
 
     snap = {'_id': str(uuid.uuid4()), 'created_at': now.isoformat(), 'trigger': trigger,
             'price': round(price, 2),
@@ -4435,7 +4435,7 @@ def build_scenario(scn, window=60):
         model = None
     if model is None:
         model = {'available': False,
-                 'note': 'This event pre-dates BitMarkAI’s live data window, so no point-in-time model call exists — shown as historical context only.'}
+                 'note': 'This event pre-dates CryptoMarkAI’s live data window, so no point-in-time model call exists — shown as historical context only.'}
     payload = {**scn, 'status': 'ready', 'price_at_event': price, 'window': win,
                'outcomes': outcomes, 'model': model}
     _scenario_cache[scn['id']] = payload
@@ -4817,7 +4817,7 @@ def compute():
     except Exception:  # noqa
         traceback.print_exc()
 
-    # --- BitMarkAI prediction core (1W–5Y, per-horizon weighting, triggers) ---
+    # --- CryptoMarkAI prediction core (1W–5Y, per-horizon weighting, triggers) ---
     bitmark = None
     try:
         trig = _forecast_trigger.get('reason')
@@ -6111,7 +6111,7 @@ def _digest_forecast_html(forecasts):
 
 def build_daily_digest():
     """Build (subject, html, text, alert_count) — a richer 'morning brief': signal, price
-    sparkline, BitMarkAI forecast horizons, and the last 24h of BTC alerts."""
+    sparkline, CryptoMarkAI forecast horizons, and the last 24h of BTC alerts."""
     now = datetime.datetime.utcnow()
     cutoff = (now - datetime.timedelta(hours=24)).isoformat()
     try:
@@ -6177,7 +6177,7 @@ def build_daily_digest():
         '<div style="font-family:Arial,Helvetica,sans-serif;background:#0b1220;padding:24px;">'
         '<div style="max-width:640px;margin:0 auto;background:#0f172a;border:1px solid #1e293b;border-radius:14px;overflow:hidden;">'
         '<div style="padding:22px 24px;background:linear-gradient(135deg,#f59e0b22,#1e293b);border-bottom:1px solid #1e293b;">'
-        '<div style="font-size:20px;font-weight:800;color:#f59e0b;">BitMarkAI · Daily Brief</div>'
+        '<div style="font-size:20px;font-weight:800;color:#f59e0b;">CryptoMarkAI · Daily Brief</div>'
         f'<div style="font-size:13px;color:#94a3b8;margin-top:6px;">{date_str} · Current signal '
         f'<b style="color:#e2e8f0;">{signal}</b> (score {score_txt}) · {len(alerts)} alert(s) in 24h</div>'
         '</div>'
@@ -6187,12 +6187,12 @@ def build_daily_digest():
         f'Alerts · last 24h ({len(alerts)})</div>'
         f'<table style="width:100%;border-collapse:collapse;">{rows}</table>'
         '<div style="padding:16px 24px;border-top:1px solid #1e293b;font-size:11px;color:#64748b;">'
-        'You are receiving this because your address is on the BitMarkAI digest list. '
+        'You are receiving this because your address is on the CryptoMarkAI digest list. '
         '<a href="{{UNSUB}}" style="color:#f59e0b;">Unsubscribe</a>. '
         'This is market information, not financial advice.'
         '</div></div></div>'
     )
-    text_lines = [f'BitMarkAI Daily Brief — {date_str}',
+    text_lines = [f'CryptoMarkAI Daily Brief — {date_str}',
                   f'Signal: {signal} (score {score_txt}) · Price {price_txt}'
                   + ('' if not isinstance(day_change, (int, float)) else f' ({day_change:+.2f}% 24h)'), '']
     for f in forecasts[:3]:
@@ -6205,7 +6205,7 @@ def build_daily_digest():
     if not alerts:
         text_lines.append('No new alerts in the last 24 hours.')
     text_lines.append('\nUnsubscribe: {{UNSUB}}')
-    subject = f'BitMarkAI Daily Brief — {signal} · {date_str}'
+    subject = f'CryptoMarkAI Daily Brief — {signal} · {date_str}'
     return subject, html, '\n'.join(text_lines), len(alerts)
 
 
@@ -6300,10 +6300,10 @@ def email_test_ep(payload: dict = Body(default={})):
     if not recips:
         return {'status': 'error', 'message': 'No recipient — add one to the list or enter a test address.'}
     html = ('<div style="font-family:Arial,sans-serif;background:#0f172a;color:#e2e8f0;padding:24px;border-radius:12px;">'
-            '<h2 style="color:#f59e0b;margin:0 0 8px;">BitMarkAI test email ✅</h2>'
+            '<h2 style="color:#f59e0b;margin:0 0 8px;">CryptoMarkAI test email ✅</h2>'
             '<p style="color:#94a3b8;">Your Resend integration is working. Daily alert digests will arrive here.</p></div>')
-    result = send_email(recips, 'BitMarkAI — Test email ✅', html,
-                        'BitMarkAI test email. Your Resend integration is working.')
+    result = send_email(recips, 'CryptoMarkAI — Test email ✅', html,
+                        'CryptoMarkAI test email. Your Resend integration is working.')
     try:
         email_log_col.insert_one({'id': str(uuid.uuid4()), 'ts': datetime.datetime.utcnow().isoformat(),
                                   'kind': 'test', 'recipients': len(recips), 'ok': result.get('ok'),
@@ -6345,12 +6345,12 @@ def build_instant_alert_email(alerts):
             f'</td></tr>'
         )
     top = alerts[0] if alerts else {}
-    subject = f'BitMarkAI Alert: {top.get("title") or "High-priority signal"}' + (f' (+{n - 1} more)' if n > 1 else '')
+    subject = f'CryptoMarkAI Alert: {top.get("title") or "High-priority signal"}' + (f' (+{n - 1} more)' if n > 1 else '')
     html = (
         '<div style="font-family:Arial,Helvetica,sans-serif;background:#0b1220;padding:24px;">'
         '<div style="max-width:640px;margin:0 auto;background:#0f172a;border:1px solid #1e293b;border-radius:14px;overflow:hidden;">'
         '<div style="padding:20px 24px;background:linear-gradient(135deg,#ef444422,#1e293b);border-bottom:1px solid #1e293b;">'
-        '<div style="font-size:19px;font-weight:800;color:#f87171;">&#9888; BitMarkAI Instant Alert</div>'
+        '<div style="font-size:19px;font-weight:800;color:#f87171;">&#9888; CryptoMarkAI Instant Alert</div>'
         f'<div style="font-size:13px;color:#94a3b8;margin-top:6px;">{n} high-priority signal(s) just triggered.</div>'
         '</div>'
         f'<table style="width:100%;border-collapse:collapse;">{rows}</table>'
@@ -6359,7 +6359,7 @@ def build_instant_alert_email(alerts):
         '<a href="{{UNSUB}}" style="color:#f59e0b;">Unsubscribe</a>. Market information, not financial advice.'
         '</div></div></div>'
     )
-    text = 'BitMarkAI Instant Alert\n\n' + '\n'.join(
+    text = 'CryptoMarkAI Instant Alert\n\n' + '\n'.join(
         f"- [{(a.get('severity') or 'high').upper()}] {a.get('title') or a.get('category')}: {a.get('message') or ''}"
         for a in alerts) + '\n\nUnsubscribe: {{UNSUB}}'
     return subject, html, text
@@ -6685,23 +6685,23 @@ def build_weekly_recap():
         '<div style="font-family:Arial,Helvetica,sans-serif;background:#0b1220;padding:24px;">'
         '<div style="max-width:640px;margin:0 auto;background:#0f172a;border:1px solid #1e293b;border-radius:14px;overflow:hidden;">'
         '<div style="padding:22px 24px;background:linear-gradient(135deg,#38bdf822,#1e293b);border-bottom:1px solid #1e293b;">'
-        '<div style="font-size:20px;font-weight:800;color:#38bdf8;">BitMarkAI · Week in Review</div>'
+        '<div style="font-size:20px;font-weight:800;color:#38bdf8;">CryptoMarkAI · Week in Review</div>'
         f'<div style="font-size:13px;color:#94a3b8;margin-top:6px;">Week ending {date_str}</div></div>'
         f'<div style="padding:16px 18px 4px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>{cards}</tr></table></div>'
         f'<div style="padding:4px 18px 8px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>{moves}</tr></table></div>'
         f'<div style="padding:8px 24px 18px;">{spark}</div>'
         '<div style="padding:16px 24px;border-top:1px solid #1e293b;font-size:11px;color:#64748b;">'
-        'Your weekly BitMarkAI recap. <a href="{{UNSUB}}" style="color:#f59e0b;">Unsubscribe</a>. '
+        'Your weekly CryptoMarkAI recap. <a href="{{UNSUB}}" style="color:#f59e0b;">Unsubscribe</a>. '
         'Market information, not financial advice.'
         '</div></div></div>'
     )
-    text = (f'BitMarkAI Week in Review — week ending {date_str}\n'
+    text = (f'CryptoMarkAI Week in Review — week ending {date_str}\n'
             f'7-day change: {chg_txt} · Signal {signal} (score {score_txt})\n'
             f'Week high {_m(wk_high)} · low {_m(wk_low)}\n'
             + (f'Best day {best[1]:+.2f}% ({best[0]}) ' if best else '')
             + (f'· Worst day {worst[1]:+.2f}% ({worst[0]})\n' if worst else '\n')
             + f'Alerts (7d): {len(wk_alerts)} — {sev_line}\n\nUnsubscribe: {{{{UNSUB}}}}')
-    subject = f'BitMarkAI · Week in Review — {chg_txt} ({date_str})'
+    subject = f'CryptoMarkAI · Week in Review — {chg_txt} ({date_str})'
     return subject, html, text
 
 
@@ -6764,7 +6764,7 @@ def _unsub_page(msg, ok=True):
         f'align-items:center;justify-content:center;height:100vh;margin:0;">'
         f'<div style="text-align:center;max-width:440px;padding:32px;background:#0f172a;'
         f'border:1px solid #1e293b;border-radius:14px;">'
-        f'<div style="font-size:22px;font-weight:800;color:{color};margin-bottom:10px;">BitMarkAI</div>'
+        f'<div style="font-size:22px;font-weight:800;color:{color};margin-bottom:10px;">CryptoMarkAI</div>'
         f'<div style="font-size:15px;color:#cbd5e1;line-height:1.5;">{msg}</div></div></body></html>')
 
 
@@ -6779,7 +6779,7 @@ def _do_unsubscribe(e, t):
                                   'kind': 'unsubscribe', 'email': email})
     except Exception:  # noqa
         pass
-    return _unsub_page(f'You have been unsubscribed. <b>{email}</b> will no longer receive BitMarkAI emails.')
+    return _unsub_page(f'You have been unsubscribed. <b>{email}</b> will no longer receive CryptoMarkAI emails.')
 
 
 @app.get('/api/v1/email/unsubscribe')
@@ -6841,7 +6841,7 @@ def bitmark_run(payload: dict = Body(default={})):
                           'action': 'manual_forecast_run', 'result': 'started', 'trigger': 'manual'})
     threading.Thread(target=run_compute_bg, daemon=True).start()
     return {'status': 'started',
-            'message': 'Running a fresh BitMarkAI forecast against the latest data (~30s). The updated ranges and a "what changed" summary will appear when it completes.'}
+            'message': 'Running a fresh CryptoMarkAI forecast against the latest data (~30s). The updated ranges and a "what changed" summary will appear when it completes.'}
 
 
 @app.get('/api/v1/audit')
@@ -6852,7 +6852,7 @@ def audit_log(limit: int = 20):
 
 _SECTION_FOCUS = {
     'overview': None,  # general — all things Ask Albert
-    'forecasts': 'the price FORECASTS (BitMarkAI probability ranges from 1 week to 5 years — odds, bull/base/bear ranges, invalidation levels)',
+    'forecasts': 'the price FORECASTS (CryptoMarkAI probability ranges from 1 week to 5 years — odds, bull/base/bear ranges, invalidation levels)',
     'market-intel': 'the MARKET INTELLIGENCE / technical picture (chart structure, key support/resistance levels, cycle position and the raw indicators)',
     'crossmarket': 'the CROSS-MARKET comparison of Bitcoin vs traditional assets (S&P 500, Nasdaq, Gold, US Dollar) — correlation, relative performance and volatility',
     'analogs': 'the HISTORICAL ANALOG (which past Bitcoin episode today most resembles and what happened next)',

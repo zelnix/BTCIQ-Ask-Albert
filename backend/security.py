@@ -1,4 +1,4 @@
-"""Security helpers for the BitMarkAI backend.
+"""Security helpers for the CryptoMarkAI backend.
 
 Per-client rate limiting (MongoDB-backed so limits are exact across replicas, with an
 in-memory fallback if the DB briefly hiccups) and constant-time admin passcode checks.

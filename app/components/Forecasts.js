@@ -473,13 +473,13 @@ function BitMarkSection({ d }) {
   };
   return (
     <div className="space-y-5">
-      <SectionHead icon={Sparkles} title="BitMarkAI" blurb={sec('bitmark').blurb} coin={d.symbol || 'BTC'} />
+      <SectionHead icon={Sparkles} title="CryptoMarkAI" blurb={sec('bitmark').blurb} coin={d.symbol || 'BTC'} />
 
       <Card className="border-0 bg-gradient-to-br from-amber-500/[0.08] via-violet-500/[0.08] to-slate-900 p-6 ring-1 ring-amber-500/25">
         <div className="flex flex-wrap items-center gap-4">
           <div className="rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 p-2.5"><Sparkles className="h-6 w-6 text-white" /></div>
           <div>
-            <h2 className="text-xl font-black text-white">BitMarkAI <span className="text-sm font-medium text-slate-400">Bitcoin Price Prediction Engine</span></h2>
+            <h2 className="text-xl font-black text-white">CryptoMarkAI <span className="text-sm font-medium text-slate-400">Bitcoin Price Prediction Engine</span></h2>
             <p className="text-xs text-slate-400">Adaptive, probability-based forecasts · 1 week to 5 years · model {bm.model_version}</p>
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-3">
@@ -511,7 +511,7 @@ function BitMarkSection({ d }) {
           {scenarios.map((h) => <BmScenarioCard key={h.horizon} h={h} />)}
         </div>
       </div>
-      <p className="text-center text-[11px] text-slate-600">BitMarkAI · powered by CryptoCentAI · probability-based research, not financial advice.</p>
+      <p className="text-center text-[11px] text-slate-600">CryptoMarkAI · powered by CryptoCentAI · probability-based research, not financial advice.</p>
     </div>
   );
 }

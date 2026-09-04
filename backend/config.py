@@ -1,4 +1,4 @@
-"""Central configuration for the BitMarkAI backend.
+"""Central configuration for the CryptoMarkAI backend.
 
 Holds environment loading, the MongoDB connection, all collection handles, and the
 API keys / model names. Extracted from server.py as part of the Option A refactor
@@ -107,7 +107,7 @@ GEMINI_TTS_VOICE = os.environ.get('GEMINI_TTS_VOICE', 'Charon')
 # ---- Resend transactional email (daily Alert Digest) ----
 # Key/from live in /app/.env; never exposed to the browser (all sending is backend-side).
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
-RESEND_FROM = os.environ.get('RESEND_FROM', 'BitMarkAI <onboarding@resend.dev>')
+RESEND_FROM = os.environ.get('RESEND_FROM', 'CryptoMarkAI <onboarding@resend.dev>')
 DIGEST_TZ = os.environ.get('DIGEST_TZ', 'Australia/Sydney')
 try:
     DIGEST_HOUR = int(os.environ.get('DIGEST_HOUR', '8'))

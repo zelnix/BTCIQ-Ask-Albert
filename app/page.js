@@ -867,7 +867,7 @@ function AlbertIntroCard() {
           <h3 className="text-base font-bold text-white">Albert</h3>
           <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold text-sky-300">Quant Analyst · Market Mentor</span>
         </div>
-        <p className="mt-1 text-sm text-slate-300">Albert blends BitMarkAI’s live numbers with 100+ years of market wisdom — macro, cycles, on-chain and strategy — and live web search, to be your candid trading companion and sounding board. “Let us examine the evidence — probability is not certainty, and capital preservation comes first.”</p>
+        <p className="mt-1 text-sm text-slate-300">Albert blends CryptoMarkAI’s live numbers with 100+ years of market wisdom — macro, cycles, on-chain and strategy — and live web search, to be your candid trading companion and sounding board. “Let us examine the evidence — probability is not certainty, and capital preservation comes first.”</p>
         <p className="mt-2 text-[11px] leading-relaxed text-slate-500">Albert is an original fictional Ask Albert HuCentAI Quant character. He is not based on, and does not represent, any real or other fictional person or character.</p>
       </div>
     </Card>
@@ -2649,7 +2649,7 @@ function SettingsSection({ onManualRun }) {
       <SectionHead icon={Cpu} title="Settings" blurb={sec('settings').blurb} coin={symbol} />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-1 flex items-center gap-2 font-semibold text-white"><Lock className="h-4 w-4 text-amber-400" />Admin passcode</h3>
-        <p className="mb-3 text-xs text-slate-500">Required to trigger a manual BitMarkAI forecast run. Stored only in this browser. Manual runs are rate-limited and audit-logged.</p>
+        <p className="mb-3 text-xs text-slate-500">Required to trigger a manual CryptoMarkAI forecast run. Stored only in this browser. Manual runs are rate-limited and audit-logged.</p>
         <div className="flex flex-wrap items-center gap-2">
           <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="Enter admin passcode"
             className="w-64 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-sky-500/50 focus:outline-none" />
@@ -2665,7 +2665,7 @@ function SettingsSection({ onManualRun }) {
       <NotificationSettings />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
-        <p className="text-xs leading-relaxed text-slate-400">Ask Albert — Bitcoin Market Analysis, powered by CryptoCentAI, our Bitcoin-Centred Intelligence Engine. BitMarkAI measures the market and produces probability-based forecasts. Albert is Ask Albert’s HuCentAI Quant Analyst.</p>
+        <p className="text-xs leading-relaxed text-slate-400">Ask Albert — Bitcoin Market Analysis, powered by CryptoCentAI, our Bitcoin-Centred Intelligence Engine. CryptoMarkAI measures the market and produces probability-based forecasts. Albert is Ask Albert’s HuCentAI Quant Analyst.</p>
         <p className="mt-3 text-[11px] leading-relaxed text-slate-500">Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes. Albert is an original fictional Ask Albert HuCentAI Quant character and does not represent any real or other fictional person or character.</p>
         <a href="https://btciq.app" target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300"><Globe className="h-3 w-3" />btciq.app</a>
       </Card>
@@ -3403,7 +3403,7 @@ export default function DashboardPage() {
             <p className="mx-auto max-w-3xl rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-2.5 text-[11px] leading-relaxed text-slate-500">
               Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes.
             </p>
-            <p className="text-xs text-slate-600">Ask Albert — Bitcoin Market Analysis · powered by CryptoCentAI · BitMarkAI forecast engine · real data via {d.data_source}</p>
+            <p className="text-xs text-slate-600">Ask Albert — Bitcoin Market Analysis · powered by CryptoCentAI · CryptoMarkAI forecast engine · real data via {d.data_source}</p>
           </footer>
         </div>
       </div>
