@@ -2530,6 +2530,75 @@ function NetworkSentimentSection() {
 }
 
 
+// ---- AI Model Switcher (Flash vs Pro per feature) ----
+function ModelSwitcher() {
+  const [data, setData] = useState(null);
+  const [saving, setSaving] = useState('');
+  const load = useCallback(() => {
+    fetch(`${API_BASE}/v1/settings/models`, { cache: 'no-store' })
+      .then((r) => r.json()).then(setData).catch(() => {});
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const setTier = (key, tier) => {
+    if (!data || (data.prefs?.[key] === tier)) return;
+    setSaving(key);
+    setData((cur) => ({ ...cur, prefs: { ...cur.prefs, [key]: tier } })); // optimistic
+    fetch(`${API_BASE}/v1/settings/models`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefs: { [key]: tier } }),
+    }).then((r) => r.json())
+      .then((d) => { if (d && d.prefs) setData((cur) => ({ ...cur, prefs: d.prefs })); })
+      .catch(() => {}).finally(() => setSaving(''));
+  };
+
+  const flashName = data?.models?.flash || 'gemini-3-flash-preview';
+  const proName = data?.models?.pro || 'gemini-3.1-pro-preview';
+
+  return (
+    <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
+      <h3 className="mb-1 flex items-center gap-1.5 font-semibold text-white">
+        <Cpu className="h-4 w-4 text-sky-400" />AI Models
+        <InfoTip below text="Choose which Gemini model powers each AI feature. Flash is fast and cheap; Pro reasons more deeply (slower, higher cost). Changes apply to the next request. Note: live web-search answers always run on Flash." />
+      </h3>
+      <p className="mb-4 text-[12px] text-slate-500">Balance speed, cost and depth per feature.</p>
+      {!data ? (
+        <p className="text-sm text-slate-500">Loading model settings…</p>
+      ) : (
+        <div className="space-y-2.5">
+          {(data.features || []).map((f) => {
+            const cur = data.prefs?.[f.key] || f.default;
+            return (
+              <div key={f.key} className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2.5">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium text-slate-200">{f.label}</div>
+                  <div className="font-mono text-[10px] text-slate-500">{cur === 'pro' ? proName : flashName}</div>
+                </div>
+                <div className="flex shrink-0 items-center rounded-md border border-slate-700 bg-slate-900 p-0.5">
+                  <button
+                    onClick={() => setTier(f.key, 'flash')}
+                    className={`flex items-center gap-1 rounded px-2.5 py-1 text-[11px] font-semibold transition ${cur === 'flash' ? 'bg-sky-500 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                  ><Zap className="h-3 w-3" />Flash</button>
+                  <button
+                    onClick={() => setTier(f.key, 'pro')}
+                    className={`flex items-center gap-1 rounded px-2.5 py-1 text-[11px] font-semibold transition ${cur === 'pro' ? 'bg-violet-500 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                  ><Brain className="h-3 w-3" />Pro</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-slate-500">
+        <span className="flex items-center gap-1"><Zap className="h-3 w-3 text-sky-400" />Flash · <span className="font-mono">{flashName}</span></span>
+        <span className="flex items-center gap-1"><Brain className="h-3 w-3 text-violet-400" />Pro · <span className="font-mono">{proName}</span></span>
+      </div>
+    </Card>
+  );
+}
+
+
+
 // ---- Data Audit (Composite Price · Provenance · GDELT · Cross-Asset · FRED Macro) ----
 function AdminSection() {
   const [d, loading] = useFetch(`${API_BASE}/v1/admin/overview`);
@@ -2560,6 +2629,8 @@ function AdminSection() {
             </table>
           </div>
         </Card>
+
+        <ModelSwitcher />
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {/* Emergent cost */}

@@ -114,6 +114,35 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Albert Knows the Engines — Alert-Engine edge board, sector rotation, recent signals & active strategies injected into chat context"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "Added _albert_engine_context(symbol) appended to chat ctx in POST /api/v1/chat. Sources: edge board + sector rotation from a cached snapshot (misc_col _id='albert_engine_snapshot', warmed by new scheduler job _engine_snapshot_job every 3h + ~40s after boot), recent fired signals from smart_alerts_col, and active strategies from strategies_col. New debug endpoint GET /api/v1/albert/engine-brief?symbol=BTC returns the raw context block. CHAT_SYSTEM updated so Albert uses the 'ALBERT'S ENGINES' section for 'best edge setup', 'sector rotation', 'how are my strategies' questions. Smoke-tested: engine-brief 200 with edge board (FIL rsi_overbought score 56.94) + DeFi sector +11.45%; chat correctly cited them. Please verify GET /api/v1/albert/engine-brief returns 200 with a non-empty context (edge board rows + sectors), and POST /api/v1/chat asking 'what is my best edge setup right now and which sectors are rotating in?' returns 200 and references specific coins/detectors/sectors."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive testing via external URL (https://quant-features.preview.emergentagent.com/api). All 3 tests passed (3/3). STEP B5 - GET /api/v1/albert/engine-brief?symbol=BTC: HTTP 200 (2.4s) ✅, status='ready' ✅, context: 1124 chars (non-empty) ✅. Context includes ALL expected sections: 'ALERT ENGINE' edge board rows (FIL rsi_overbought score 56.94, BCH 28.14, NEAR 28.02, UNI 26.34) ✅, 'SECTOR ROTATION' data (DeFi rotating IN) ✅, 'RECENT SIGNALS' ✅, 'ACTIVE STRATEGIES' ✅. STEP B6 - POST /api/v1/chat asking 'What's my best edge setup right now, and which sectors are rotating in?': HTTP 200 (12.1s) ✅, text: 2286 chars (non-empty) ✅, model='gemini-3-flash-preview' ✅. Response includes specific data: FIL (Filecoin) with RSI Overbought signal and edge score 56.94 ✅, DeFi sector rotating IN ✅. Snapshot is WARM (not cold) - Albert correctly cites specific coins, detectors, edge scores, and sectors (NOT fabricated). STEP B7 - Regression tests: Standard chat HTTP 200 (11.0s) with 1844 chars ✅, Deep chat HTTP 200 (11.9s) with 2340 chars ✅, Insight HTTP 200 (9.7s) status='ready' ✅. All validations passed. Feature is fully functional and production-ready."
+  - task: "Model Switcher — per-feature Flash vs Pro selection (GET/POST /api/v1/settings/models)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "Added _get_model_prefs/_model_for helpers + GET/POST /api/v1/settings/models. Prefs stored in misc_col (_id='ai_model_prefs') for features: chat_standard(flash), chat_deep(pro), insight(flash), brief(flash), strategy(flash), news(flash). Every LLM call site now resolves its model via _model_for(feature): chat (_albert_answer attempts), insight, brief (x2: brief + weekly recap), strategy build, news (x2). Grounded web-search sub-calls still route to Flash in the shim. Smoke-tested: GET returns prefs+models(flash=gemini-3-flash-preview, pro=gemini-3.1-pro-preview)+features; POST {prefs:{chat_standard:'pro'}} persists; invalid values ignored. Please test: GET /api/v1/settings/models -> 200 {prefs, models, features(6 items)}; POST {prefs:{insight:'pro'}} -> 200 and GET reflects insight='pro'; POST invalid {prefs:{insight:'xxx'}} -> ignored (stays 'pro'); RESET all to defaults (chat_standard/insight/brief/strategy/news='flash', chat_deep='pro') at the end."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive testing via external URL (https://quant-features.preview.emergentagent.com/api). All 4 tests passed (4/4). STEP A1 - GET /api/v1/settings/models: HTTP 200 (0.4s) ✅, status='ready' ✅, prefs: 6 items (chat_standard, chat_deep, insight, brief, strategy, news) ✅, models: flash='gemini-3-flash-preview', pro='gemini-3.1-pro-preview' ✅, features: 6 items with key/label/default ✅. Defaults validated: chat_deep='pro' ✅, all others (chat_standard, insight, brief, strategy, news) = 'flash' ✅. STEP A2 - POST /api/v1/settings/models {prefs:{insight:'pro'}}: HTTP 200 (0.2s) ✅, POST status='ready' ✅, GET confirms insight='pro' (persisted to MongoDB misc_col _id='ai_model_prefs') ✅. STEP A3 - POST invalid value {prefs:{insight:'xxx'}}: HTTP 200 (0.2s) ✅, GET confirms insight='pro' (invalid value 'xxx' correctly ignored, only 'flash' or 'pro' accepted) ✅. STEP A4 - RESET to defaults: POST with all 6 prefs ✅, GET confirms chat_deep='pro' and all others 'flash' ✅. All validations passed. Persistence working correctly (MongoDB misc_col). Invalid value validation working correctly. Feature is fully functional and production-ready."
+
   - task: "LLM migration — Emergent LLM key -> direct Google Gemini (google-genai SDK) across all LLM endpoints"
     implemented: true
     working: true
@@ -7500,7 +7529,8 @@ metadata:
 
 test_plan:
   current_focus:
-    - "LLM migration — Emergent LLM key -> direct Google Gemini (google-genai SDK) across all LLM endpoints"
+    - "Albert Knows the Engines — Alert-Engine edge board, sector rotation, recent signals & active strategies injected into chat context"
+    - "Model Switcher — per-feature Flash vs Pro selection (GET/POST /api/v1/settings/models)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -7746,4 +7776,66 @@ agent_communication:
       5) GET /api/v1/albert/brief?refresh=1&symbol=BTC -> 200 {status:'ready', brief non-empty}. Also symbol=ETH -> coin 'Ethereum'.
       6) POST /api/v1/albert/strategy/build {symbol:'BTC'} and {symbol:'ETH', goal:'swing long'} -> 200 {status:'ready', draft} with draft.targets + draft.rules. CLEANUP: delete any docs created in 'strategies' collection (build does NOT persist, but activate would — we are only calling build, so nothing to clean).
       7) GET /api/v1/dashboard -> 200 (regression; news-card analysis now also uses gemini-3-flash-preview).
+
+    -agent: "main"
+    -message: |
+      TEST TWO NEW FEATURES (backend). Use external /api proxy. Allow up to ~60s timeouts.
+
+      A) MODEL SWITCHER:
+      1) GET /api/v1/settings/models -> 200 {status:'ready', prefs:{chat_standard,chat_deep,insight,brief,strategy,news}, models:{flash:'gemini-3-flash-preview', pro:'gemini-3.1-pro-preview'}, features:[6 items each with key/label/default]}. Assert defaults: chat_deep='pro', all others 'flash'.
+      2) POST /api/v1/settings/models {"prefs":{"insight":"pro"}} -> 200; GET reflects insight='pro'.
+      3) POST /api/v1/settings/models {"prefs":{"insight":"xxx"}} (invalid) -> 200; GET still insight='pro' (invalid ignored).
+      4) RESET at end: POST {"prefs":{"chat_standard":"flash","chat_deep":"pro","insight":"flash","brief":"flash","strategy":"flash","news":"flash"}} and GET confirms.
+
+      B) ALBERT KNOWS THE ENGINES:
+      5) GET /api/v1/albert/engine-brief?symbol=BTC -> 200 {status:'ready', context:<string>}. Context may be brief on a cold snapshot but should be non-empty (active strategies/recent signals at minimum). If it includes 'ALERT ENGINE' edge rows and 'SECTOR ROTATION', even better. (A background warmer populates the edge board ~40s after boot + every 3h; if the board is empty, that is acceptable, not a failure.)
+      6) POST /api/v1/chat {"session_id":"eng-test","message":"What's my best edge setup right now, and which sectors are rotating in?","deep":false,"symbol":"BTC"} -> 200, non-empty text, model='gemini-3-flash-preview'. If the edge snapshot is warm, the answer should name a specific coin + detector + edge score and a sector; if cold, it should say the engine hasn't produced a read yet (NOT fabricate).
+      7) Regression: POST /api/v1/chat standard + deep still 200; GET /api/v1/albert/insight?section=overview&refresh=1 still 200 (insight was pref-reset to flash).
+      Report pass/fail per step with any model ids returned.
       NOTE: This is a billing-enabled Gemini key, so 429/quota should be rare — but if a 429 occurs it is an external quota event, not a code bug (endpoints degrade gracefully with a retry message). Report pass/fail per step with the model returned.
+
+
+    -agent: "testing"
+    -message: |
+      ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (9/9)
+      
+      Tested TWO NEW backend features (Model Switcher + Albert Knows the Engines) plus regression via external URL (https://quant-features.preview.emergentagent.com/api).
+      
+      A) MODEL SWITCHER - ALL 4 TESTS PASSED:
+      ✅ A1: GET /api/v1/settings/models returns correct structure (status='ready', prefs with 6 features, models flash='gemini-3-flash-preview' & pro='gemini-3.1-pro-preview', features array with 6 items). Defaults validated: chat_deep='pro', all others 'flash'.
+      ✅ A2: POST {prefs:{insight:'pro'}} persists correctly. GET confirms insight='pro'.
+      ✅ A3: POST invalid value {prefs:{insight:'xxx'}} correctly ignored. GET still shows insight='pro'.
+      ✅ A4: RESET to defaults successful. All 6 prefs reset correctly.
+      
+      B) ALBERT KNOWS THE ENGINES - ALL 5 TESTS PASSED:
+      ✅ B5: GET /api/v1/albert/engine-brief?symbol=BTC returns 1124 chars of context including:
+        - ALERT ENGINE edge board (FIL rsi_overbought score 56.94, BCH 28.14, NEAR 28.02, UNI 26.34)
+        - SECTOR ROTATION data (DeFi rotating IN)
+        - RECENT SIGNALS
+        - ACTIVE STRATEGIES
+      ✅ B6: POST /api/v1/chat asking about edge setup returns 2286 chars with specific data:
+        - Model: gemini-3-flash-preview ✅
+        - Response cites FIL (Filecoin) with RSI Overbought signal and edge score 56.94 ✅
+        - Response cites DeFi sector rotating IN ✅
+        - Snapshot is WARM (not cold) - Albert correctly references specific coins/detectors/sectors (NOT fabricated)
+      ✅ B7: Regression tests all passed:
+        - Standard chat: HTTP 200 (11.0s) with 1844 chars ✅
+        - Deep chat: HTTP 200 (11.9s) with 2340 chars ✅
+        - Insight: HTTP 200 (9.7s) status='ready' ✅
+      
+      PERFORMANCE:
+      ⏱️  Model Switcher endpoints: 0.2-0.4s (fast, MongoDB persistence working)
+      ⏱️  Engine-brief endpoint: 2.4s (cached snapshot, fast)
+      ⏱️  Chat endpoints: 11-12s (LLM generation time, acceptable)
+      ⏱️  No timeout issues (all requests completed well under 60s limit)
+      ⏱️  No 429/quota errors (billing-enabled Gemini key working correctly)
+      
+      DATA VALIDATION:
+      ✅ Model Switcher: Persistence to MongoDB misc_col (_id='ai_model_prefs') working correctly
+      ✅ Model Switcher: Invalid value validation working (only 'flash' or 'pro' accepted)
+      ✅ Albert Engines: Snapshot cache working (misc_col _id='albert_engine_snapshot')
+      ✅ Albert Engines: Edge board populated with real backtest data (FIL, BCH, NEAR, UNI with scores)
+      ✅ Albert Engines: Sector rotation analysis working (DeFi sector identified as rotating IN)
+      ✅ Albert Engines: Chat context injection working (Albert correctly uses engine data in responses)
+      
+      NO ISSUES FOUND. Both features are fully functional and production-ready.

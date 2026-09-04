@@ -867,7 +867,7 @@ NEWS_SYSTEM = (
 def generate_news_summary(headline, text):
     chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'news-{abs(hash(headline)) % 99999}',
                     system_message=NEWS_SYSTEM)
-            .with_model('gemini', GEMINI_MODEL)
+            .with_model('gemini', _model_for('news'))
             .with_params(temperature=0.0, max_tokens=1200))
     reply = asyncio.run(chat.send_message(UserMessage(text=f'Headline: {headline}\n\nArticle:\n{text[:4000]}')))
     raw = (getattr(reply, 'text', None) or str(reply)).strip()
@@ -3459,7 +3459,13 @@ CHAT_SYSTEM = (
     "never fabricate, infer or estimate values shown as 'no data'/'inactive' — say 'no [X] data available'.\n"
     "- You have a LIVE WEB SEARCH tool. Use it for anything current or external to the dashboard — the live price "
     "of any coin, breaking crypto news, latest CPI/FOMC, ETF flow headlines, other assets. Cite the source and "
-    "date for time-sensitive external facts.\n\n"
+    "date for time-sensitive external facts.\n"
+    "- ALBERT'S ENGINES: when the section 'ALBERT'S ENGINES' is present below, it holds YOUR Alert-Engine edge "
+    "board (highest backtest-edge setups), live sector rotation, recently fired signals, and the user's ACTIVE "
+    "tracked strategies. Use it directly when asked things like 'what's my best edge setup right now?', 'which "
+    "sectors are rotating?', or 'how are my strategies doing?' — name the specific coin, detector, edge score, "
+    "win-rate and levels. If that section is absent or empty, say the engine hasn't produced a read yet rather "
+    "than inventing setups.\n\n"
     "### STYLE\n"
     "- Speak plainly and with conviction. Lead with the answer, then the reasoning. Use short **bold** labels and "
     "simple bullet lists for readability. Talk in odds, levels and risk-reward, not vague hedging. Keep it tight — "
@@ -3467,6 +3473,73 @@ CHAT_SYSTEM = (
     "disclaimers or 'not financial advice' boilerplate — just give your best, most honest professional call.\n\n"
     "===== LIVE DASHBOARD DATA =====\n{ctx}\n===== END DATA ====="
 )
+
+
+# =====================================================================
+# AI MODEL SWITCHER — per-feature choice of Flash (fast/cheap) vs Pro
+# (deeper reasoning). Stored in misc_col; every LLM call site resolves its
+# model via _model_for(feature). Grounded web-search sub-calls still route to
+# Flash inside the LlmChat shim (Pro preview lacks Search grounding).
+# =====================================================================
+FLASH_MODEL = CHAT_MODEL          # gemini-3-flash-preview
+PRO_MODEL = ALBERT_CHAT_MODEL     # gemini-3.1-pro-preview
+
+# feature -> default tier ('flash' | 'pro')
+_MODEL_FEATURE_DEFAULTS = {
+    'chat_standard': 'flash',   # quick Ask-Albert replies
+    'chat_deep': 'pro',         # "Deep dive" Ask-Albert replies
+    'insight': 'flash',         # per-section AI insights
+    'brief': 'flash',           # morning / coin briefs + weekly recap
+    'strategy': 'flash',        # strategy drafting
+    'news': 'flash',            # per-headline news analysis
+}
+_MODEL_FEATURE_LABELS = {
+    'chat_standard': 'Ask Albert — quick chat',
+    'chat_deep': 'Ask Albert — deep dive',
+    'insight': 'Section AI insights',
+    'brief': 'Morning & coin briefs',
+    'strategy': 'Strategy drafting',
+    'news': 'News headline analysis',
+}
+
+
+def _get_model_prefs():
+    """Current per-feature model tier prefs, merged over defaults."""
+    doc = misc_col.find_one({'_id': 'ai_model_prefs'}) or {}
+    prefs = dict(_MODEL_FEATURE_DEFAULTS)
+    for k in _MODEL_FEATURE_DEFAULTS:
+        v = doc.get(k)
+        if v in ('flash', 'pro'):
+            prefs[k] = v
+    return prefs
+
+
+def _model_for(feature):
+    """Resolve a feature key to a concrete Gemini model id."""
+    tier = _get_model_prefs().get(feature, _MODEL_FEATURE_DEFAULTS.get(feature, 'flash'))
+    return PRO_MODEL if tier == 'pro' else FLASH_MODEL
+
+
+@app.get('/api/v1/settings/models')
+def get_model_settings():
+    return {'status': 'ready', 'prefs': _get_model_prefs(),
+            'models': {'flash': FLASH_MODEL, 'pro': PRO_MODEL},
+            'features': [{'key': k, 'label': _MODEL_FEATURE_LABELS[k],
+                          'default': _MODEL_FEATURE_DEFAULTS[k]} for k in _MODEL_FEATURE_DEFAULTS]}
+
+
+@app.post('/api/v1/settings/models')
+def save_model_settings(payload: dict = Body(...)):
+    incoming = payload.get('prefs') or payload or {}
+    update = {}
+    for k in _MODEL_FEATURE_DEFAULTS:
+        v = incoming.get(k)
+        if v in ('flash', 'pro'):
+            update[k] = v
+    if update:
+        misc_col.update_one({'_id': 'ai_model_prefs'}, {'$set': update}, upsert=True)
+    return {'status': 'ready', 'prefs': _get_model_prefs()}
+
 
 
 def build_chat_context(symbol='BTC'):
@@ -5075,6 +5148,11 @@ def _startup():
         # Alert Engine: scan the watchlist's daily signals hourly and fire in-app alerts.
         scheduler.add_job(_alert_engine_job, 'interval', minutes=60, id='alert_engine',
                           replace_existing=True, coalesce=True, max_instances=1)
+        # Albert's engine snapshot (edge board + sector rotation) — warmed every 3h and
+        # once ~40s after boot so chat/brief can reference it instantly.
+        scheduler.add_job(_engine_snapshot_job, 'interval', hours=3, id='engine_snapshot',
+                          replace_existing=True, coalesce=True, max_instances=1,
+                          next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=40))
         # Alert Engine daily digest — one consolidated in-app summary at the local morning hour.
         try:
             scheduler.add_job(_alert_digest_job, 'cron', hour=DIGEST_HOUR, minute=DIGEST_MINUTE,
@@ -7157,11 +7235,14 @@ def _albert_answer(ctx, user_text, session_id, deep=False):
         return fut.result(timeout=timeout_s)
 
     if deep:
-        attempts = [(ALBERT_CHAT_MODEL, True, 30, 4000),
+        _primary = _model_for('chat_deep')
+        attempts = [(_primary, True, 30, 4000),
                     (CHAT_MODEL, True, 14, 4000),
                     (CHAT_MODEL, False, 12, 4000)]
     else:
-        attempts = [(CHAT_MODEL, True, 20, 3500),
+        _primary = _model_for('chat_standard')
+        attempts = [(_primary, True, 20, 3500),
+                    (_primary, False, 14, 3500),
                     (CHAT_MODEL, False, 12, 3500)]
 
     for model, use_tools, tmo, mx in attempts:
@@ -7174,7 +7255,7 @@ def _albert_answer(ctx, user_text, session_id, deep=False):
         except Exception:  # noqa
             traceback.print_exc()
             continue
-    return '', (ALBERT_CHAT_MODEL if deep else CHAT_MODEL), []
+    return '', (_model_for('chat_deep') if deep else _model_for('chat_standard')), []
 
 
 @app.post('/api/v1/chat')
@@ -7203,6 +7284,14 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
         pf_ctx = _portfolio_context(pid)
         if pf_ctx:
             ctx = ctx + "\n\n===== USER PORTFOLIO (tailor buy/sell/hold to THIS position & P&L) =====\n" + pf_ctx
+        # Engine awareness: Alert-Engine edge board, sector rotation, recent
+        # signals and the user's active strategies.
+        try:
+            eng_ctx = _albert_engine_context(sym)
+        except Exception:  # noqa
+            eng_ctx = ''
+        if eng_ctx:
+            ctx = ctx + "\n\n===== ALBERT'S ENGINES (edge board, sector rotation, recent signals, your strategies) =====\n" + eng_ctx
         hist = list(chat_col.find({'session_id': session_id}, {'_id': 0}).sort('created_at', 1))
         hist_txt = ''
         for h in hist[-5:]:
@@ -7891,7 +7980,7 @@ def _generate_daily_brief(symbol):
                 async def _go():
                     chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'brief-{uuid.uuid4().hex[:8]}',
                                     system_message=sys_msg)
-                            .with_model('gemini', CHAT_MODEL).with_params(temperature=0.4, max_tokens=6000))
+                            .with_model('gemini', _model_for('brief')).with_params(temperature=0.4, max_tokens=6000))
                     return await chat.send_message(UserMessage(text=f"Write today's {coin_name} brief now."))
                 return asyncio.run(_go())
             reply = _LLM_POOL.submit(_call).result(timeout=45)
@@ -8246,7 +8335,7 @@ async def albert_insight(request: Request, section: str = 'overview', mode: str 
         for _ in range(3):
             chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'insight-{section}-{mode}-{uuid.uuid4().hex[:10]}',
                             system_message=sys_tmpl.format(focus=focus, ctx=ctx))
-                    .with_model('gemini', CHAT_MODEL)
+                    .with_model('gemini', _model_for('insight'))
                     .with_params(temperature=0.4, max_tokens=8000))
             reply = await chat.send_message(UserMessage(text=umsg))
             text = (getattr(reply, 'text', None) or str(reply)).strip()
@@ -8618,7 +8707,7 @@ def _build_strategy_draft(symbol, goal=''):
         async def _go():
             chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'strategy-{uuid.uuid4().hex[:8]}',
                             system_message=ALBERT_STRATEGY_SYSTEM)
-                    .with_model('gemini', CHAT_MODEL).with_params(temperature=0.5, max_tokens=3000))
+                    .with_model('gemini', _model_for('strategy')).with_params(temperature=0.5, max_tokens=3000))
             return await chat.send_message(UserMessage(text=umsg))
         return asyncio.run(_go())
     try:
@@ -9737,6 +9826,119 @@ def alert_engine_unlocks(symbol: str = 'ETH'):
     return {'status': 'ready', 'available': True, 'symbol': sym, 'unlock': u}
 
 
+# =====================================================================
+# ALBERT'S ENGINES — compact context so the chat/brief LLM can talk about
+# the Alert-Engine edge board, sector rotation, recently fired signals and
+# the user's ACTIVE strategies. A background job snapshots the (heavier)
+# edge board + sectors so chat reads are instant.
+# =====================================================================
+def _build_engine_snapshot():
+    """Compute the edge board + sector rotation once (used by the warmer job)."""
+    snap = {'generated_at': datetime.datetime.utcnow().isoformat()}
+    try:
+        strengths = _sector_strength()
+        members = {}
+        for sym, sec in ALERT_SECTORS.items():
+            members.setdefault(sec, []).append(sym)
+        secs = [{'sector': sec, 'strength': strengths.get(sec),
+                 'hot': (strengths.get(sec) or 0) > 0}
+                for sec in members if sec != 'Store of Value']
+        secs.sort(key=lambda x: (x['strength'] if x['strength'] is not None else -999), reverse=True)
+        snap['sectors'] = secs
+    except Exception:  # noqa
+        snap['sectors'] = []
+    try:
+        st = _get_alert_settings()
+        board = []
+        for sym in st.get('watchlist', []):
+            try:
+                edge = _detector_edge(sym)
+                ranked = sorted([{'detector': k, **v} for k, v in edge.items() if v.get('score') is not None],
+                                key=lambda x: x['score'], reverse=True)
+                if ranked:
+                    board.append({'symbol': sym, 'best': ranked[0]})
+            except Exception:  # noqa
+                continue
+        board.sort(key=lambda x: (x['best']['score'] if x['best'] else -999), reverse=True)
+        snap['edge_board'] = board[:12]
+    except Exception:  # noqa
+        snap['edge_board'] = []
+    return snap
+
+
+def _engine_snapshot_job():
+    try:
+        snap = _build_engine_snapshot()
+        misc_col.update_one({'_id': 'albert_engine_snapshot'},
+                            {'$set': {'data': snap, 'ts': _time_mod.time()}}, upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+
+
+def _albert_engine_context(symbol='BTC'):
+    """Compact, guarded block describing the live engines + user strategies."""
+    L = []
+    doc = misc_col.find_one({'_id': 'albert_engine_snapshot'}) or {}
+    snap = doc.get('data') or {}
+    # If the snapshot is missing/stale, warm it in the background (never blocks chat).
+    if (not snap) or (_time_mod.time() - (doc.get('ts') or 0)) > 6 * 3600:
+        try:
+            _LLM_POOL.submit(_engine_snapshot_job)
+        except Exception:  # noqa
+            pass
+    board = snap.get('edge_board') or []
+    if board:
+        L.append('ALERT ENGINE — highest-edge setups right now (edge score = avg 10-day forward return × '
+                 'win-rate factor from the backtest; higher = stronger historical edge):')
+        for b in board[:6]:
+            be = b.get('best') or {}
+            L.append(f"- {b.get('symbol')}: {be.get('detector')} — edge score {be.get('score')}, "
+                     f"win rate {be.get('win_10')}%, avg 10d {be.get('avg_10')}% (n={be.get('triggers')} triggers).")
+    secs = snap.get('sectors') or []
+    if secs:
+        hot = [s for s in secs if s.get('hot') and s.get('strength') is not None][:3]
+        cold = [s for s in secs if s.get('strength') is not None and not s.get('hot')][-3:]
+        if hot:
+            L.append('SECTOR ROTATION — capital rotating IN: '
+                     + ', '.join(f"{s['sector']} (+{s['strength']}% vs BTC, 7d)" for s in hot) + '.')
+        if cold:
+            L.append('Rotating OUT: '
+                     + ', '.join(f"{s['sector']} ({s['strength']}%)" for s in cold) + '.')
+    # Recently fired signals (fast DB read).
+    try:
+        rows = list(smart_alerts_col.find({'category': 'signal'}, {'_id': 0}).sort('ts', -1).limit(6))
+        if rows:
+            L.append('RECENT SIGNALS the engine fired (most recent first):')
+            for a in rows:
+                L.append(f"- {a.get('symbol', '')}: {a.get('title', '')}")
+    except Exception:  # noqa
+        pass
+    # User's ACTIVE tracked strategies (fast DB read).
+    try:
+        strats = list(strategies_col.find({'status': 'active'}, {'_id': 0}).sort('created_at', -1).limit(8))
+        if strats:
+            L.append("USER'S ACTIVE STRATEGIES (Albert is tracking these — reference by name):")
+            for s in strats:
+                try:
+                    perf = _strategy_perf(s) or {}
+                except Exception:  # noqa
+                    perf = {}
+                pnl = perf.get('pnl_pct')
+                stance = s.get('bias') or s.get('position') or ''
+                L.append(f"- {s.get('symbol')}: '{s.get('title')}' [{stance}] — entry ${s.get('entry_price')}, "
+                         f"P&L {pnl if pnl is not None else 'n/a'}%, {perf.get('status') or s.get('status')}.")
+    except Exception:  # noqa
+        pass
+    return ('\n'.join(L)) if L else ''
+
+
+@app.get('/api/v1/albert/engine-brief')
+def albert_engine_brief(symbol: str = 'BTC'):
+    """Raw engine context block (debug/UX aid)."""
+    return {'status': 'ready', 'context': _albert_engine_context(symbol)}
+
+
+
 
 
 
@@ -9774,7 +9976,7 @@ async def albert_brief(request: Request, refresh: int = 0, mode: str = 'plain', 
                     'observations': [l for l in ctx.split('\n')][:5], 'take': '', 'as_of': as_of}
         chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'brief-{uuid.uuid4().hex[:10]}',
                         system_message=sys_msg)
-                .with_model('gemini', CHAT_MODEL).with_params(temperature=0.4, max_tokens=6000))
+                .with_model('gemini', _model_for('brief')).with_params(temperature=0.4, max_tokens=6000))
         reply = await chat.send_message(UserMessage(text=f"Write today's {coin_name} brief now."))
         text = (reply if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '')).strip()
         _bump_usage('llm_brief')
@@ -10172,7 +10374,7 @@ def generate_coin_news_summary(name, headline, text):
     sysmsg = NEWS_SYSTEM.replace('Bitcoin', name)
     chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'coinnews-{abs(hash(headline)) % 99999}',
                     system_message=sysmsg)
-            .with_model('gemini', GEMINI_MODEL)
+            .with_model('gemini', _model_for('news'))
             .with_params(temperature=0.0, max_tokens=1200))
     reply = asyncio.run(chat.send_message(UserMessage(text=f'Headline: {headline}\n\nArticle:\n{text[:4000]}')))
     raw = (getattr(reply, 'text', None) or str(reply)).strip()
