@@ -1603,16 +1603,16 @@ const feedDot = (s) => ({ live: 'bg-emerald-400', degraded: 'bg-amber-400',
 function ageTxt(m) { if (m == null) return 'live'; if (m < 60) return `${m}m ago`; const h = Math.floor(m / 60); return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`; }
 /* ===================== Executive Summary / Morning Brief ===================== */
 function biasMeta(score) {
-  if (score == null) return { label: '—', color: '#94a3b8', arrow: null };
-  if (score >= 55) return { label: 'BULLISH', color: '#34d399', arrow: '↑' };
-  if (score <= 45) return { label: 'BEARISH', color: '#f87171', arrow: '↓' };
-  return { label: 'NEUTRAL', color: '#fbbf24', arrow: '→' };
+  if (score == null) return { label: '—', short: '—', color: '#94a3b8', arrow: null };
+  if (score >= 55) return { label: 'BULLISH', short: 'BULL', color: '#34d399', arrow: '↑' };
+  if (score <= 45) return { label: 'BEARISH', short: 'BEAR', color: '#f87171', arrow: '↓' };
+  return { label: 'NEUTRAL', short: 'NEU', color: '#fbbf24', arrow: '→' };
 }
 
 function ExecKpi({ label, children, sub, subColor, onClick }) {
   return (
-    <button onClick={onClick} className="group flex h-full flex-col rounded-xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-950 p-3 text-left ring-1 ring-slate-800/60 transition-all hover:border-slate-700 hover:ring-sky-500/30 sm:rounded-2xl sm:p-5">
-      <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500 sm:text-[11px]">{label}</p>
+    <button onClick={onClick} className="group flex h-full flex-col rounded-lg border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-950 p-2 text-left ring-1 ring-slate-800/60 transition-all hover:border-slate-700 hover:ring-sky-500/30 sm:rounded-2xl sm:p-5">
+      <p className="text-[9px] font-medium uppercase tracking-wide text-slate-500 sm:text-[11px] sm:tracking-wider">{label}</p>
       <div className="mt-1 break-words">{children}</div>
       {sub && <p className="mt-0.5 text-[11px] font-semibold leading-tight sm:text-sm" style={{ color: subColor || '#94a3b8' }}>{sub}</p>}
     </button>
@@ -1867,19 +1867,25 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
 
   return (
     <div className="space-y-4">
-      {/* KPI row — 2-up grid on mobile, 4 across on larger screens */}
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3">
+      {/* KPI row — 4 across on every screen; compact on mobile */}
+      <div className="grid grid-cols-4 gap-1.5 sm:gap-3">
         <ExecKpi label="Market Bias" onClick={() => onNav('overview')}>
-          <p className="flex items-center gap-1.5 text-xl font-black sm:text-3xl" style={{ color: bias.color }}>{bias.label}<span className="text-base sm:text-2xl">{bias.arrow}</span></p>
+          <p className="flex items-baseline gap-0.5 text-sm font-black leading-tight sm:gap-1.5 sm:text-3xl" style={{ color: bias.color }}>
+            <span className="sm:hidden">{bias.short}</span><span className="hidden sm:inline">{bias.label}</span>
+            <span className="text-xs sm:text-2xl">{bias.arrow}</span>
+          </p>
         </ExecKpi>
         <ExecKpi label={`${briefSym} Price`} onClick={() => onNav('market-intel')} sub={`${chg >= 0 ? '+' : ''}${chg}% 24h`} subColor={chg >= 0 ? '#34d399' : '#f87171'}>
-          <p className="text-xl font-black text-white sm:text-3xl">{fmtUsd(price)}</p>
+          <p className="text-sm font-black leading-tight text-white sm:text-3xl">
+            <span className="sm:hidden">{price >= 1000 ? `$${(price / 1000).toFixed(price >= 100000 ? 0 : 1)}k` : fmtUsd(price)}</span>
+            <span className="hidden sm:inline">{fmtUsd(price)}</span>
+          </p>
         </ExecKpi>
-        <ExecKpi label="Conviction Score" onClick={() => onNav('overview')} sub={dec.overall_score_raw != null && dec.overall_score_raw !== dec.overall_score ? `ensemble-adj from ${dec.overall_score_raw}` : (dec.label || '')} subColor={scoreColor(dec.overall_score)}>
-          <p className="text-xl font-black sm:text-3xl" style={{ color: scoreColor(dec.overall_score) }}>{dec.overall_score ?? '—'}<span className="text-sm text-slate-500 sm:text-lg">/100</span></p>
+        <ExecKpi label="Conviction" onClick={() => onNav('overview')} sub={dec.overall_score_raw != null && dec.overall_score_raw !== dec.overall_score ? `ensemble-adj from ${dec.overall_score_raw}` : (dec.label || '')} subColor={scoreColor(dec.overall_score)}>
+          <p className="text-sm font-black leading-tight sm:text-3xl" style={{ color: scoreColor(dec.overall_score) }}>{dec.overall_score ?? '—'}<span className="text-xs text-slate-500 sm:text-lg">/100</span></p>
         </ExecKpi>
         <ExecKpi label="Confidence" onClick={() => onNav('performance')} sub={conf != null ? 'model confidence' : ''}>
-          <p className="text-xl font-black text-sky-300 sm:text-3xl">{conf != null ? `${conf}%` : '—'}</p>
+          <p className="text-sm font-black leading-tight text-sky-300 sm:text-3xl">{conf != null ? `${conf}%` : '—'}</p>
         </ExecKpi>
       </div>
 
