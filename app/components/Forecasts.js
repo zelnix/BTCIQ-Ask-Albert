@@ -511,7 +511,7 @@ function BitMarkSection({ d }) {
           {scenarios.map((h) => <BmScenarioCard key={h.horizon} h={h} />)}
         </div>
       </div>
-      <p className="text-center text-[11px] text-slate-600">BitMarkAI · powered by Hucentai · probability-based research, not financial advice.</p>
+      <p className="text-center text-[11px] text-slate-600">BitMarkAI · powered by CryptoCentAI · probability-based research, not financial advice.</p>
     </div>
   );
 }

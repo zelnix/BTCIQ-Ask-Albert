@@ -2665,7 +2665,7 @@ function SettingsSection({ onManualRun }) {
       <NotificationSettings />
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
         <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
-        <p className="text-xs leading-relaxed text-slate-400">Ask Albert — Bitcoin Market Analysis, powered by Hucentai, our Bitcoin-Centred Intelligence Engine. BitMarkAI measures the market and produces probability-based forecasts. Albert is Ask Albert’s HuCentAI Quant Analyst.</p>
+        <p className="text-xs leading-relaxed text-slate-400">Ask Albert — Bitcoin Market Analysis, powered by CryptoCentAI, our Bitcoin-Centred Intelligence Engine. BitMarkAI measures the market and produces probability-based forecasts. Albert is Ask Albert’s HuCentAI Quant Analyst.</p>
         <p className="mt-3 text-[11px] leading-relaxed text-slate-500">Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes. Albert is an original fictional Ask Albert HuCentAI Quant character and does not represent any real or other fictional person or character.</p>
         <a href="https://btciq.app" target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300"><Globe className="h-3 w-3" />btciq.app</a>
       </Card>
@@ -3403,7 +3403,7 @@ export default function DashboardPage() {
             <p className="mx-auto max-w-3xl rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-2.5 text-[11px] leading-relaxed text-slate-500">
               Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes.
             </p>
-            <p className="text-xs text-slate-600">Ask Albert — Bitcoin Market Analysis · powered by Hucentai · BitMarkAI forecast engine · real data via {d.data_source}</p>
+            <p className="text-xs text-slate-600">Ask Albert — Bitcoin Market Analysis · powered by CryptoCentAI · BitMarkAI forecast engine · real data via {d.data_source}</p>
           </footer>
         </div>
       </div>
