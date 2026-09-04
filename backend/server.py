@@ -7387,7 +7387,7 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
         # Engine awareness: Alert-Engine edge board, sector rotation, recent
         # signals and the user's active strategies.
         try:
-            eng_ctx = _albert_engine_context(sym)
+            eng_ctx = _albert_engine_context(sym, pid)
         except Exception:  # noqa
             eng_ctx = ''
         if eng_ctx:
@@ -7862,10 +7862,16 @@ def albert_tts_voices():
 
 
 @app.get('/api/v1/albert/voice-pref')
-def get_voice_pref():
-    """User's saved Albert voice preference (cross-device fallback to localStorage)."""
+def get_voice_pref(pid: str = ''):
+    """User's saved Albert voice preference (per-account; falls back to the
+    legacy global doc, then defaults)."""
+    pid = (pid or '').strip()[:80]
+    doc = {}
     try:
-        doc = insights_col.find_one({'_id': 'cfg:albert_voice'}, {'_id': 0}) or {}
+        if pid:
+            doc = insights_col.find_one({'_id': f'cfg:albert_voice:{pid}'}, {'_id': 0}) or {}
+        if not doc:
+            doc = insights_col.find_one({'_id': 'cfg:albert_voice'}, {'_id': 0}) or {}
     except Exception:
         doc = {}
     return {'status': 'ready', 'engine': doc.get('engine', 'gemini'),
@@ -7875,6 +7881,7 @@ def get_voice_pref():
 
 @app.post('/api/v1/albert/voice-pref')
 def set_voice_pref(payload: dict = Body(...)):
+    pid = (str(payload.get('pid') or '')).strip()[:80]
     engine = (payload.get('engine') or 'gemini').strip().lower()
     if engine not in ('gemini', 'browser'):
         engine = 'gemini'
@@ -7883,8 +7890,9 @@ def set_voice_pref(payload: dict = Body(...)):
     if engine == 'gemini' and voice not in valid:
         voice = GEMINI_TTS_VOICE
     browser_voice_uri = (payload.get('browser_voice_uri') or '').strip()[:200]
-    insights_col.update_one({'_id': 'cfg:albert_voice'},
-                            {'$set': {'_id': 'cfg:albert_voice', 'kind': 'config', 'engine': engine,
+    doc_id = f'cfg:albert_voice:{pid}' if pid else 'cfg:albert_voice'
+    insights_col.update_one({'_id': doc_id},
+                            {'$set': {'_id': doc_id, 'kind': 'config', 'engine': engine,
                                       'voice': voice, 'browser_voice_uri': browser_voice_uri,
                                       'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
     return {'status': 'ready', 'engine': engine, 'voice': voice, 'browser_voice_uri': browser_voice_uri}
@@ -9041,13 +9049,14 @@ def albert_strategy_activate(payload: dict = Body(...)):
     """Activate (save) a strategy for a coin. Closes any existing active strategy for
     that coin (one active per coin). Logs the paper entry at the current price."""
     draft = payload.get('draft') or payload
+    pid = (str(payload.get('pid') or draft.get('pid') or '')).strip()[:80]
     symbol = (draft.get('symbol') or 'BTC').upper()
     spot = _spot_price(symbol)
     if not spot:
         return JSONResponse({'status': 'error', 'message': 'No live price available for this coin yet.'}, status_code=400)
     now = datetime.datetime.utcnow()
     try:
-        prev = strategies_col.find_one({'symbol': symbol, 'status': 'active'}, {'_id': 0})
+        prev = strategies_col.find_one({'symbol': symbol, 'status': 'active', 'owner': pid}, {'_id': 0})
         if prev:
             prev_spot = _spot_price(symbol) or spot
             _strat_event(prev, 'superseded', 'Replaced by a newer strategy.', prev_spot)
@@ -9062,6 +9071,7 @@ def albert_strategy_activate(payload: dict = Body(...)):
             r['by'] = (now + datetime.timedelta(days=r.get('by_days', horizon))).isoformat()
     strat = {
         'id': uuid.uuid4().hex,
+        'owner': pid,
         **norm,
         'status': 'active',
         'entry_price': round(spot, 2),
@@ -9084,10 +9094,11 @@ def albert_strategy_activate(payload: dict = Body(...)):
 
 
 @app.get('/api/v1/albert/strategy')
-def albert_strategy_active(symbol: str = 'BTC'):
+def albert_strategy_active(symbol: str = 'BTC', pid: str = ''):
     """The current ACTIVE strategy for a coin (evaluated live), or status 'none'."""
     symbol = (symbol or 'BTC').upper()
-    strat = strategies_col.find_one({'symbol': symbol, 'status': 'active'}, {'_id': 0})
+    pid = (pid or '').strip()[:80]
+    strat = strategies_col.find_one({'symbol': symbol, 'status': 'active', 'owner': pid}, {'_id': 0})
     if not strat:
         return {'status': 'none', 'symbol': symbol}
     spot = _spot_price(symbol)
@@ -9106,11 +9117,12 @@ def albert_strategy_active(symbol: str = 'BTC'):
 
 
 @app.get('/api/v1/albert/strategies')
-def albert_strategies_list(symbol: str = 'BTC'):
-    """Active + past strategies for a coin, each with performance."""
+def albert_strategies_list(symbol: str = 'BTC', pid: str = ''):
+    """Active + past strategies for a coin (scoped to the signed-in user), each with performance."""
     symbol = (symbol or 'BTC').upper()
+    pid = (pid or '').strip()[:80]
     try:
-        rows = list(strategies_col.find({'symbol': symbol}, {'_id': 0}).sort('created_at', -1))
+        rows = list(strategies_col.find({'symbol': symbol, 'owner': pid}, {'_id': 0}).sort('created_at', -1))
     except Exception:  # noqa
         rows = []
     active = None
@@ -9975,7 +9987,7 @@ def _engine_snapshot_job():
         traceback.print_exc()
 
 
-def _albert_engine_context(symbol='BTC'):
+def _albert_engine_context(symbol='BTC', pid=None):
     """Compact, guarded block describing the live engines + user strategies."""
     L = []
     doc = misc_col.find_one({'_id': 'albert_engine_snapshot'}) or {}
@@ -10015,7 +10027,10 @@ def _albert_engine_context(symbol='BTC'):
         pass
     # User's ACTIVE tracked strategies (fast DB read).
     try:
-        strats = list(strategies_col.find({'status': 'active'}, {'_id': 0}).sort('created_at', -1).limit(8))
+        _sq = {'status': 'active'}
+        if pid:
+            _sq['owner'] = (str(pid) or '').strip()[:80]
+        strats = list(strategies_col.find(_sq, {'_id': 0}).sort('created_at', -1).limit(8))
         if strats:
             L.append("USER'S ACTIVE STRATEGIES (Albert is tracking these — reference by name):")
             for s in strats:
@@ -10033,9 +10048,9 @@ def _albert_engine_context(symbol='BTC'):
 
 
 @app.get('/api/v1/albert/engine-brief')
-def albert_engine_brief(symbol: str = 'BTC'):
+def albert_engine_brief(symbol: str = 'BTC', pid: str = ''):
     """Raw engine context block (debug/UX aid)."""
-    return {'status': 'ready', 'context': _albert_engine_context(symbol)}
+    return {'status': 'ready', 'context': _albert_engine_context(symbol, (pid or '').strip()[:80] or None)}
 
 
 

@@ -114,6 +114,21 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Per-user scoping — voice preference + saved strategies keyed to the signed-in account (pid)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: "Voice pref now keyed per account: GET /api/v1/albert/voice-pref?pid=<id> and POST {pid,...} store under 'cfg:albert_voice:<pid>' (fallback to legacy global). Strategies scoped by owner=pid: POST /api/v1/albert/strategy reads pid from body and stamps strat.owner + closes only the caller's prior active for that coin; GET /api/v1/albert/strategy?symbol&pid and GET /api/v1/albert/strategies?symbol&pid filter by owner. Engine chat-context strategies scoped by pid too. Frontend passes getPid() (='u_'+userId when signed in). Direct-tested: voice u_AAA=Puck vs u_BBB=Fenrir (isolated); strategy activated for u_AAA visible only to u_AAA, u_BBB sees none; test data cleaned up. Please retest isolation: (1) POST voice-pref {pid:'u_T1',voice:'Puck'} & {pid:'u_T2',voice:'Fenrir'}; GET each -> isolated. (2) build a BTC draft (POST /strategy/build {symbol:'BTC'}), activate for pid 'u_T1' (POST /strategy {draft,pid:'u_T1'}); GET /strategies?symbol=BTC&pid=u_T1 -> active present; &pid=u_T2 -> active null/none; then CLOSE the u_T1 strategy (POST /strategy/{id}/close) to clean up."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive per-user data scoping test via external URL (https://quant-features.preview.emergentagent.com/api). All 9 tests passed (9/9). VOICE PREFERENCE ISOLATION: (1-2) POST /api/v1/albert/voice-pref for u_T1 {pid:'u_T1',engine:'gemini',voice:'Puck'} returns HTTP 200 with voice='Puck' ✅, POST for u_T2 {pid:'u_T2',engine:'gemini',voice:'Fenrir'} returns HTTP 200 with voice='Fenrir' ✅. (3) GET /api/v1/albert/voice-pref?pid=u_T1 returns voice='Puck' ✅, GET ?pid=u_T2 returns voice='Fenrir' ✅, voices differ (isolated) ✅, GET with no pid returns HTTP 200 with default voice ✅. STRATEGY ISOLATION: (4) POST /api/v1/albert/strategy/build {symbol:'BTC'} returns HTTP 200 with status='ready', draft with title='Bullish Trend Rider: Navigating Overbought Distribution', 2 targets, 4 rules ✅. (5) POST /api/v1/albert/strategy {draft,pid:'u_T1'} returns HTTP 200 with status='ready', strategy.status='active', strategy.owner='u_T1', strategy.id='abfc8e49719d4b01b1589845f3f5d4ef', entry_price=79391.4 ✅. (6) GET /api/v1/albert/strategies?symbol=BTC&pid=u_T1 returns HTTP 200 with active strategy present (owner='u_T1') ✅. (7) GET /api/v1/albert/strategies?symbol=BTC&pid=u_T2 returns HTTP 200 with active=null (None) and history=[] (empty, 0 items) ✅ (isolation confirmed - u_T2 cannot see u_T1's strategy). (8) GET /api/v1/albert/strategy?symbol=BTC&pid=u_T2 returns HTTP 200 with status='none' ✅. (9) CLEANUP: POST /api/v1/albert/strategy/abfc8e49719d4b01b1589845f3f5d4ef/close {reason:'test-cleanup'} returns HTTP 200 with strategy.status='closed', close_reason='test-cleanup' ✅. REGRESSION: (10) POST /api/v1/chat {session_id:'scope-reg',message:'one line btc read',deep:false,symbol:'BTC',pid:'u_T1'} returns HTTP 200 with non-empty text (271 chars) ✅. All validations passed. Voice preferences are correctly isolated per pid (u_T1=Puck, u_T2=Fenrir). Strategies are correctly scoped by owner=pid (u_T1's active BTC strategy is visible only to u_T1, u_T2 sees none). Strategy build took ~1s (LLM-generated draft). Cleanup successful (strategy closed). Feature is fully functional and production-ready."
+
   - task: "Native Google Sign-In (GIS ID-token) + gated home page + per-user data scoping"
     implemented: true
     working: true

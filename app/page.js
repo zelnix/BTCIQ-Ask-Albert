@@ -26,6 +26,7 @@ import FloatingAlbert from './components/FloatingAlbert';
 import AlbertText from './components/AlbertText';
 import HomePage from './components/HomePage';
 import { fetchMe, logout as authLogout, rememberUser } from './lib/auth';
+import { hydrateVoicePrefFromServer } from './lib/albertVoice';
 import AlbertReplyMeta from './components/AlbertReplyMeta';
 import PortfolioPanel from './components/PortfolioPanel';
 import AlbertTrackRecord from './components/AlbertTrackRecord';
@@ -3059,6 +3060,51 @@ let __alertsCache = null;
 let __notifCache = null;
 
 
+// ---- Account menu (avatar + sign-out) shown in the top header ----
+function AccountMenu({ user, onSignOut }) {
+  const [open, setOpen] = useState(false);
+  if (!user) return null;
+  const initial = (user.name || user.email || '?').slice(0, 1).toUpperCase();
+  return (
+    <div className="relative shrink-0">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title={user.email}
+        className="flex items-center gap-1.5 rounded-full border border-slate-700 bg-slate-900 py-1 pl-1 pr-2 text-slate-200 transition-colors hover:border-sky-500/50"
+      >
+        {user.picture
+          ? <img src={user.picture} alt="" referrerPolicy="no-referrer" className="h-7 w-7 rounded-full ring-1 ring-slate-700" />
+          : <span className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-500/20 text-xs font-semibold text-sky-300">{initial}</span>}
+        <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-50 mt-2 w-60 rounded-xl border border-slate-700 bg-slate-900 p-1.5 shadow-2xl shadow-black/50">
+            <div className="flex items-center gap-3 rounded-lg px-3 py-2.5">
+              {user.picture
+                ? <img src={user.picture} alt="" referrerPolicy="no-referrer" className="h-9 w-9 rounded-full ring-1 ring-slate-700" />
+                : <span className="flex h-9 w-9 items-center justify-center rounded-full bg-sky-500/20 text-sm font-semibold text-sky-300">{initial}</span>}
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold text-white">{user.name || 'Signed in'}</div>
+                <div className="truncate text-[11px] text-slate-500">{user.email}</div>
+              </div>
+            </div>
+            <div className="my-1 h-px bg-slate-800" />
+            <button
+              onClick={() => { setOpen(false); onSignOut && onSignOut(); }}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-slate-300 transition-colors hover:bg-slate-800 hover:text-white"
+            >
+              <LogOut className="h-4 w-4" /> Sign out
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+
 export default function DashboardPage() {
   const [symbol, setSymbol] = useState('BTC');
   const [coins, setCoins] = useState([{ symbol: 'BTC', name: 'Bitcoin' }]);
@@ -3091,7 +3137,7 @@ export default function DashboardPage() {
     let alive = true;
     fetchMe().then((u) => {
       if (!alive) return;
-      if (u) rememberUser(u);
+      if (u) { rememberUser(u); hydrateVoicePrefFromServer(); }
       setAuthUser(u || null);
     });
     return () => { alive = false; };
@@ -3365,7 +3411,7 @@ export default function DashboardPage() {
     );
   }
   if (!authUser) {
-    return <HomePage onAuthed={(u) => { rememberUser(u); setAuthUser(u); }} />;
+    return <HomePage onAuthed={(u) => { rememberUser(u); hydrateVoicePrefFromServer(); setAuthUser(u); }} />;
   }
 
   if (!data && (status === 'loading' || status === 'computing')) {
@@ -3559,6 +3605,8 @@ export default function DashboardPage() {
                 </>
               )}
             </div>
+            <AccountMenu user={authUser} onSignOut={handleSignOut} />
+
           </div>
 
           {/* Mobile nav */}

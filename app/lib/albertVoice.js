@@ -6,7 +6,7 @@
 // This module also broadcasts karaoke-style word-highlight events (see
 // onAlbertHighlight) so the on-screen text can light up word-by-word as Albert reads.
 
-import { API_BASE } from './api';
+import { API_BASE, getPid } from './api';
 
 /* ============================ voice preference ============================ */
 const PREF_KEY = 'albert_voice_pref';
@@ -24,15 +24,30 @@ export function getVoicePref() {
 export function setVoicePref(pref) {
   const p = { engine: 'gemini', voice: 'Charon', browserVoiceURI: '', ...(pref || {}) };
   try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch (e) { /* noop */ }
-  // Best-effort cross-device persistence (localStorage remains the source of truth).
+  // Per-account cross-device persistence (localStorage remains the device source of truth).
   try {
     fetch(`${API_BASE}/v1/albert/voice-pref`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ engine: p.engine, voice: p.voice, browser_voice_uri: p.browserVoiceURI }),
+      body: JSON.stringify({ engine: p.engine, voice: p.voice, browser_voice_uri: p.browserVoiceURI, pid: getPid() }),
     }).catch(() => {});
   } catch (e) { /* noop */ }
   _clip.clear(); // switching voices invalidates the cached audio
   return p;
+}
+
+// On sign-in, pull this account's saved voice from the server and apply it to
+// this device (so the user's chosen voice follows them across devices).
+export async function hydrateVoicePrefFromServer() {
+  try {
+    const r = await fetch(`${API_BASE}/v1/albert/voice-pref?pid=${encodeURIComponent(getPid())}`, { cache: 'no-store' });
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (!d || d.status !== 'ready') return null;
+    const p = { engine: d.engine || 'gemini', voice: d.voice || 'Charon', browserVoiceURI: d.browser_voice_uri || '' };
+    try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch (e) { /* noop */ }
+    _clip.clear();
+    return p;
+  } catch (e) { return null; }
 }
 
 /* ------------------------- browser fallback voice ------------------------- */

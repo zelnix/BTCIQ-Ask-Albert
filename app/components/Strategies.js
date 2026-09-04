@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { API_BASE } from '../lib/api';
+import { API_BASE, getPid } from '../lib/api';
 import { fmtUsd } from '../lib/format';
 import { SymbolContext } from '../lib/context';
 import { SectionHead } from './shared';
@@ -121,7 +121,7 @@ export function DraftModal({ draft, symbol, onClose, onActivated, onRegenerate, 
     try {
       const r = await fetch(`${API_BASE}/v1/albert/strategy`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ draft }),
+        body: JSON.stringify({ draft, pid: getPid() }),
       });
       const j = await r.json();
       if (j && j.status === 'ready') { onActivated(j.strategy); }
@@ -324,7 +324,7 @@ export default function StrategiesSection() {
 
   const load = React.useCallback(async () => {
     try {
-      const r = await fetch(`${API_BASE}/v1/albert/strategies?symbol=${encodeURIComponent(symbol)}`, { cache: 'no-store' });
+      const r = await fetch(`${API_BASE}/v1/albert/strategies?symbol=${encodeURIComponent(symbol)}&pid=${encodeURIComponent(getPid())}`, { cache: 'no-store' });
       const j = await r.json();
       setData(j);
     } catch (e) { /* noop */ } finally { setLoading(false); }
