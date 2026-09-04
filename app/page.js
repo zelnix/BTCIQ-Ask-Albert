@@ -1611,10 +1611,10 @@ function biasMeta(score) {
 
 function ExecKpi({ label, children, sub, subColor, onClick }) {
   return (
-    <button onClick={onClick} className="group flex-1 rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-950 p-5 text-left ring-1 ring-slate-800/60 transition-all hover:border-slate-700 hover:ring-sky-500/30">
-      <p className="text-[11px] font-medium uppercase tracking-wider text-slate-500">{label}</p>
-      <div className="mt-1">{children}</div>
-      {sub && <p className="mt-0.5 text-sm font-semibold" style={{ color: subColor || '#94a3b8' }}>{sub}</p>}
+    <button onClick={onClick} className="group flex h-full flex-col rounded-xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-950 p-3 text-left ring-1 ring-slate-800/60 transition-all hover:border-slate-700 hover:ring-sky-500/30 sm:rounded-2xl sm:p-5">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-slate-500 sm:text-[11px]">{label}</p>
+      <div className="mt-1 break-words">{children}</div>
+      {sub && <p className="mt-0.5 text-[11px] font-semibold leading-tight sm:text-sm" style={{ color: subColor || '#94a3b8' }}>{sub}</p>}
     </button>
   );
 }
@@ -1867,19 +1867,19 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
 
   return (
     <div className="space-y-4">
-      {/* KPI row */}
-      <div className="flex flex-col gap-3 sm:flex-row">
+      {/* KPI row — 2-up grid on mobile, 4 across on larger screens */}
+      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3">
         <ExecKpi label="Market Bias" onClick={() => onNav('overview')}>
-          <p className="flex items-center gap-2 text-3xl font-black" style={{ color: bias.color }}>{bias.label}<span className="text-2xl">{bias.arrow}</span></p>
+          <p className="flex items-center gap-1.5 text-xl font-black sm:text-3xl" style={{ color: bias.color }}>{bias.label}<span className="text-base sm:text-2xl">{bias.arrow}</span></p>
         </ExecKpi>
         <ExecKpi label={`${briefSym} Price`} onClick={() => onNav('market-intel')} sub={`${chg >= 0 ? '+' : ''}${chg}% 24h`} subColor={chg >= 0 ? '#34d399' : '#f87171'}>
-          <p className="text-3xl font-black text-white">{fmtUsd(price)}</p>
+          <p className="text-xl font-black text-white sm:text-3xl">{fmtUsd(price)}</p>
         </ExecKpi>
         <ExecKpi label="Conviction Score" onClick={() => onNav('overview')} sub={dec.overall_score_raw != null && dec.overall_score_raw !== dec.overall_score ? `ensemble-adj from ${dec.overall_score_raw}` : (dec.label || '')} subColor={scoreColor(dec.overall_score)}>
-          <p className="text-3xl font-black" style={{ color: scoreColor(dec.overall_score) }}>{dec.overall_score ?? '—'}<span className="text-lg text-slate-500">/100</span></p>
+          <p className="text-xl font-black sm:text-3xl" style={{ color: scoreColor(dec.overall_score) }}>{dec.overall_score ?? '—'}<span className="text-sm text-slate-500 sm:text-lg">/100</span></p>
         </ExecKpi>
         <ExecKpi label="Confidence" onClick={() => onNav('performance')} sub={conf != null ? 'model confidence' : ''}>
-          <p className="text-3xl font-black text-sky-300">{conf != null ? `${conf}%` : '—'}</p>
+          <p className="text-xl font-black text-sky-300 sm:text-3xl">{conf != null ? `${conf}%` : '—'}</p>
         </ExecKpi>
       </div>
 
