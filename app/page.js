@@ -99,7 +99,7 @@ function DashboardSkeleton({ ticker }) {
       {/* Sidebar */}
       <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-800 bg-slate-900/40 px-4 py-5 md:flex">
         <img src="/ask-albert-logo.png" alt="Ask Albert" className="mb-1 h-20 w-auto object-contain" />
-        <div className="mb-6 text-[10px] text-slate-600">Hucentai Crypto IQ</div>
+        <div className="mb-6 bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 bg-clip-text text-center text-[11px] font-bold uppercase tracking-[0.18em] text-transparent">Hucentai Crypto IQ</div>
         <div className="space-y-1.5">
           {navRows.map((_, i) => (
             <div key={i} className="flex items-center gap-3 rounded-lg px-3 py-2">
@@ -3277,11 +3277,9 @@ export default function DashboardPage() {
       <div className="relative flex">
         {/* Sidebar */}
         <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-800/80 bg-slate-900/40 p-4 backdrop-blur-sm md:flex">
-          <div className="mb-6 flex flex-col gap-1 px-1">
+          <div className="mb-6 flex flex-col items-center gap-1 px-1">
             <img src="/ask-albert-logo.png" alt="Ask Albert" className="h-24 w-auto object-contain" />
-            <p className="pl-0.5 text-[11px] font-semibold">
-              <span className="text-slate-500">Hucentai Crypto IQ</span>
-            </p>
+            <p className="bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 bg-clip-text text-center text-[12px] font-bold uppercase tracking-[0.18em] text-transparent drop-shadow-[0_1px_1px_rgba(0,0,0,0.4)]">Hucentai Crypto IQ</p>
             <PublishStamp />
             <EnvBadge />
           </div>
