@@ -35,6 +35,7 @@ import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } f
 import { speakAlbert, stopAlbert, prefetchAlbert, getVoicePref, setVoicePref, previewVoice } from './lib/albertVoice';
 import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, DemoBadge, Spark, LevGauge, ComingSoonSection } from './components/shared';
 import StrategiesSection from './components/Strategies';
+import AlertEngineSection from './components/AlertEngine';
 import { DraftModal as StrategyDraftModal } from './components/Strategies';
 import AnalogsSection from './components/Analogs';
 import CrossMarketSection from './components/CrossMarket';
@@ -3292,6 +3293,7 @@ export default function DashboardPage() {
     if (active === 'timemachine') return <TimeMachineSection />;
     if (active === 'ask') return <AskQuantSection d={d} />;
     if (active === 'strategies') return <StrategiesSection />;
+    if (active === 'alert-engine') return <AlertEngineSection />;
     if (active === 'alerts') return <AlertsSection d={d} alertsData={alertsData} onAck={ackAlerts} filter={alertFilter} onFilter={setAlertFilter} coins={coins} />;
     if (active === 'settings') return <SettingsSection />;
     return <ComingSoonSection section={activeSection} />;

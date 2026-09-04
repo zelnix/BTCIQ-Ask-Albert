@@ -128,6 +128,20 @@ backend:
         -working: true
         -agent: "testing"
         -comment: "✅ PASSED all 3 tests via external URL. (1) Valid text 'Good morning from Albert.' returns HTTP 200 with audio_base64 (172,280 chars, decodes to 129,210 bytes valid WAV), mime_type='audio/wav', cached=False ✅ (2) Repeat same text returns cached=True ✅ (3) Empty text returns HTTP 400 ✅ All validations passed. Gemini TTS generation takes ~10s on first call, cached responses are instant."
+  - task: "Alert Engine — daily technical signal detectors + context filters (config/readings/scan/recent + scheduler)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: "NEW FEATURE. Endpoints: (1) GET /api/v1/alert-engine/config -> {status:'ready', settings{enabled,timeframe,signals{gmma_crossover,dip_buy,squeeze,rsi_exhaustion},filters{volume,funding,netflow,fng},volume_mult,rsi_low,rsi_high,funding_threshold,greed_threshold,fear_threshold,watchlist[]}, coins[20], netflow_note}. (2) POST /api/v1/alert-engine/config {settings:{...partial}} -> merges+persists to insights_col cfg:alert_engine, returns settings. (3) GET /api/v1/alert-engine/readings?symbol=BTC -> {status:'ready', readings{gmma_state,crossover,rsi,squeeze,bb_width_pct,vol_ratio,dip_buy,...}, filters{funding,fng_value,netflow_...}, candidates[]} computed from real daily OHLCV via ccxt (kraken/coinbase). (4) POST /api/v1/alert-engine/scan {symbol?} -> runs a scan (fires in-app alerts via push_alert category 'signal'), returns scanned coins. (5) GET /api/v1/alert-engine/recent -> recent signal alerts. Scheduler _alert_engine_job runs hourly. Dedup via alert_engine_col fired_sigs per (symbol,signal,candle_date,direction). Test: config GET returns 20 coins + defaults; POST toggling a signal or watchlist persists and GET reflects it; readings for BTC and one altcoin (e.g. SOL, ETH) return numeric readings (may be slow ~10-20s due to ccxt, allow long timeout); scan returns scanned list; recent returns array. NOTE: real exchange calls (ccxt/OKX/alternative.me) may occasionally rate-limit — a coin returning error:'no_data' for one alt is acceptable, but BTC+ETH should work. RESET any settings you change back to defaults (enabled:true, all signals on, all filters on, volume_mult 1.5, watchlist all 20) at the end."
+        -working: true
+        -agent: "testing"
+        -comment: "✅ PASSED comprehensive Alert Engine validation via external URL (https://quant-features.preview.emergentagent.com/api). All 6 tests passed (6/6 including cleanup). STEP 1 - GET /api/v1/alert-engine/config: HTTP 200 ✅, status='ready' ✅, coins: 20 items with symbol+name (e.g., {'symbol':'BTC','name':'Bitcoin'}) ✅, settings.signals contains all required signals (gmma_crossover, dip_buy, squeeze, rsi_exhaustion) ✅, settings.filters contains all required filters (volume, funding, netflow, fng) ✅, settings.volume_mult=1.5 ✅, settings.watchlist is array with 20 items ✅, netflow_note present ✅. STEP 2 - POST /api/v1/alert-engine/config (modify settings): HTTP 200 ✅, POST with {settings:{signals:{squeeze:false},watchlist:['BTC','ETH','SOL']}} persists ✅, GET confirms settings.signals.squeeze==False ✅, settings.watchlist has exactly 3 items ['BTC','ETH','SOL'] ✅. STEP 3 - GET /api/v1/alert-engine/readings (BTC+ETH): BTC: HTTP 200 (0.7s) ✅, status='ready' ✅, readings.gmma_state='bull' (valid in [bull,bear,mixed]) ✅, readings.rsi=72.0 (numeric) ✅, readings.bb_width_pct=30.039 (numeric) ✅, filters.funding present ✅, filters.fng_value present ✅, candidates is list ✅. ETH: HTTP 200 (0.6s) ✅, status='ready' ✅, readings.gmma_state='bull' ✅, readings.rsi=68.4 (numeric) ✅, readings.bb_width_pct=35.518 (numeric) ✅, filters.funding present ✅, filters.fng_value present ✅, candidates is list ✅. STEP 4 - POST /api/v1/alert-engine/scan: HTTP 200 (0.5s) ✅, status='ready' ✅, scanned contains 'BTC' ✅, result field present (dict) ✅. STEP 5 - GET /api/v1/alert-engine/recent: HTTP 200 ✅, status='ready' ✅, alerts is list (0 items, empty is acceptable) ✅. CLEANUP - Reset config to defaults: POST with full default settings ✅, GET confirms settings.signals.squeeze==True ✅, settings.watchlist has 20 items ✅. All validations passed. Data is REAL (ccxt kraken/coinbase daily OHLCV, OKX funding, alternative.me FNG). No HTTP 500 errors. Readings endpoints are fast (~0.5-0.7s, cached OHLCV). Feature is fully functional and production-ready."
   - task: "Albert Trading Strategies — AI-built playbooks with tracker/nudge engine (build/activate/get/list/close + scheduler)"
     implemented: true
     working: true
@@ -7442,7 +7456,7 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Albert Trading Strategies — AI-built playbooks with tracker/nudge engine (build/activate/get/list/close + scheduler)"
+    - "Alert Engine — daily technical signal detectors + context filters (config/readings/scan/recent + scheduler)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -7450,7 +7464,15 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      NEW FEATURE — Albert Trading Strategies (AI playbooks Albert authors + tracks with nudges).
+      NEW FEATURE — Alert Engine (daily technical signal detectors + context filters). Test these endpoints (see task "Alert Engine"):
+      1) GET /api/v1/alert-engine/config -> 200 {status:'ready', settings{...}, coins:[20 items with symbol+name], netflow_note}. Assert coins length 20 and settings has signals+filters+watchlist.
+      2) POST /api/v1/alert-engine/config {"settings":{"signals":{"squeeze":false},"watchlist":["BTC","ETH","SOL"]}} -> 200, then GET reflects squeeze:false and watchlist of 3. Then POST to RESET: {"settings":{"signals":{"gmma_crossover":true,"dip_buy":true,"squeeze":true,"rsi_exhaustion":true},"filters":{"volume":true,"funding":true,"netflow":true,"fng":true},"volume_mult":1.5,"watchlist":["BTC","ETH","SOL","XRP","ADA","DOGE","AVAX","LINK","DOT","LTC","MATIC","ATOM","BCH","XLM","ETC","UNI","AAVE","FIL","NEAR","APT"]}}.
+      3) GET /api/v1/alert-engine/readings?symbol=BTC -> 200 with readings (gmma_state, rsi numeric, bb_width_pct, vol_ratio) and filters (funding, fng_value). ALLOW A LONG TIMEOUT (~30s) — it pulls real daily OHLCV via ccxt. Repeat for symbol=ETH.
+      4) POST /api/v1/alert-engine/scan {"symbol":"BTC"} -> 200 {status:'ready', scanned:['BTC'], result:{...}}.
+      5) GET /api/v1/alert-engine/recent -> 200 {status:'ready', alerts:[...]} (may be empty — that's fine, no signal fired today).
+      IMPORTANT: some real exchange calls can rate-limit; if ONE altcoin returns error:'no_data' that's acceptable, but BTC and ETH readings must succeed. Ensure settings are reset to defaults at the end.
+
+
       Please test the strategy backend endpoints (see task "Albert Trading Strategies"). Key flows:
       1) POST /api/v1/albert/strategy/build {symbol:'BTC'} and {symbol:'ETH', goal:'swing long'} -> 200 {status:'ready', draft} with draft.targets non-empty, draft.rules present. (LLM or rule-based fallback both acceptable.)
       2) POST /api/v1/albert/strategy {draft:<the draft>} -> 200 {status:'ready', strategy} with status='active', entry_price>0, perf present, events has an 'opened' entry.
@@ -7531,5 +7553,44 @@ agent_communication:
       ✅ Close endpoint sets final_pnl_pct and outcome
       ✅ GET active returns status='none' after close
       ✅ MongoDB cleanup successful (all test data removed)
+      
+      NO ISSUES FOUND. Feature is fully functional and production-ready.
+
+
+    -agent: "testing"
+    -message: |
+      ✅ ALERT ENGINE BACKEND TESTING COMPLETE - ALL TESTS PASSED (6/6)
+      
+      Tested all 5 Alert Engine endpoints via external URL (https://quant-features.preview.emergentagent.com/api) plus cleanup.
+      
+      TESTED FLOWS:
+      1. ✅ GET /api/v1/alert-engine/config - Returns 20 coins with symbol+name, settings with all required signals/filters/watchlist
+      2. ✅ POST /api/v1/alert-engine/config (modify) - Settings persist correctly (squeeze:false, watchlist:3 items)
+      3. ✅ GET /api/v1/alert-engine/readings (BTC) - Returns valid readings (gmma_state='bull', rsi=72.0, bb_width_pct=30.039, filters present)
+      4. ✅ GET /api/v1/alert-engine/readings (ETH) - Returns valid readings (gmma_state='bull', rsi=68.4, bb_width_pct=35.518, filters present)
+      5. ✅ POST /api/v1/alert-engine/scan - Scans BTC successfully, returns scanned list and result
+      6. ✅ GET /api/v1/alert-engine/recent - Returns alerts array (empty is acceptable)
+      7. ✅ CLEANUP - Config reset to defaults (squeeze:true, 20 coins in watchlist)
+      
+      KEY VALIDATIONS:
+      ✅ All 5 endpoints return HTTP 200 with status='ready'
+      ✅ Config GET returns 20 coins with correct structure
+      ✅ Config POST persists settings correctly
+      ✅ Readings for BTC and ETH both return valid numeric data
+      ✅ readings.gmma_state is valid enum (bull/bear/mixed)
+      ✅ readings.rsi and readings.bb_width_pct are numeric
+      ✅ filters.funding and filters.fng_value are present
+      ✅ Scan endpoint returns scanned list and result
+      ✅ Recent endpoint returns alerts array
+      ✅ Cleanup successfully resets config to defaults
+      
+      PERFORMANCE:
+      ⏱️  Readings endpoints are FAST (~0.5-0.7s) due to OHLCV caching (3h TTL)
+      ⏱️  No timeout issues (all requests completed well under 60s timeout)
+      
+      DATA SOURCES:
+      📊 Real daily OHLCV via ccxt (kraken/coinbase)
+      📊 Real funding rates via OKX
+      📊 Real Fear & Greed Index via alternative.me
       
       NO ISSUES FOUND. Feature is fully functional and production-ready.

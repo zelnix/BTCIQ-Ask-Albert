@@ -1,532 +1,554 @@
 #!/usr/bin/env python3
 """
-Backend test for Albert Trading Strategies endpoints.
-Tests the complete flow: build -> activate -> get -> list -> close + cleanup.
+Backend Test for Alert Engine
+Tests all 5 Alert Engine endpoints with proper timeout handling for slow ccxt calls.
 """
-import os
-import sys
 import requests
 import json
-from pymongo import MongoClient
+import time
+import sys
 
-# Configuration
-BASE_URL = os.getenv('NEXT_PUBLIC_BASE_URL', 'https://quant-features.preview.emergentagent.com')
-API_BASE = f"{BASE_URL}/api"
-MONGO_URL = os.getenv('MONGO_URL', 'mongodb://localhost:27017')
-DB_NAME = os.getenv('DB_NAME', 'btciq')
+# Base URL from .env
+BASE_URL = "https://quant-features.preview.emergentagent.com/api"
 
-print(f"Testing Albert Trading Strategies endpoints")
-print(f"API Base URL: {API_BASE}")
-print(f"MongoDB: {MONGO_URL}/{DB_NAME}")
-print("=" * 80)
+# Timeout for readings endpoints (can take 10-30s per request)
+READINGS_TIMEOUT = 60
 
-# Track created strategy IDs for cleanup
-created_strategy_ids = []
+# Default timeout for other endpoints
+DEFAULT_TIMEOUT = 30
 
-def test_step(step_num, description):
-    """Print test step header"""
+def print_test(msg):
     print(f"\n{'='*80}")
-    print(f"STEP {step_num}: {description}")
-    print(f"{'='*80}")
+    print(f"TEST: {msg}")
+    print('='*80)
 
-def assert_field(obj, field, expected_type=None, msg=""):
-    """Assert a field exists and optionally check its type"""
-    if field not in obj:
-        print(f"❌ FAIL: Missing field '{field}' {msg}")
-        return False
-    if expected_type and not isinstance(obj[field], expected_type):
-        print(f"❌ FAIL: Field '{field}' has wrong type. Expected {expected_type}, got {type(obj[field])} {msg}")
-        return False
-    return True
+def print_pass(msg):
+    print(f"✅ PASS: {msg}")
 
-def assert_non_empty(obj, field, msg=""):
-    """Assert a field exists and is non-empty"""
-    if not assert_field(obj, field, msg=msg):
-        return False
-    if isinstance(obj[field], (list, dict, str)) and len(obj[field]) == 0:
-        print(f"❌ FAIL: Field '{field}' is empty {msg}")
-        return False
-    return True
+def print_fail(msg):
+    print(f"❌ FAIL: {msg}")
 
-try:
-    # ========================================================================
-    # STEP 1: Build BTC strategy
-    # ========================================================================
-    test_step(1, "POST /api/v1/albert/strategy/build with BTC")
-    
-    response = requests.post(f"{API_BASE}/v1/albert/strategy/build", 
-                            json={"symbol": "BTC"},
-                            timeout=60)
-    print(f"Status Code: {response.status_code}")
-    
-    if response.status_code != 200:
-        print(f"❌ FAIL: Expected 200, got {response.status_code}")
-        print(f"Response: {response.text}")
-        sys.exit(1)
-    
-    btc_build_data = response.json()
-    print(f"Response keys: {list(btc_build_data.keys())}")
-    
-    # Validate response structure
-    if not assert_field(btc_build_data, 'status', str):
-        sys.exit(1)
-    if btc_build_data['status'] != 'ready':
-        print(f"❌ FAIL: Expected status='ready', got '{btc_build_data['status']}'")
-        sys.exit(1)
-    print(f"✅ status='ready'")
-    
-    if not assert_field(btc_build_data, 'draft', dict):
-        sys.exit(1)
-    
-    btc_draft = btc_build_data['draft']
-    print(f"Draft keys: {list(btc_draft.keys())}")
-    
-    # Validate draft structure
-    required_fields = ['title', 'bias', 'position', 'thesis', 'horizon_days', 'targets', 'rules']
-    for field in required_fields:
-        if not assert_non_empty(btc_draft, field, f"in BTC draft"):
-            sys.exit(1)
-    
-    print(f"✅ Draft has all required fields: {required_fields}")
-    
-    # Validate targets array
-    if not isinstance(btc_draft['targets'], list) or len(btc_draft['targets']) == 0:
-        print(f"❌ FAIL: 'targets' must be a non-empty array")
-        sys.exit(1)
-    print(f"✅ targets is non-empty array with {len(btc_draft['targets'])} items")
-    
-    # Validate rules array
-    if not isinstance(btc_draft['rules'], list) or len(btc_draft['rules']) == 0:
-        print(f"❌ FAIL: 'rules' must be a non-empty array")
-        sys.exit(1)
-    print(f"✅ rules is non-empty array with {len(btc_draft['rules'])} items")
-    
-    print(f"✅ BTC draft structure validated:")
-    print(f"   - title: {btc_draft['title']}")
-    print(f"   - bias: {btc_draft['bias']}")
-    print(f"   - position: {btc_draft['position']}")
-    print(f"   - horizon_days: {btc_draft['horizon_days']}")
-    print(f"   - targets: {len(btc_draft['targets'])} items")
-    print(f"   - rules: {len(btc_draft['rules'])} items")
-    
-    # ========================================================================
-    # STEP 1b: Build ETH strategy with goal
-    # ========================================================================
-    test_step("1b", "POST /api/v1/albert/strategy/build with ETH and goal")
-    
-    response = requests.post(f"{API_BASE}/v1/albert/strategy/build", 
-                            json={"symbol": "ETH", "goal": "swing long"},
-                            timeout=60)
-    print(f"Status Code: {response.status_code}")
-    
-    if response.status_code != 200:
-        print(f"❌ FAIL: Expected 200, got {response.status_code}")
-        print(f"Response: {response.text}")
-        sys.exit(1)
-    
-    eth_build_data = response.json()
-    
-    if eth_build_data['status'] != 'ready':
-        print(f"❌ FAIL: Expected status='ready', got '{eth_build_data['status']}'")
-        sys.exit(1)
-    print(f"✅ status='ready'")
-    
-    eth_draft = eth_build_data['draft']
-    
-    # Validate ETH draft structure (same as BTC)
-    for field in required_fields:
-        if not assert_non_empty(eth_draft, field, f"in ETH draft"):
-            sys.exit(1)
-    
-    if not isinstance(eth_draft['targets'], list) or len(eth_draft['targets']) == 0:
-        print(f"❌ FAIL: ETH 'targets' must be a non-empty array")
-        sys.exit(1)
-    
-    if not isinstance(eth_draft['rules'], list) or len(eth_draft['rules']) == 0:
-        print(f"❌ FAIL: ETH 'rules' must be a non-empty array")
-        sys.exit(1)
-    
-    print(f"✅ ETH draft structure validated:")
-    print(f"   - title: {eth_draft['title']}")
-    print(f"   - bias: {eth_draft['bias']}")
-    print(f"   - position: {eth_draft['position']}")
-    print(f"   - horizon_days: {eth_draft['horizon_days']}")
-    print(f"   - targets: {len(eth_draft['targets'])} items")
-    print(f"   - rules: {len(eth_draft['rules'])} items")
-    
-    # ========================================================================
-    # STEP 2: Activate BTC strategy
-    # ========================================================================
-    test_step(2, "POST /api/v1/albert/strategy to activate BTC draft")
-    
-    response = requests.post(f"{API_BASE}/v1/albert/strategy", 
-                            json={"draft": btc_draft},
-                            timeout=30)
-    print(f"Status Code: {response.status_code}")
-    
-    if response.status_code != 200:
-        print(f"❌ FAIL: Expected 200, got {response.status_code}")
-        print(f"Response: {response.text}")
-        sys.exit(1)
-    
-    btc_activate_data = response.json()
-    
-    if btc_activate_data['status'] != 'ready':
-        print(f"❌ FAIL: Expected status='ready', got '{btc_activate_data['status']}'")
-        sys.exit(1)
-    print(f"✅ status='ready'")
-    
-    if not assert_field(btc_activate_data, 'strategy', dict):
-        sys.exit(1)
-    
-    btc_strategy = btc_activate_data['strategy']
-    print(f"Strategy keys: {list(btc_strategy.keys())}")
-    
-    # Track for cleanup
-    if 'id' in btc_strategy:
-        created_strategy_ids.append(btc_strategy['id'])
-        print(f"✅ Strategy ID: {btc_strategy['id']}")
-    
-    # Validate strategy structure
-    if not assert_field(btc_strategy, 'status', str):
-        sys.exit(1)
-    if btc_strategy['status'] != 'active':
-        print(f"❌ FAIL: Expected strategy.status='active', got '{btc_strategy['status']}'")
-        sys.exit(1)
-    print(f"✅ strategy.status='active'")
-    
-    if not assert_field(btc_strategy, 'entry_price', (int, float)):
-        sys.exit(1)
-    if btc_strategy['entry_price'] <= 0:
-        print(f"❌ FAIL: entry_price must be > 0, got {btc_strategy['entry_price']}")
-        sys.exit(1)
-    print(f"✅ entry_price={btc_strategy['entry_price']} (> 0)")
-    
-    if not assert_field(btc_strategy, 'perf', dict):
-        sys.exit(1)
-    print(f"✅ perf object present")
-    
-    if not assert_field(btc_strategy, 'events', list):
-        sys.exit(1)
-    if len(btc_strategy['events']) == 0:
-        print(f"❌ FAIL: events array must not be empty")
-        sys.exit(1)
-    
-    # Check for 'opened' event
-    opened_event = None
-    for event in btc_strategy['events']:
-        if event.get('type') == 'opened':
-            opened_event = event
-            break
-    
-    if not opened_event:
-        print(f"❌ FAIL: No 'opened' event found in events array")
-        print(f"Events: {btc_strategy['events']}")
-        sys.exit(1)
-    print(f"✅ events contains 'opened' event")
-    
-    print(f"✅ BTC strategy activated successfully")
-    
-    # ========================================================================
-    # STEP 3: ONE-ACTIVE-PER-COIN test
-    # ========================================================================
-    test_step(3, "ONE-ACTIVE-PER-COIN: Build and activate another BTC strategy")
-    
-    # Build another BTC strategy
-    response = requests.post(f"{API_BASE}/v1/albert/strategy/build", 
-                            json={"symbol": "BTC"},
-                            timeout=60)
-    if response.status_code != 200:
-        print(f"❌ FAIL: Build failed with {response.status_code}")
-        sys.exit(1)
-    
-    btc_draft_2 = response.json()['draft']
-    print(f"✅ Built second BTC draft")
-    
-    # Activate the second BTC strategy
-    response = requests.post(f"{API_BASE}/v1/albert/strategy", 
-                            json={"draft": btc_draft_2},
-                            timeout=30)
-    if response.status_code != 200:
-        print(f"❌ FAIL: Activate failed with {response.status_code}")
-        sys.exit(1)
-    
-    btc_strategy_2 = response.json()['strategy']
-    if 'id' in btc_strategy_2:
-        created_strategy_ids.append(btc_strategy_2['id'])
-    
-    print(f"✅ Activated second BTC strategy (ID: {btc_strategy_2.get('id')})")
-    
-    # Now GET /api/v1/albert/strategies?symbol=BTC to verify one-active-per-coin
-    response = requests.get(f"{API_BASE}/v1/albert/strategies?symbol=BTC", timeout=30)
-    if response.status_code != 200:
-        print(f"❌ FAIL: GET strategies failed with {response.status_code}")
-        sys.exit(1)
-    
-    strategies_data = response.json()
-    print(f"Strategies response keys: {list(strategies_data.keys())}")
-    
-    if strategies_data['status'] != 'ready':
-        print(f"❌ FAIL: Expected status='ready', got '{strategies_data['status']}'")
-        sys.exit(1)
-    
-    if not assert_field(strategies_data, 'active', (dict, type(None))):
-        sys.exit(1)
-    
-    if not assert_field(strategies_data, 'history', list):
-        sys.exit(1)
-    
-    # Verify exactly ONE active strategy
-    if strategies_data['active'] is None:
-        print(f"❌ FAIL: Expected one active strategy, got None")
-        sys.exit(1)
-    
-    active_strategy = strategies_data['active']
-    print(f"✅ Found ONE active strategy (ID: {active_strategy.get('id')})")
-    
-    # Verify the active strategy is the second one
-    if active_strategy.get('id') != btc_strategy_2.get('id'):
-        print(f"❌ FAIL: Active strategy ID mismatch. Expected {btc_strategy_2.get('id')}, got {active_strategy.get('id')}")
-        sys.exit(1)
-    print(f"✅ Active strategy is the second one (most recent)")
-    
-    # Verify the first strategy is now in history with status 'closed' and close_reason 'superseded'
-    first_strategy_in_history = None
-    for h in strategies_data['history']:
-        if h.get('id') == btc_strategy.get('id'):
-            first_strategy_in_history = h
-            break
-    
-    if not first_strategy_in_history:
-        print(f"❌ FAIL: First strategy (ID: {btc_strategy.get('id')}) not found in history")
-        print(f"History IDs: {[h.get('id') for h in strategies_data['history']]}")
-        sys.exit(1)
-    
-    if first_strategy_in_history.get('status') != 'closed':
-        print(f"❌ FAIL: First strategy status should be 'closed', got '{first_strategy_in_history.get('status')}'")
-        sys.exit(1)
-    print(f"✅ First strategy status='closed'")
-    
-    if first_strategy_in_history.get('close_reason') != 'superseded':
-        print(f"❌ FAIL: First strategy close_reason should be 'superseded', got '{first_strategy_in_history.get('close_reason')}'")
-        sys.exit(1)
-    print(f"✅ First strategy close_reason='superseded'")
-    
-    print(f"✅ ONE-ACTIVE-PER-COIN validation passed")
-    
-    # ========================================================================
-    # STEP 4: GET active strategy and list strategies
-    # ========================================================================
-    test_step(4, "GET /api/v1/albert/strategy?symbol=BTC (active strategy)")
-    
-    response = requests.get(f"{API_BASE}/v1/albert/strategy?symbol=BTC", timeout=30)
-    if response.status_code != 200:
-        print(f"❌ FAIL: Expected 200, got {response.status_code}")
-        sys.exit(1)
-    
-    active_data = response.json()
-    
-    if active_data['status'] != 'ready':
-        print(f"❌ FAIL: Expected status='ready', got '{active_data['status']}'")
-        sys.exit(1)
-    print(f"✅ status='ready'")
-    
-    if not assert_field(active_data, 'strategy', dict):
-        sys.exit(1)
-    
-    active_strat = active_data['strategy']
-    if active_strat.get('status') != 'active':
-        print(f"❌ FAIL: Expected strategy.status='active', got '{active_strat.get('status')}'")
-        sys.exit(1)
-    print(f"✅ Returned active strategy (ID: {active_strat.get('id')})")
-    
-    # Test GET /api/v1/albert/strategies?symbol=BTC (already tested above, but verify again)
-    test_step("4b", "GET /api/v1/albert/strategies?symbol=BTC (list)")
-    
-    response = requests.get(f"{API_BASE}/v1/albert/strategies?symbol=BTC", timeout=30)
-    if response.status_code != 200:
-        print(f"❌ FAIL: Expected 200, got {response.status_code}")
-        sys.exit(1)
-    
-    list_data = response.json()
-    
-    if list_data['status'] != 'ready':
-        print(f"❌ FAIL: Expected status='ready', got '{list_data['status']}'")
-        sys.exit(1)
-    
-    if not assert_field(list_data, 'active', (dict, type(None))):
-        sys.exit(1)
-    if not assert_field(list_data, 'history', list):
-        sys.exit(1)
-    if not assert_field(list_data, 'stats', dict):
-        sys.exit(1)
-    
-    print(f"✅ List response structure validated:")
-    print(f"   - active: {list_data['active'] is not None}")
-    print(f"   - history: {len(list_data['history'])} items")
-    print(f"   - stats: {list(list_data['stats'].keys())}")
-    
-    # ========================================================================
-    # STEP 5: Close active BTC strategy
-    # ========================================================================
-    test_step(5, "POST /api/v1/albert/strategy/{id}/close with reason='manual'")
-    
-    active_id = btc_strategy_2.get('id')
-    response = requests.post(f"{API_BASE}/v1/albert/strategy/{active_id}/close", 
-                            json={"reason": "manual"},
-                            timeout=30)
-    if response.status_code != 200:
-        print(f"❌ FAIL: Expected 200, got {response.status_code}")
-        print(f"Response: {response.text}")
-        sys.exit(1)
-    
-    close_data = response.json()
-    
-    if close_data['status'] != 'ready':
-        print(f"❌ FAIL: Expected status='ready', got '{close_data['status']}'")
-        sys.exit(1)
-    
-    closed_strategy = close_data['strategy']
-    
-    if closed_strategy.get('status') != 'closed':
-        print(f"❌ FAIL: Expected strategy.status='closed', got '{closed_strategy.get('status')}'")
-        sys.exit(1)
-    print(f"✅ strategy.status='closed'")
-    
-    if not assert_field(closed_strategy, 'final_pnl_pct', (int, float)):
-        sys.exit(1)
-    print(f"✅ final_pnl_pct present: {closed_strategy['final_pnl_pct']}")
-    
-    if not assert_field(closed_strategy, 'outcome', str):
-        sys.exit(1)
-    print(f"✅ outcome present: {closed_strategy['outcome']}")
-    
-    print(f"✅ Strategy closed successfully")
-    
-    # Verify GET /api/v1/albert/strategy?symbol=BTC now returns status='none'
-    test_step("5b", "Verify GET /api/v1/albert/strategy?symbol=BTC returns status='none'")
-    
-    response = requests.get(f"{API_BASE}/v1/albert/strategy?symbol=BTC", timeout=30)
-    if response.status_code != 200:
-        print(f"❌ FAIL: Expected 200, got {response.status_code}")
-        sys.exit(1)
-    
-    none_data = response.json()
-    
-    if none_data['status'] != 'none':
-        print(f"❌ FAIL: Expected status='none', got '{none_data['status']}'")
-        sys.exit(1)
-    print(f"✅ status='none' (no active BTC strategy)")
-    
-    # ========================================================================
-    # STEP 6: Activate and close ETH strategy
-    # ========================================================================
-    test_step(6, "Activate and close ETH strategy")
-    
-    # Activate ETH strategy
-    response = requests.post(f"{API_BASE}/v1/albert/strategy", 
-                            json={"draft": eth_draft},
-                            timeout=30)
-    if response.status_code != 200:
-        print(f"❌ FAIL: ETH activate failed with {response.status_code}")
-        sys.exit(1)
-    
-    eth_strategy = response.json()['strategy']
-    if 'id' in eth_strategy:
-        created_strategy_ids.append(eth_strategy['id'])
-    
-    if eth_strategy.get('status') != 'active':
-        print(f"❌ FAIL: ETH strategy status should be 'active', got '{eth_strategy.get('status')}'")
-        sys.exit(1)
-    print(f"✅ ETH strategy activated (ID: {eth_strategy.get('id')})")
-    
-    # Close ETH strategy
-    eth_id = eth_strategy.get('id')
-    response = requests.post(f"{API_BASE}/v1/albert/strategy/{eth_id}/close", 
-                            json={"reason": "manual"},
-                            timeout=30)
-    if response.status_code != 200:
-        print(f"❌ FAIL: ETH close failed with {response.status_code}")
-        sys.exit(1)
-    
-    eth_closed = response.json()['strategy']
-    
-    if eth_closed.get('status') != 'closed':
-        print(f"❌ FAIL: ETH strategy status should be 'closed', got '{eth_closed.get('status')}'")
-        sys.exit(1)
-    print(f"✅ ETH strategy closed successfully")
-    
-    # ========================================================================
-    # CLEANUP: Delete all created strategies from MongoDB
-    # ========================================================================
-    test_step("CLEANUP", "Delete all created strategies from MongoDB")
+def print_info(msg):
+    print(f"ℹ️  INFO: {msg}")
+
+def test_step_1_get_config():
+    """
+    STEP 1: GET /api/v1/alert-engine/config
+    Expect 200 JSON {status:'ready', settings:{...}, coins:[...], netflow_note}
+    Assert coins has 20 items (each with symbol+name)
+    Assert settings contains signals, filters, volume_mult, watchlist
+    """
+    print_test("STEP 1: GET /api/v1/alert-engine/config")
     
     try:
-        client = MongoClient(MONGO_URL)
-        db = client[DB_NAME]
-        strategies_col = db['strategies']
+        url = f"{BASE_URL}/v1/alert-engine/config"
+        print_info(f"GET {url}")
         
-        # Delete all strategies we created
-        if created_strategy_ids:
-            result = strategies_col.delete_many({'id': {'$in': created_strategy_ids}})
-            print(f"✅ Deleted {result.deleted_count} strategies from MongoDB")
+        response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+        print_info(f"Status Code: {response.status_code}")
         
-        # Verify collection is empty (or at least our strategies are gone)
-        remaining = strategies_col.count_documents({'id': {'$in': created_strategy_ids}})
-        if remaining > 0:
-            print(f"⚠️  WARNING: {remaining} strategies still remain in collection")
-        else:
-            print(f"✅ All created strategies removed from collection")
+        if response.status_code != 200:
+            print_fail(f"Expected status 200, got {response.status_code}")
+            print_info(f"Response: {response.text[:500]}")
+            return False
         
-        # Show total count in collection
-        total_count = strategies_col.count_documents({})
-        print(f"✅ Total strategies in collection: {total_count}")
+        data = response.json()
+        print_info(f"Response keys: {list(data.keys())}")
         
-        client.close()
+        # Check status
+        if data.get('status') != 'ready':
+            print_fail(f"Expected status='ready', got '{data.get('status')}'")
+            return False
+        print_pass("status='ready'")
+        
+        # Check coins array
+        coins = data.get('coins', [])
+        if not isinstance(coins, list):
+            print_fail(f"Expected coins to be a list, got {type(coins)}")
+            return False
+        
+        if len(coins) != 20:
+            print_fail(f"Expected 20 coins, got {len(coins)}")
+            return False
+        print_pass(f"coins has 20 items")
+        
+        # Check first coin structure
+        if coins:
+            first_coin = coins[0]
+            if 'symbol' not in first_coin or 'name' not in first_coin:
+                print_fail(f"Coin missing symbol or name: {first_coin}")
+                return False
+            print_pass(f"Each coin has symbol+name (e.g., {first_coin})")
+        
+        # Check settings structure
+        settings = data.get('settings', {})
+        if not isinstance(settings, dict):
+            print_fail(f"Expected settings to be a dict, got {type(settings)}")
+            return False
+        
+        # Check signals
+        signals = settings.get('signals', {})
+        required_signals = ['gmma_crossover', 'dip_buy', 'squeeze', 'rsi_exhaustion']
+        for sig in required_signals:
+            if sig not in signals:
+                print_fail(f"Missing signal: {sig}")
+                return False
+        print_pass(f"settings.signals contains all required signals: {required_signals}")
+        
+        # Check filters
+        filters = settings.get('filters', {})
+        required_filters = ['volume', 'funding', 'netflow', 'fng']
+        for filt in required_filters:
+            if filt not in filters:
+                print_fail(f"Missing filter: {filt}")
+                return False
+        print_pass(f"settings.filters contains all required filters: {required_filters}")
+        
+        # Check other settings fields
+        if 'volume_mult' not in settings:
+            print_fail("Missing settings.volume_mult")
+            return False
+        print_pass(f"settings.volume_mult = {settings['volume_mult']}")
+        
+        if 'watchlist' not in settings:
+            print_fail("Missing settings.watchlist")
+            return False
+        watchlist = settings['watchlist']
+        if not isinstance(watchlist, list):
+            print_fail(f"Expected watchlist to be a list, got {type(watchlist)}")
+            return False
+        print_pass(f"settings.watchlist is an array with {len(watchlist)} items")
+        
+        # Check netflow_note
+        if 'netflow_note' not in data:
+            print_fail("Missing netflow_note")
+            return False
+        print_pass(f"netflow_note present")
+        
+        print_pass("STEP 1 PASSED - GET /api/v1/alert-engine/config returns valid structure")
+        return True
         
     except Exception as e:
-        print(f"❌ CLEANUP ERROR: {e}")
+        print_fail(f"Exception: {e}")
         import traceback
         traceback.print_exc()
+        return False
+
+def test_step_2_post_config():
+    """
+    STEP 2: POST /api/v1/alert-engine/config with body 
+    {"settings":{"signals":{"squeeze":false},"watchlist":["BTC","ETH","SOL"]}
+    Expect 200. Then GET and confirm settings.signals.squeeze==false and watchlist has 3 items.
+    """
+    print_test("STEP 2: POST /api/v1/alert-engine/config (modify settings)")
     
-    # ========================================================================
-    # FINAL SUMMARY
-    # ========================================================================
-    print(f"\n{'='*80}")
-    print(f"✅ ALL TESTS PASSED")
-    print(f"{'='*80}")
-    print(f"Summary:")
-    print(f"  1. ✅ POST /api/v1/albert/strategy/build (BTC) - draft with targets and rules")
-    print(f"  2. ✅ POST /api/v1/albert/strategy/build (ETH with goal) - draft with targets and rules")
-    print(f"  3. ✅ POST /api/v1/albert/strategy (activate BTC) - active strategy with entry_price and 'opened' event")
-    print(f"  4. ✅ ONE-ACTIVE-PER-COIN - second BTC strategy supersedes first")
-    print(f"  5. ✅ GET /api/v1/albert/strategy?symbol=BTC - returns active strategy")
-    print(f"  6. ✅ GET /api/v1/albert/strategies?symbol=BTC - returns active + history + stats")
-    print(f"  7. ✅ POST /api/v1/albert/strategy/{{id}}/close - closes strategy with final_pnl_pct and outcome")
-    print(f"  8. ✅ GET /api/v1/albert/strategy?symbol=BTC after close - returns status='none'")
-    print(f"  9. ✅ ETH strategy activate and close - same flow works for ETH")
-    print(f" 10. ✅ CLEANUP - all created strategies deleted from MongoDB")
-    print(f"{'='*80}")
+    try:
+        url = f"{BASE_URL}/v1/alert-engine/config"
+        payload = {
+            "settings": {
+                "signals": {"squeeze": False},
+                "watchlist": ["BTC", "ETH", "SOL"]
+            }
+        }
+        
+        print_info(f"POST {url}")
+        print_info(f"Payload: {json.dumps(payload, indent=2)}")
+        
+        response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+        print_info(f"Status Code: {response.status_code}")
+        
+        if response.status_code != 200:
+            print_fail(f"Expected status 200, got {response.status_code}")
+            print_info(f"Response: {response.text[:500]}")
+            return False
+        
+        data = response.json()
+        print_pass("POST returned 200")
+        
+        # Now GET to verify persistence
+        print_info("Verifying persistence with GET...")
+        get_response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+        
+        if get_response.status_code != 200:
+            print_fail(f"GET after POST failed with status {get_response.status_code}")
+            return False
+        
+        get_data = get_response.json()
+        settings = get_data.get('settings', {})
+        
+        # Check squeeze is False
+        squeeze = settings.get('signals', {}).get('squeeze')
+        if squeeze is not False:
+            print_fail(f"Expected settings.signals.squeeze=False, got {squeeze}")
+            return False
+        print_pass("settings.signals.squeeze == False (persisted)")
+        
+        # Check watchlist has exactly 3 items
+        watchlist = settings.get('watchlist', [])
+        if len(watchlist) != 3:
+            print_fail(f"Expected watchlist with 3 items, got {len(watchlist)}: {watchlist}")
+            return False
+        print_pass(f"settings.watchlist has exactly 3 items: {watchlist}")
+        
+        print_pass("STEP 2 PASSED - POST config persists and GET reflects changes")
+        return True
+        
+    except Exception as e:
+        print_fail(f"Exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def test_step_3_get_readings():
+    """
+    STEP 3: GET /api/v1/alert-engine/readings?symbol=BTC
+    Expect 200 {status:'ready', readings:{...}, filters:{...}, candidates:[...]}
+    Assert readings.gmma_state is one of bull/bear/mixed
+    Assert readings.rsi is a number
+    Assert readings.bb_width_pct is a number
+    Assert filters has funding + fng_value keys
+    Repeat for symbol=ETH (must also succeed)
     
-except Exception as e:
-    print(f"\n{'='*80}")
-    print(f"❌ TEST FAILED WITH EXCEPTION")
-    print(f"{'='*80}")
-    print(f"Error: {e}")
-    import traceback
-    traceback.print_exc()
+    IMPORTANT: Can take 10-30s per request, use 60s timeout
+    """
+    print_test("STEP 3: GET /api/v1/alert-engine/readings (BTC and ETH)")
     
-    # Attempt cleanup even on failure
-    if created_strategy_ids:
-        print(f"\nAttempting cleanup of {len(created_strategy_ids)} strategies...")
+    symbols = ['BTC', 'ETH']
+    
+    for symbol in symbols:
+        print_info(f"\n--- Testing symbol: {symbol} ---")
+        
         try:
-            client = MongoClient(MONGO_URL)
-            db = client[DB_NAME]
-            strategies_col = db['strategies']
-            result = strategies_col.delete_many({'id': {'$in': created_strategy_ids}})
-            print(f"✅ Cleanup: Deleted {result.deleted_count} strategies")
-            client.close()
-        except Exception as cleanup_error:
-            print(f"❌ Cleanup failed: {cleanup_error}")
+            url = f"{BASE_URL}/v1/alert-engine/readings?symbol={symbol}"
+            print_info(f"GET {url}")
+            print_info(f"⏱️  WARNING: This can take 10-30s (fetching real OHLCV via ccxt)...")
+            
+            start_time = time.time()
+            response = requests.get(url, timeout=READINGS_TIMEOUT)
+            elapsed = time.time() - start_time
+            
+            print_info(f"Status Code: {response.status_code} (took {elapsed:.1f}s)")
+            
+            if response.status_code != 200:
+                print_fail(f"Expected status 200, got {response.status_code}")
+                print_info(f"Response: {response.text[:500]}")
+                return False
+            
+            data = response.json()
+            
+            # Check status
+            if data.get('status') != 'ready':
+                # Check if it's an error due to rate limiting (acceptable for altcoins)
+                if data.get('status') == 'error' and 'no_data' in str(data.get('error', '')):
+                    if symbol in ['BTC', 'ETH']:
+                        print_fail(f"{symbol} must return valid readings (got error: {data.get('error')})")
+                        return False
+                    else:
+                        print_info(f"Altcoin {symbol} returned error (acceptable): {data.get('error')}")
+                        continue
+                else:
+                    print_fail(f"Expected status='ready', got '{data.get('status')}'")
+                    return False
+            print_pass(f"{symbol}: status='ready'")
+            
+            # Check readings
+            readings = data.get('readings', {})
+            if not isinstance(readings, dict):
+                print_fail(f"{symbol}: Expected readings to be a dict, got {type(readings)}")
+                return False
+            
+            # Check gmma_state
+            gmma_state = readings.get('gmma_state')
+            valid_states = ['bull', 'bear', 'mixed']
+            if gmma_state not in valid_states:
+                print_fail(f"{symbol}: Expected gmma_state in {valid_states}, got '{gmma_state}'")
+                return False
+            print_pass(f"{symbol}: readings.gmma_state = '{gmma_state}' (valid)")
+            
+            # Check rsi is a number
+            rsi = readings.get('rsi')
+            if not isinstance(rsi, (int, float)):
+                print_fail(f"{symbol}: Expected rsi to be a number, got {type(rsi)}: {rsi}")
+                return False
+            print_pass(f"{symbol}: readings.rsi = {rsi} (numeric)")
+            
+            # Check bb_width_pct is a number
+            bb_width_pct = readings.get('bb_width_pct')
+            if not isinstance(bb_width_pct, (int, float)):
+                print_fail(f"{symbol}: Expected bb_width_pct to be a number, got {type(bb_width_pct)}: {bb_width_pct}")
+                return False
+            print_pass(f"{symbol}: readings.bb_width_pct = {bb_width_pct} (numeric)")
+            
+            # Check filters
+            filters = data.get('filters', {})
+            if not isinstance(filters, dict):
+                print_fail(f"{symbol}: Expected filters to be a dict, got {type(filters)}")
+                return False
+            
+            # Check funding key
+            if 'funding' not in filters:
+                print_fail(f"{symbol}: Missing filters.funding")
+                return False
+            print_pass(f"{symbol}: filters.funding present")
+            
+            # Check fng_value key
+            if 'fng_value' not in filters:
+                print_fail(f"{symbol}: Missing filters.fng_value")
+                return False
+            print_pass(f"{symbol}: filters.fng_value present")
+            
+            # Check candidates
+            candidates = data.get('candidates', [])
+            if not isinstance(candidates, list):
+                print_fail(f"{symbol}: Expected candidates to be a list, got {type(candidates)}")
+                return False
+            print_pass(f"{symbol}: candidates is a list (length: {len(candidates)})")
+            
+            print_pass(f"{symbol}: All validations passed")
+            
+        except requests.exceptions.Timeout:
+            print_fail(f"{symbol}: Request timed out after {READINGS_TIMEOUT}s")
+            return False
+        except Exception as e:
+            print_fail(f"{symbol}: Exception: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
-    sys.exit(1)
+    print_pass("STEP 3 PASSED - GET readings for BTC and ETH both succeed")
+    return True
+
+def test_step_4_post_scan():
+    """
+    STEP 4: POST /api/v1/alert-engine/scan with body {"symbol":"BTC"}
+    Expect 200 {status:'ready', scanned:["BTC"], result:{...}}
+    """
+    print_test("STEP 4: POST /api/v1/alert-engine/scan")
+    
+    try:
+        url = f"{BASE_URL}/v1/alert-engine/scan"
+        payload = {"symbol": "BTC"}
+        
+        print_info(f"POST {url}")
+        print_info(f"Payload: {json.dumps(payload, indent=2)}")
+        print_info(f"⏱️  WARNING: This can take 10-30s (fetching real OHLCV via ccxt)...")
+        
+        start_time = time.time()
+        response = requests.post(url, json=payload, timeout=READINGS_TIMEOUT)
+        elapsed = time.time() - start_time
+        
+        print_info(f"Status Code: {response.status_code} (took {elapsed:.1f}s)")
+        
+        if response.status_code != 200:
+            print_fail(f"Expected status 200, got {response.status_code}")
+            print_info(f"Response: {response.text[:500]}")
+            return False
+        
+        data = response.json()
+        print_info(f"Response keys: {list(data.keys())}")
+        
+        # Check status
+        if data.get('status') != 'ready':
+            print_fail(f"Expected status='ready', got '{data.get('status')}'")
+            return False
+        print_pass("status='ready'")
+        
+        # Check scanned array
+        scanned = data.get('scanned', [])
+        if not isinstance(scanned, list):
+            print_fail(f"Expected scanned to be a list, got {type(scanned)}")
+            return False
+        
+        if 'BTC' not in scanned:
+            print_fail(f"Expected 'BTC' in scanned list, got {scanned}")
+            return False
+        print_pass(f"scanned contains 'BTC': {scanned}")
+        
+        # Check result
+        result = data.get('result')
+        if result is None:
+            print_fail("Missing result field")
+            return False
+        print_pass(f"result field present (type: {type(result)})")
+        
+        print_pass("STEP 4 PASSED - POST scan returns valid response")
+        return True
+        
+    except requests.exceptions.Timeout:
+        print_fail(f"Request timed out after {READINGS_TIMEOUT}s")
+        return False
+    except Exception as e:
+        print_fail(f"Exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def test_step_5_get_recent():
+    """
+    STEP 5: GET /api/v1/alert-engine/recent
+    Expect 200 {status:'ready', alerts:[...]} (array may be empty; that's OK)
+    """
+    print_test("STEP 5: GET /api/v1/alert-engine/recent")
+    
+    try:
+        url = f"{BASE_URL}/v1/alert-engine/recent"
+        print_info(f"GET {url}")
+        
+        response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+        print_info(f"Status Code: {response.status_code}")
+        
+        if response.status_code != 200:
+            print_fail(f"Expected status 200, got {response.status_code}")
+            print_info(f"Response: {response.text[:500]}")
+            return False
+        
+        data = response.json()
+        print_info(f"Response keys: {list(data.keys())}")
+        
+        # Check status
+        if data.get('status') != 'ready':
+            print_fail(f"Expected status='ready', got '{data.get('status')}'")
+            return False
+        print_pass("status='ready'")
+        
+        # Check alerts array
+        alerts = data.get('alerts', [])
+        if not isinstance(alerts, list):
+            print_fail(f"Expected alerts to be a list, got {type(alerts)}")
+            return False
+        print_pass(f"alerts is a list (length: {len(alerts)}, empty is OK)")
+        
+        print_pass("STEP 5 PASSED - GET recent returns valid response")
+        return True
+        
+    except Exception as e:
+        print_fail(f"Exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def test_cleanup_reset_config():
+    """
+    CLEANUP (REQUIRED): POST /api/v1/alert-engine/config to reset defaults
+    Reset to: enabled:true, all signals on, all filters on, volume_mult 1.5, 
+    watchlist all 20 coins, squeeze:true
+    """
+    print_test("CLEANUP: Reset config to defaults")
+    
+    try:
+        url = f"{BASE_URL}/v1/alert-engine/config"
+        
+        # Default settings from backend code
+        payload = {
+            "settings": {
+                "enabled": True,
+                "signals": {
+                    "gmma_crossover": True,
+                    "dip_buy": True,
+                    "squeeze": True,
+                    "rsi_exhaustion": True
+                },
+                "filters": {
+                    "volume": True,
+                    "funding": True,
+                    "netflow": True,
+                    "fng": True
+                },
+                "volume_mult": 1.5,
+                "rsi_low": 30,
+                "rsi_high": 80,
+                "funding_threshold": 0.05,
+                "greed_threshold": 78,
+                "fear_threshold": 22,
+                "watchlist": ["BTC", "ETH", "SOL", "XRP", "ADA", "DOGE", "AVAX", "LINK", 
+                             "DOT", "LTC", "MATIC", "ATOM", "BCH", "XLM", "ETC", "UNI", 
+                             "AAVE", "FIL", "NEAR", "APT"]
+            }
+        }
+        
+        print_info(f"POST {url}")
+        print_info(f"Resetting to defaults...")
+        
+        response = requests.post(url, json=payload, timeout=DEFAULT_TIMEOUT)
+        print_info(f"Status Code: {response.status_code}")
+        
+        if response.status_code != 200:
+            print_fail(f"Expected status 200, got {response.status_code}")
+            print_info(f"Response: {response.text[:500]}")
+            return False
+        
+        print_pass("POST returned 200")
+        
+        # Verify with GET
+        print_info("Verifying reset with GET...")
+        get_response = requests.get(url, timeout=DEFAULT_TIMEOUT)
+        
+        if get_response.status_code != 200:
+            print_fail(f"GET after reset failed with status {get_response.status_code}")
+            return False
+        
+        get_data = get_response.json()
+        settings = get_data.get('settings', {})
+        
+        # Check squeeze is True
+        squeeze = settings.get('signals', {}).get('squeeze')
+        if squeeze is not True:
+            print_fail(f"Expected settings.signals.squeeze=True after reset, got {squeeze}")
+            return False
+        print_pass("settings.signals.squeeze == True (reset confirmed)")
+        
+        # Check watchlist has 20 items
+        watchlist = settings.get('watchlist', [])
+        if len(watchlist) != 20:
+            print_fail(f"Expected watchlist with 20 items after reset, got {len(watchlist)}")
+            return False
+        print_pass(f"settings.watchlist has 20 items (reset confirmed)")
+        
+        print_pass("CLEANUP PASSED - Config reset to defaults")
+        return True
+        
+    except Exception as e:
+        print_fail(f"Exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+def main():
+    print("\n" + "="*80)
+    print("ALERT ENGINE BACKEND TEST")
+    print("Testing 5 Alert Engine endpoints with proper timeout handling")
+    print("="*80)
+    
+    results = []
+    
+    # Run all tests
+    results.append(("STEP 1: GET config", test_step_1_get_config()))
+    results.append(("STEP 2: POST config (modify)", test_step_2_post_config()))
+    results.append(("STEP 3: GET readings (BTC+ETH)", test_step_3_get_readings()))
+    results.append(("STEP 4: POST scan", test_step_4_post_scan()))
+    results.append(("STEP 5: GET recent", test_step_5_get_recent()))
+    results.append(("CLEANUP: Reset config", test_cleanup_reset_config()))
+    
+    # Summary
+    print("\n" + "="*80)
+    print("TEST SUMMARY")
+    print("="*80)
+    
+    passed = sum(1 for _, result in results if result)
+    total = len(results)
+    
+    for test_name, result in results:
+        status = "✅ PASS" if result else "❌ FAIL"
+        print(f"{status}: {test_name}")
+    
+    print(f"\nTotal: {passed}/{total} tests passed")
+    
+    if passed == total:
+        print("\n🎉 ALL TESTS PASSED!")
+        return 0
+    else:
+        print(f"\n⚠️  {total - passed} test(s) failed")
+        return 1
+
+if __name__ == '__main__':
+    sys.exit(main())

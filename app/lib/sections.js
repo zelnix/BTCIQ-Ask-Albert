@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Target, Scale, BarChart3, Globe, History, Waves, Fish, Landmark,
   Gauge, Newspaper, ShieldAlert, CalendarClock, Trophy, MessageCircle, Bell, Activity,
-  Database, Cpu, ShieldCheck, Sparkles, CandlestickChart, ClipboardList, Info, Crosshair,
+  Database, Cpu, ShieldCheck, Sparkles, CandlestickChart, ClipboardList, Info, Crosshair, Radar,
 } from 'lucide-react';
 
 const SECTIONS = [
@@ -11,6 +11,8 @@ const SECTIONS = [
     blurb: 'Chat with Albert, Ask Albert’s HuCentAI Quant Analyst, in plain English — "Why did the score fall?", "What could move Bitcoin next?" — grounded strictly in the live dashboard numbers. He never invents data.' },
   { id: 'strategies', label: 'Trading Strategies', icon: Crosshair,
     blurb: 'Strategies Albert builds and babysits for you — each with an entry, profit targets, a stop and if-this-then-that rules on price, time and signals. Albert nudges you when it’s time to act, paper-tracks the P&L, and keeps a history of how past plays performed. Per coin.' },
+  { id: 'alert-engine', label: 'Alert Engine', icon: Radar,
+    blurb: 'Daily technical signal detectors — GMMA trend crossovers, trend pullback dip-buys, Bollinger volatility squeezes and RSI exhaustion — refined by volume, funding-rate, exchange-netflow and Fear & Greed filters. Scans your watchlist hourly and fires in-app alerts when a signal triggers.' },
   { id: 'overview', label: 'Overview', icon: LayoutDashboard,
     blurb: 'Your 10-second snapshot of Bitcoin right now: the price, the market "mood", one simple score, the near-term odds, how risky things are and how sure the model is. Start here.' },
   { id: 'forecasts', label: 'Forecasts', icon: Target,

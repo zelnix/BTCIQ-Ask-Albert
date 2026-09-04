@@ -4987,6 +4987,9 @@ def _startup():
         # Albert Trading Strategies: track active playbooks, fire nudges & paper-trade fills.
         scheduler.add_job(_strategy_eval_job, 'interval', seconds=60, id='strategy_eval',
                           replace_existing=True, coalesce=True, max_instances=1)
+        # Alert Engine: scan the watchlist's daily signals hourly and fire in-app alerts.
+        scheduler.add_job(_alert_engine_job, 'interval', minutes=60, id='alert_engine',
+                          replace_existing=True, coalesce=True, max_instances=1)
         # Albert self-check: grade his logged buy/sell calls once their horizon elapses.
         scheduler.add_job(_grade_albert_calls, 'interval', minutes=30, id='albert_call_grade')
         # Weekly recap auto-post: drop Albert's recap into the notification bell every Monday.
@@ -8875,6 +8878,400 @@ def albert_strategy_close(sid: str, payload: dict = Body(default={})):
     _persist_strategy(strat)
     strat['perf'] = _strategy_perf(strat, spot)
     return {'status': 'ready', 'strategy': strat}
+
+
+# ============================================================================
+# ALERT ENGINE — daily (1D) technical signal detectors + context filters.
+# Signals: GMMA trend crossover, trend pullback/dip-buy, Bollinger squeeze,
+# RSI exhaustion (+ a volume-spike confirmation filter). Context filters:
+# funding rate, BTC exchange netflow, and Fear & Greed can suppress LONG signals.
+# In-app delivery via push_alert. Signals are structured so they can later plug
+# straight into the strategy engine as triggers.
+# ============================================================================
+import time as _time_mod
+
+alert_engine_col = db['alert_engine']
+
+GMMA_FAST = [3, 5, 8, 10, 12, 15]
+GMMA_SLOW = [30, 35, 40, 45, 50, 60]
+
+ALERT_COIN_PAIRS = {
+    'BTC': [('kraken', 'BTC/USD'), ('coinbase', 'BTC/USD')],
+    'ETH': [('kraken', 'ETH/USD'), ('coinbase', 'ETH/USD')],
+    'SOL': [('kraken', 'SOL/USD'), ('coinbase', 'SOL/USD')],
+    'XRP': [('kraken', 'XRP/USD'), ('coinbase', 'XRP/USD')],
+    'ADA': [('kraken', 'ADA/USD'), ('coinbase', 'ADA/USD')],
+    'DOGE': [('kraken', 'DOGE/USD'), ('coinbase', 'DOGE/USD')],
+    'AVAX': [('kraken', 'AVAX/USD'), ('coinbase', 'AVAX/USD')],
+    'LINK': [('kraken', 'LINK/USD'), ('coinbase', 'LINK/USD')],
+    'DOT': [('kraken', 'DOT/USD'), ('coinbase', 'DOT/USD')],
+    'LTC': [('kraken', 'LTC/USD'), ('coinbase', 'LTC/USD')],
+    'MATIC': [('kraken', 'MATIC/USD'), ('coinbase', 'MATIC/USD')],
+    'ATOM': [('kraken', 'ATOM/USD'), ('coinbase', 'ATOM/USD')],
+    'BCH': [('kraken', 'BCH/USD'), ('coinbase', 'BCH/USD')],
+    'XLM': [('kraken', 'XLM/USD'), ('coinbase', 'XLM/USD')],
+    'ETC': [('kraken', 'ETC/USD'), ('coinbase', 'ETC/USD')],
+    'UNI': [('kraken', 'UNI/USD'), ('coinbase', 'UNI/USD')],
+    'AAVE': [('kraken', 'AAVE/USD'), ('coinbase', 'AAVE/USD')],
+    'FIL': [('kraken', 'FIL/USD'), ('coinbase', 'FIL/USD')],
+    'NEAR': [('kraken', 'NEAR/USD'), ('coinbase', 'NEAR/USD')],
+    'APT': [('kraken', 'APT/USD'), ('coinbase', 'APT/USD')],
+}
+ALERT_COIN_NAMES = {
+    'BTC': 'Bitcoin', 'ETH': 'Ethereum', 'SOL': 'Solana', 'XRP': 'XRP', 'ADA': 'Cardano',
+    'DOGE': 'Dogecoin', 'AVAX': 'Avalanche', 'LINK': 'Chainlink', 'DOT': 'Polkadot', 'LTC': 'Litecoin',
+    'MATIC': 'Polygon', 'ATOM': 'Cosmos', 'BCH': 'Bitcoin Cash', 'XLM': 'Stellar', 'ETC': 'Ethereum Classic',
+    'UNI': 'Uniswap', 'AAVE': 'Aave', 'FIL': 'Filecoin', 'NEAR': 'NEAR', 'APT': 'Aptos',
+}
+ALERT_COINS = list(ALERT_COIN_PAIRS.keys())
+
+ALERT_ENGINE_DEFAULTS = {
+    'enabled': True,
+    'timeframe': '1D',
+    'signals': {'gmma_crossover': True, 'dip_buy': True, 'squeeze': True, 'rsi_exhaustion': True},
+    'filters': {'volume': True, 'funding': True, 'netflow': True, 'fng': True},
+    'volume_mult': 1.5,
+    'rsi_low': 30, 'rsi_high': 80,
+    'funding_threshold': 0.05,   # % per interval — above this, suppress longs
+    'greed_threshold': 78, 'fear_threshold': 22,
+    'squeeze_lookback': 30,
+    'watchlist': ALERT_COINS[:],
+}
+
+_OHLCV_CACHE = {}   # sym -> (ts, df)
+_OHLCV_TTL = 3 * 3600
+
+
+def _get_alert_settings():
+    try:
+        doc = insights_col.find_one({'_id': 'cfg:alert_engine'}, {'_id': 0}) or {}
+    except Exception:
+        doc = {}
+    st = json.loads(json.dumps(ALERT_ENGINE_DEFAULTS))
+    for k, v in (doc.get('settings') or {}).items():
+        if isinstance(v, dict) and isinstance(st.get(k), dict):
+            st[k].update(v)
+        else:
+            st[k] = v
+    # sanitise watchlist to known coins
+    st['watchlist'] = [c for c in (st.get('watchlist') or ALERT_COINS) if c in ALERT_COIN_PAIRS] or ALERT_COINS[:]
+    return st
+
+
+def _save_alert_settings(patch):
+    st = _get_alert_settings()
+    for k, v in (patch or {}).items():
+        if isinstance(v, dict) and isinstance(st.get(k), dict):
+            st[k].update(v)
+        else:
+            st[k] = v
+    st['watchlist'] = [c for c in (st.get('watchlist') or ALERT_COINS) if c in ALERT_COIN_PAIRS] or ALERT_COINS[:]
+    insights_col.update_one({'_id': 'cfg:alert_engine'},
+                            {'$set': {'_id': 'cfg:alert_engine', 'kind': 'config', 'settings': st,
+                                      'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+    return st
+
+
+def _daily_ohlcv(symbol, limit=320):
+    sym = (symbol or 'BTC').upper()
+    now = _time_mod.time()
+    c = _OHLCV_CACHE.get(sym)
+    if c and (now - c[0]) < _OHLCV_TTL:
+        return c[1]
+    if sym == 'BTC':
+        try:
+            df, _src = fetch_ohlcv()
+            df = df.tail(limit).reset_index(drop=True)
+            _OHLCV_CACHE[sym] = (now, df)
+            return df
+        except Exception:  # noqa
+            pass
+    for name, pair in ALERT_COIN_PAIRS.get(sym, []):
+        try:
+            ex = getattr(ccxt, name)({'enableRateLimit': True})
+            bars = ex.fetch_ohlcv(pair, timeframe='1d', limit=limit)
+            if bars and len(bars) > 80:
+                df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df = df.sort_values('timestamp').reset_index(drop=True)
+                _OHLCV_CACHE[sym] = (now, df)
+                return df
+        except Exception:  # noqa
+            continue
+    return None
+
+
+def _bollinger_width(close, n=20, k=2):
+    mid = close.rolling(n).mean()
+    std = close.rolling(n).std()
+    upper = mid + k * std
+    lower = mid - k * std
+    return ((upper - lower) / mid.replace(0, np.nan)) * 100.0  # width as % of mid
+
+
+def compute_alert_signals(symbol, settings=None):
+    """Compute daily technical readings + which signal detectors are active on the last close."""
+    st = settings or _get_alert_settings()
+    df = _daily_ohlcv(symbol)
+    if df is None or len(df) < 70:
+        return None
+    close = df['close']
+    fast_e = {s: _ema(close, s) for s in GMMA_FAST}
+    slow_e = {s: _ema(close, s) for s in GMMA_SLOW}
+
+    def gmma_state(i):
+        fvals = [fast_e[s].iloc[i] for s in GMMA_FAST]
+        svals = [slow_e[s].iloc[i] for s in GMMA_SLOW]
+        if min(fvals) > max(svals):
+            return 'bull'
+        if max(fvals) < min(svals):
+            return 'bear'
+        return 'mixed'
+
+    state = gmma_state(-1)
+    prev = gmma_state(-2)
+    crossover = None
+    if state == 'bull' and prev != 'bull':
+        crossover = 'bullish'
+    elif state == 'bear' and prev != 'bear':
+        crossover = 'bearish'
+
+    price = float(close.iloc[-1])
+    slow_top = max(slow_e[s].iloc[-1] for s in GMMA_SLOW)
+    slow_bot = min(slow_e[s].iloc[-1] for s in GMMA_SLOW)
+    slow_spread_pct = round((slow_top - slow_bot) / price * 100, 2) if price else 0
+    expanded_bull = bool(state == 'bull' and slow_e[60].iloc[-1] > slow_e[60].iloc[-6])
+
+    last = df.iloc[-1]
+    green = bool(last['close'] > last['open'])
+    touched = bool(last['low'] <= slow_top * 1.01)
+    recovered = bool(last['close'] > slow_top)
+    dip_buy = bool(expanded_bull and touched and green and recovered)
+
+    bbw = _bollinger_width(close, 20, 2)
+    cur_bbw = float(bbw.iloc[-1])
+    lookback = int(st.get('squeeze_lookback', 30))
+    recent = bbw.iloc[-lookback:]
+    squeeze = bool(cur_bbw <= float(recent.min()) * 1.03)
+    bbw_pct = round(float((recent < cur_bbw).mean()) * 100, 0)
+
+    rsi = _rsi(close, 14)
+    rsi_v = round(float(rsi.iloc[-1]), 1)
+    rsi_low = st.get('rsi_low', 30)
+    rsi_high = st.get('rsi_high', 80)
+    rsi_oversold = bool(rsi_v < rsi_low)
+    rsi_overbought = bool(rsi_v > rsi_high)
+
+    vol = df['volume']
+    vma = vol.rolling(20).mean()
+    vol_ratio = None
+    try:
+        if vma.iloc[-1] and vma.iloc[-1] > 0:
+            vol_ratio = round(float(vol.iloc[-1] / vma.iloc[-1]), 2)
+    except Exception:
+        vol_ratio = None
+
+    candle_date = df['timestamp'].iloc[-1].strftime('%Y-%m-%d')
+    return {
+        'symbol': (symbol or 'BTC').upper(), 'price': round(price, 4), 'candle_date': candle_date,
+        'gmma_state': state, 'gmma_prev': prev, 'crossover': crossover,
+        'slow_ribbon_top': round(slow_top, 4), 'slow_ribbon_bot': round(slow_bot, 4),
+        'slow_spread_pct': slow_spread_pct, 'expanded_bull': expanded_bull,
+        'dip_buy': dip_buy, 'green_candle': green,
+        'bb_width_pct': round(cur_bbw, 3), 'bb_width_percentile': bbw_pct, 'squeeze': squeeze,
+        'rsi': rsi_v, 'rsi_oversold': rsi_oversold, 'rsi_overbought': rsi_overbought,
+        'vol_ratio': vol_ratio,
+    }
+
+
+def compute_alert_filters(symbol, settings=None):
+    st = settings or _get_alert_settings()
+    sym = (symbol or 'BTC').upper()
+    out = {'funding': None, 'funding_suppress_long': False,
+           'fng_value': None, 'fng_label': None, 'fng_suppress_long': False, 'fng_accumulate': False,
+           'netflow_available': False, 'netflow_net7d': None, 'netflow_warning': False}
+    try:
+        fr = _okx('/api/v5/public/funding-rate', {'instId': f'{sym}-USDT-SWAP'})
+        if fr:
+            rate = float(fr[0]['fundingRate']) * 100
+            out['funding'] = round(rate, 4)
+            out['funding_suppress_long'] = bool(rate > st.get('funding_threshold', 0.05))
+    except Exception:  # noqa
+        pass
+    try:
+        fg = compute_fear_greed()
+        if fg:
+            out['fng_value'] = fg['value']
+            out['fng_label'] = fg['label']
+            out['fng_suppress_long'] = bool(fg['value'] >= st.get('greed_threshold', 78))
+            out['fng_accumulate'] = bool(fg['value'] <= st.get('fear_threshold', 22))
+    except Exception:  # noqa
+        pass
+    if sym == 'BTC':
+        try:
+            ef = compute_exchange_flows()
+            if ef:
+                out['netflow_available'] = True
+                out['netflow_net7d'] = ef.get('net_7d')
+                out['netflow_warning'] = bool((ef.get('net_7d') or 0) > 200)
+        except Exception:  # noqa
+            pass
+    return out
+
+
+def _long_suppression(filters, st):
+    reasons = []
+    f = st.get('filters', {})
+    if f.get('funding') and filters.get('funding_suppress_long'):
+        reasons.append(f"funding hot ({filters.get('funding')}%)")
+    if f.get('fng') and filters.get('fng_suppress_long'):
+        reasons.append(f"extreme greed ({filters.get('fng_value')})")
+    if f.get('netflow') and filters.get('netflow_warning'):
+        reasons.append(f"BTC exchange inflows (+{filters.get('netflow_net7d')} BTC/7d)")
+    return reasons
+
+
+def _scan_symbol(symbol, settings=None, fire=False):
+    """Compute signals + filters for a coin, decide which alerts fire, persist readings,
+    and (optionally) push in-app alerts. Returns the readings/decision dict."""
+    st = settings or _get_alert_settings()
+    sym = (symbol or 'BTC').upper()
+    sig = compute_alert_signals(sym, st)
+    if not sig:
+        return {'symbol': sym, 'error': 'no_data'}
+    filt = compute_alert_filters(sym, st)
+    sigs_on = st.get('signals', {})
+    fcfg = st.get('filters', {})
+    name = ALERT_COIN_NAMES.get(sym, sym)
+    long_block = _long_suppression(filt, st)
+    fired = []      # alerts that WILL fire
+    candidates = [] # everything detected (for UI), incl. suppressed w/ reason
+
+    def add(key, direction, severity, title, message, blocked=None):
+        item = {'key': key, 'direction': direction, 'severity': severity, 'title': title,
+                'message': message, 'blocked': blocked or []}
+        candidates.append(item)
+        if not blocked:
+            fired.append(item)
+
+    # 1) GMMA crossover
+    if sigs_on.get('gmma_crossover') and sig['crossover']:
+        vol_ok = (not fcfg.get('volume')) or (sig.get('vol_ratio') is not None and sig['vol_ratio'] >= st.get('volume_mult', 1.5))
+        if sig['crossover'] == 'bullish':
+            blocked = list(long_block)
+            if not vol_ok:
+                blocked.append(f"volume unconfirmed ({sig.get('vol_ratio')}x < {st.get('volume_mult',1.5)}x)")
+            boost = ' High-conviction: extreme fear.' if filt.get('fng_accumulate') else ''
+            add('gmma_crossover', 'long', 'high', f"{sym} · GMMA bullish crossover (Daily)",
+                f"{name}'s fast EMA ribbon (3–15) crossed fully ABOVE the slow ribbon (30–60) — a macro shift into expansion. Price ${sig['price']:,.4g}.{boost}", blocked)
+        else:
+            vol_block = [] if vol_ok else [f"volume unconfirmed ({sig.get('vol_ratio')}x < {st.get('volume_mult',1.5)}x)"]
+            add('gmma_crossover', 'short', 'high', f"{sym} · GMMA bearish crossover (Daily)",
+                f"{name}'s fast EMA ribbon (3–15) crossed fully BELOW the slow ribbon (30–60) — a macro shift into contraction. Price ${sig['price']:,.4g}.", vol_block)
+
+    # 2) Dip-buy / pullback (long only)
+    if sigs_on.get('dip_buy') and sig['dip_buy']:
+        boost = ' High-conviction: extreme fear.' if filt.get('fng_accumulate') else ''
+        add('dip_buy', 'long', 'medium', f"{sym} · Trend pullback dip-buy (Daily)",
+            f"In an expanded bull ribbon, {name} pulled back to the slow investor ribbon (~${sig['slow_ribbon_top']:,.4g}) and printed a green recovery candle — a high-probability continuation entry.{boost}", list(long_block))
+
+    # 3) Bollinger squeeze (neutral / volatility warning)
+    if sigs_on.get('squeeze') and sig['squeeze']:
+        add('squeeze', 'neutral', 'medium', f"{sym} · Volatility squeeze (Daily)",
+            f"{name}'s Bollinger Bands have compressed to a ~{int(sig['bb_width_pct'] and sig['bb_width_percentile'])}th-percentile multi-week low (width {sig['bb_width_pct']}%). The market is coiling — watch for an impending expansion.")
+
+    # 4) RSI exhaustion
+    if sigs_on.get('rsi_exhaustion'):
+        if sig['rsi_oversold']:
+            boost = ' Extreme fear adds conviction.' if filt.get('fng_accumulate') else ''
+            add('rsi_oversold', 'long', 'medium', f"{sym} · RSI oversold (Daily)",
+                f"{name}'s 14-day RSI is {sig['rsi']} (< {st.get('rsi_low',30)}) — stretched to the downside; watch for a mean-reversion / capitulation bottom.{boost}", list(long_block))
+        elif sig['rsi_overbought']:
+            add('rsi_overbought', 'short', 'medium', f"{sym} · RSI overbought (Daily)",
+                f"{name}'s 14-day RSI is {sig['rsi']} (> {st.get('rsi_high',80)}) — running too hot; a local top / cooldown is increasingly likely.")
+
+    now = datetime.datetime.utcnow().isoformat()
+    doc = alert_engine_col.find_one({'_id': sym}) or {}
+    already = set(doc.get('fired_sigs', []))
+    pushed = []
+    if fire:
+        for it in fired:
+            sigkey = f"{sym}-{it['key']}-{sig['candle_date']}-{it['direction']}"
+            if sigkey in already:
+                continue
+            push_alert('signal', it['severity'], it['title'], it['message'], sigkey, sym)
+            already.add(sigkey)
+            pushed.append(sigkey)
+    alert_engine_col.update_one({'_id': sym}, {'$set': {
+        '_id': sym, 'symbol': sym, 'name': name, 'updated_at': now,
+        'readings': sig, 'filters': filt, 'candidates': candidates,
+        'fired_sigs': list(already)[-60:],
+    }}, upsert=True)
+    return {'symbol': sym, 'name': name, 'readings': sig, 'filters': filt,
+            'candidates': candidates, 'fired': [f['key'] for f in fired], 'pushed': pushed,
+            'long_block': long_block}
+
+
+def _alert_engine_job():
+    st = _get_alert_settings()
+    if not st.get('enabled'):
+        return
+    for sym in st.get('watchlist', []):
+        try:
+            _scan_symbol(sym, st, fire=True)
+        except Exception:  # noqa
+            traceback.print_exc()
+
+
+@app.get('/api/v1/alert-engine/config')
+def alert_engine_config():
+    st = _get_alert_settings()
+    coins = [{'symbol': c, 'name': ALERT_COIN_NAMES.get(c, c)} for c in ALERT_COINS]
+    return {'status': 'ready', 'settings': st, 'coins': coins,
+            'netflow_note': 'Exchange netflow filter is BTC-only until an on-chain (Glassnode) key is added.'}
+
+
+@app.post('/api/v1/alert-engine/config')
+def alert_engine_config_save(payload: dict = Body(...)):
+    st = _save_alert_settings(payload.get('settings') or payload)
+    return {'status': 'ready', 'settings': st}
+
+
+@app.get('/api/v1/alert-engine/readings')
+def alert_engine_readings(symbol: str = 'BTC'):
+    sym = (symbol or 'BTC').upper()
+    if sym not in ALERT_COIN_PAIRS:
+        return JSONResponse({'status': 'error', 'message': 'unknown symbol'}, status_code=400)
+    res = _scan_symbol(sym, fire=False)
+    return {'status': 'ready', **res}
+
+
+@app.post('/api/v1/alert-engine/scan')
+def alert_engine_scan(payload: dict = Body(default={})):
+    """Manually run a scan now. Optional {symbol} to scan one coin (fires alerts)."""
+    st = _get_alert_settings()
+    sym = (payload.get('symbol') or '').upper()
+    if sym and sym in ALERT_COIN_PAIRS:
+        res = _scan_symbol(sym, st, fire=True)
+        return {'status': 'ready', 'scanned': [sym], 'result': res}
+    scanned = []
+    for s in st.get('watchlist', []):
+        try:
+            _scan_symbol(s, st, fire=True)
+            scanned.append(s)
+        except Exception:  # noqa
+            traceback.print_exc()
+    return {'status': 'ready', 'scanned': scanned}
+
+
+@app.get('/api/v1/alert-engine/recent')
+def alert_engine_recent(limit: int = 30):
+    try:
+        rows = list(smart_alerts_col.find({'category': 'signal'}, {'_id': 0}).sort('ts', -1).limit(int(limit)))
+    except Exception:  # noqa
+        rows = []
+    return {'status': 'ready', 'alerts': rows}
+
 
 
 
