@@ -60,6 +60,7 @@ from config import (
     email_recipients_col, email_log_col, email_settings_col,
     PUBLIC_BASE_URL, UNSUB_SECRET, WEEKLY_HOUR, WEEKLY_MINUTE, regime_col,
     portfolio_col, price_watch_col, albert_calls_col, recap_col, mandate_col,
+    paper_portfolio_col,
     users_col, auth_sessions_col, GOOGLE_CLIENT_ID,
 )
 from email_service import send_email, resend_configured
@@ -7675,7 +7676,9 @@ def albert_save_mandate(payload: dict = Body(...)):
 
 
 def _portfolio_summary(pid):
-    doc = portfolio_col.find_one({'_id': pid}) or {}
+    # Phase E: once paper fills exist, the engine consumes the materialized PAPER
+    # portfolio (baseline + ledger). Manual portfolio_col is the untouched baseline.
+    doc = paper_portfolio_col.find_one({'_id': pid}) or portfolio_col.find_one({'_id': pid}) or {}
     positions = doc.get('positions') or []
     usdc = _num(doc.get('usdc')) or 0.0
     m = _get_mandate(pid)
@@ -7721,6 +7724,8 @@ from albert.engine import regime as _albert_regime_mod  # noqa: E402
 from albert.engine import scoring as _albert_scoring_mod  # noqa: E402
 from albert.engine import decision as _albert_decision_mod  # noqa: E402
 from albert.repositories import decision_history as _decision_history_repo  # noqa: E402
+from albert.execution import manager as _order_mgr  # noqa: E402
+from albert.execution import ledger as _paper_ledger  # noqa: E402
 from albert.engine.constants import (  # noqa: E402,F401
     ALBERT_ENGINE_VERSION, REGIME_BUY_THRESHOLD as _REGIME_BUY_THRESHOLD,
     REGIME_DEPLOY_CEILING as _REGIME_DEPLOY_CEILING, ALBERT_UNIVERSE as _ALBERT_UNIVERSE,
@@ -7874,6 +7879,113 @@ def albert_explain_call(payload: dict = Body(...)):
     # The snapshot is returned UNCHANGED alongside the explanation (LLM cannot mutate it).
     return {'status': 'ready', 'explanation': text, 'decision': env, 'source': source,
             'model': _model_for('chat_standard')}
+
+
+# ============================================================================
+# Phase E — Paper Order Manager endpoints (paper-only; LLM strictly read-only)
+# ============================================================================
+@app.post('/api/v1/albert/order/create')
+def albert_order_create(payload: dict = Body(...)):
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    asset = (str(payload.get('asset') or '')).strip()
+    idem = (str(payload.get('idempotencyKey') or '')).strip()
+    if not pid or not asset or not idem:
+        return {'status': 'error', 'error': 'pid, asset and idempotencyKey are required'}
+    return _order_mgr.create_intent(pid, asset, idem, slippage_bps=payload.get('slippageBps'),
+                                    portfolio_id=(payload.get('portfolioId') or 'default'),
+                                    account_id=(payload.get('accountId') or 'paper'))
+
+
+@app.post('/api/v1/albert/order/{order_id}/confirm')
+def albert_order_confirm(order_id: str):
+    return _order_mgr.confirm(order_id)
+
+
+@app.post('/api/v1/albert/order/{order_id}/execute')
+def albert_order_execute(order_id: str, payload: dict = Body(default={})):
+    q = (payload or {}).get('simulateFillQty')
+    return _order_mgr.execute(order_id, simulate_fill_qty=q)
+
+
+@app.post('/api/v1/albert/order/{order_id}/cancel')
+def albert_order_cancel(order_id: str):
+    return _order_mgr.cancel(order_id)
+
+
+@app.get('/api/v1/albert/order/{order_id}')
+def albert_order_get(order_id: str):
+    intent = _order_mgr.get_intent(order_id)
+    if not intent:
+        return {'status': 'not_found'}
+    return {'status': 'ready', 'intent': intent, 'audit': _order_mgr.get_audit(order_id)}
+
+
+@app.get('/api/v1/albert/orders')
+def albert_orders_list(pid: str = '', limit: int = 50):
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    return {'status': 'ready', 'orders': _order_mgr.list_intents(pid, limit=limit)}
+
+
+@app.get('/api/v1/albert/paper-portfolio')
+def albert_paper_portfolio(pid: str = '', accountId: str = 'paper'):
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    materialized = _paper_ledger.materialize(pid, accountId)
+    recon = _paper_ledger.reconcile(pid, accountId)
+    return {'status': 'ready', 'paperPortfolio': materialized, 'reconciliation': recon}
+
+
+@app.post('/api/v1/albert/paper-reset')
+def albert_paper_reset(payload: dict = Body(...)):
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    _paper_ledger.reset(pid, payload.get('accountId') or 'paper')
+    return {'status': 'reset'}
+
+
+EXPLAIN_ORDER_SYSTEM = (
+    "You are Albert. You are given ONE frozen paper OrderIntent (and its audit/fills) as read-only JSON. "
+    "EXPLAIN ONLY. You may explain: why the order exists (its reasonCode + decision), the exact quantity/amount, "
+    "the price limits and slippage tolerance, why it was rejected (e.g. STALE_DECISION means the engine's numbers "
+    "moved so a fresh intent is required; SLIPPAGE_EXCEEDED means execution price breached the limit), partial "
+    "fills, and why a new intent must be created after a terminal state. ABSOLUTE RULES: never invent or change "
+    "any number, price, quantity, state, or limit; never suggest you can create/confirm/execute/cancel/amend an "
+    "order — you cannot. Use the exact figures given. Do not output JSON."
+)
+
+
+@app.post('/api/v1/albert/explain-order-intent')
+def albert_explain_order(payload: dict = Body(...)):
+    order_id = (str(payload.get('orderIntentId') or '')).strip()
+    question = (str(payload.get('question') or '')).strip()[:400]
+    intent = _order_mgr.get_intent(order_id)
+    if not intent:
+        return {'status': 'not_found'}
+    audit = _order_mgr.get_audit(order_id)
+    dto = {'intent': intent, 'audit': audit}
+    if not (LLM_READY_KEY and _HAS_LLM):
+        return {'status': 'ready', 'explanation': '', 'intent': intent, 'audit': audit, 'error': 'LLM not configured'}
+    try:
+        q = ('Explain this order intent.' if not question else question)
+        prompt = 'Frozen paper OrderIntent + audit (read-only JSON):\n' + json.dumps(dto, default=str) + '\n\nUser question: ' + q
+
+        def _call():
+            async def _go():
+                chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'explain-order-{order_id}', system_message=EXPLAIN_ORDER_SYSTEM)
+                        .with_model('gemini', _model_for('chat_standard')).with_params(temperature=0.2, max_tokens=3000))
+                return await chat.send_message(UserMessage(text=prompt))
+            return asyncio.run(_go())
+        reply = _LLM_POOL.submit(_call).result(timeout=60)
+        text = reply.strip() if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '').strip()
+    except Exception:  # noqa
+        traceback.print_exc()
+        text = ''
+    # OrderIntent returned UNCHANGED alongside the explanation (LLM cannot mutate it).
+    return {'status': 'ready', 'explanation': text, 'intent': intent, 'audit': audit, 'model': _model_for('chat_standard')}
 
 
 @app.get('/api/v1/albert/deployment-plan')

@@ -97,6 +97,24 @@ try:
 except Exception:  # noqa
     pass
 
+# Phase E: paper-only Execution Safety Layer (Paper Order Manager)
+order_intents_col = db['albert_order_intents']       # frozen OrderIntents + state
+order_ledger_col = db['albert_paper_ledger']         # append-only paper fills
+order_audit_col = db['albert_order_audit']           # append-only state-transition audit trail
+paper_portfolio_col = db['albert_paper_portfolio']   # materialized paper portfolio (baseline + ledger); engine reads this when present
+try:
+    order_intents_col.create_index([('idempotencyScope', 1)], unique=True)
+    order_intents_col.create_index([('pid', 1), ('state', 1), ('createdAt', -1)])
+    order_ledger_col.create_index([('pid', 1), ('accountId', 1), ('ts', 1)])
+    order_audit_col.create_index([('orderIntentId', 1), ('ts', 1)])
+    paper_portfolio_col.create_index('pid')
+except Exception:  # noqa
+    pass
+
+# Phase E constants
+ORDER_TTL_SECONDS = 300              # 5-minute TTL from intent createdAt
+DEFAULT_SLIPPAGE_BPS = 50            # 0.50% default price tolerance
+
 # ---- Native Google Sign-In (GIS ID-token flow) ----
 users_col = db['users']            # {_id(uuid), google_sub, email, name, picture, created_at, updated_at}
 auth_sessions_col = db['auth_sessions']  # {_id(uuid), token, user_id, created_at, expires_at}

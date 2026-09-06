@@ -114,7 +114,164 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
-  - task: "Albert's Plan Phase D2 — flip conditions, immutable decision snapshot (+hash), discovery/eligibility, Ask-Albert explain, decision-change history"
+  - task: "Albert's Plan Phase E — paper-only Execution Safety Layer (Paper Order Manager)"
+    implemented: true
+    working: true
+    file: "backend/albert/execution/*.py, backend/server.py, backend/config.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          PHASE E — paper-only Execution Safety Layer (no exchange transmission). Hard line preserved:
+          DecisionSnapshot -> frozen OrderIntent -> Confirmation -> Paper Order -> Fill -> Ledger -> Paper Portfolio
+          -> next Albert decision. LLM strictly OUTSIDE the state machine (read-only explain only).
+          MODULES: albert/execution/state_machine.py (states + LEGAL transitions + immutable TERMINAL),
+          albert/execution/ledger.py (append-only fills, materialize paper portfolio = baseline+ledger, reconcile,
+          reset), albert/execution/manager.py (create/confirm/execute/cancel/sweep + staleness + audit).
+          STATE MACHINE: DRAFT->PENDING_CONFIRMATION->CONFIRMED->WORKING->(PARTIALLY_FILLED)->FILLED, with
+          CANCELLED/REJECTED/EXPIRED reachable per spec; terminal states immutable (no resurrection/retry/amend).
+          FROZEN OrderIntent carries orderIntentId, pid, portfolioId, accountId, decisionId, snapshotId,
+          decisionInputsHash, engineVersion, side, quantity, amountUsd, reasonCode, referencePrice,
+          slippageToleranceBps, maxBuyPrice/minSellPrice, createdAt, expiresAt(=createdAt+5min), idempotencyKey,
+          state. Confirmation approves exactly that frozen intent (no resize/reprice/side change).
+          STALENESS: both CONFIRM and EXECUTE re-resolve the current deterministic decision and require EXACT match
+          on decisionInputsHash + engineVersion (no tolerance window); mismatch -> REJECTED reason STALE_DECISION.
+          IDEMPOTENCY scope = pid|portfolioId|accountId|idempotencyKey (duplicate returns existing intent, never
+          double-orders). TTL from createdAt, enforced synchronously at confirm+execute (sweep is best-effort only).
+          FILLS: deterministic immediate full fill within tolerance; partial fills ONLY via explicit
+          simulateFillQty (no probabilistic liquidity). Direction-aware slippage: BUY spot<=maxBuyPrice,
+          SELL spot>=minSellPrice, else REJECTED SLIPPAGE_EXCEEDED. Audit trail records decisionPrice, executionSpot,
+          slippageToleranceBps, actualSlippageBps, allowedMax/MinPrice, fillQuantity, fillUsd, remainingQuantity,
+          rejectionReason, ts, stateBefore/After. LEDGER boundary frozen: order/fill code only appends ledger; a
+          separate materialize() derives the paper portfolio the engine consumes (portfolio_col baseline is never
+          mutated by order code). reconcile() surfaces ledger-vs-projection divergence (never silently fixes).
+          ENDPOINTS (all /api/v1/albert): POST order/create, POST order/{id}/confirm, POST order/{id}/execute
+          {simulateFillQty?}, POST order/{id}/cancel, GET order/{id} (+audit), GET orders?pid=, GET paper-portfolio
+          (materialize+reconcile), POST paper-reset, POST explain-order-intent (READ-ONLY: returns intent unchanged
+          + LLM prose, no mutate path). _portfolio_summary now reads paper_portfolio_col when present (fills feed the
+          next decision); pids without paper activity are unaffected (D0-D2 regression safe).
+          LOCAL TESTS by main: 35/35 PASS covering every completion gate — illegal transition rejected; terminal
+          immutable (confirm/cancel/execute all rejected after FILLED); idempotency no double-fill (ledger=1);
+          stale independently at confirm AND execute; expired cannot be revived; BUY & SELL directional slippage;
+          full fill reconciles through ledger; partial-fill -> PARTIALLY_FILLED -> FILLED (2 fills); divergence
+          surfaced; cancel from PENDING/CONFIRMED/PARTIALLY_FILLED; fills change Albert's next portfolio view;
+          explain-order-intent read-only. Advisory/PAPER only — no exchange transmission.
+          PLEASE RETEST (backend only, external /api base, FRESH pids, clean up mandate_col/portfolio_col/
+          decision_*_col/order_intents_col/order_ledger_col/order_audit_col/paper_portfolio_col):
+          A) create->confirm->execute a BUY (approved coin, deployable USDC) reaches FILLED; paper-portfolio shows
+             the new position + reconciliation ok; portfolio-summary now lists it; FILLED is terminal (confirm/
+             cancel/execute all error TERMINAL_STATE); ledger has exactly 1 fill.
+          B) idempotency: same idempotencyKey returns the same orderIntentId; only 1 intent stored.
+          C) staleness: after create, change the portfolio then confirm -> REJECTED STALE_DECISION. Separately:
+             confirm ok, THEN change portfolio, execute -> REJECTED STALE_DECISION (independent at both).
+          D) expiry: confirm, force expiresAt to the past, execute -> EXPIRED; confirm afterwards -> TERMINAL_STATE.
+          E) slippage: force maxBuyPrice below spot -> execute REJECTED SLIPPAGE_EXCEEDED (BUY); create a SELL
+             (hold an excluded coin), force minSellPrice above spot -> REJECTED SLIPPAGE_EXCEEDED (SELL).
+          F) partial fills: execute with simulateFillQty < quantity -> PARTIALLY_FILLED (remaining>0); execute again
+             -> FILLED (2 ledger fills). Cancel works from PENDING, CONFIRMED, and PARTIALLY_FILLED.
+          G) explain-order-intent returns the intent UNCHANGED (same id/state/amountUsd) with non-empty prose.
+          Illegal transitions (e.g. execute while PENDING) must error ILLEGAL_STATE.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Phase E backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ALL 8 TESTS PASSED (8/8): Tests A-H as specified in review request.
+          
+          TEST A - HAPPY FULL FILL: ✅ PASSED
+          • Created BUY intent for ETH: orderIntentId=302b8ac4-..., state=PENDING_CONFIRMATION ✅
+          • Intent has all required fields: decisionInputsHash, engineVersion, referencePrice, maxBuyPrice, expiresAt ✅
+          • Execute BEFORE confirm correctly rejected: ILLEGAL_STATE ✅
+          • Confirm successful: state=CONFIRMED ✅
+          • Execute successful: status=filled, state=FILLED ✅
+          • Fill facts present: decisionPrice=2480.62, executionSpot=2481.74, actualSlippageBps=4.52, fillQuantity=0.659621385, 
+            fillUsd=1637.01, remainingQuantity=0.0 ✅
+          • Paper portfolio contains ETH, reconciliation.ok=True ✅
+          • Portfolio summary now includes ETH (fills feed the engine) ✅
+          • FILLED is terminal: confirm/cancel/execute all rejected with TERMINAL_STATE ✅
+          • Ledger has exactly ONE fill (no double-fill) ✅
+          
+          TEST B - IDEMPOTENCY: ✅ PASSED
+          • First create: orderIntentId=c73ce76c-... ✅
+          • Second create with SAME idempotencyKey: status='exists', same orderIntentId=c73ce76c-... ✅
+          • Only ONE intent exists for pid+idempotencyKey ✅
+          
+          TEST C - STALENESS AT CONFIRM: ✅ PASSED
+          • Created intent: orderIntentId=6c8340ca-... ✅
+          • Changed portfolio (usdc=60000, added BTC position) ✅
+          • Confirm correctly rejected: status=rejected, reason=STALE_DECISION, state=REJECTED ✅
+          
+          TEST D - STALENESS AT EXECUTE: ✅ PASSED
+          • Created and confirmed intent: orderIntentId=4b31cd35-... ✅
+          • Changed portfolio (usdc=70000, added ETH position) ✅
+          • Execute correctly rejected: status=rejected, reason=STALE_DECISION ✅
+          • Staleness checked independently at both CONFIRM and EXECUTE ✅
+          
+          TEST E - EXPIRY: ✅ PASSED
+          • Created intent: orderIntentId=103f016a-..., createdAt=2026-09-06T16:12:06.781117, 
+            expiresAt=2026-09-06T16:17:06.781117 ✅
+          • TTL verified: 300.0s (~300s expected, 5 minutes) ✅
+          • Confirmed successfully ✅
+          • Patched MongoDB to set expiresAt to past (2020-09-06T16:12:06.977065) ✅
+          • Execute correctly returned: status=expired, reason=EXPIRED, state=EXPIRED ✅
+          • Confirm after EXPIRED correctly rejected: TERMINAL_STATE ✅
+          
+          TEST F - DIRECTIONAL SLIPPAGE: ✅ PASSED (2/2 sub-tests)
+          • F1 - BUY Slippage: Created BUY intent for ETH, side=BUY, referencePrice=2480.62, maxBuyPrice=2493.0231 ✅
+            maxBuyPrice verified: ≈ referencePrice * (1 + 50bps/10000) ✅. Confirmed. Patched maxBuyPrice=1.0. 
+            Execute correctly rejected: status=rejected, reason=SLIPPAGE_EXCEEDED ✅
+          • F2 - SELL Slippage: Setup with excluded DOGE (mandate excluded_coins=[DOGE], portfolio holding 5000 DOGE @ 0.1) ✅
+            Created SELL intent for DOGE, side=SELL, referencePrice=0.089689, minSellPrice=0.08924055 ✅
+            minSellPrice verified: ≈ referencePrice * (1 - 50bps/10000) ✅. Confirmed. Patched minSellPrice=1e12. 
+            Execute correctly rejected: status=rejected, reason=SLIPPAGE_EXCEEDED ✅
+          • Direction-aware slippage working correctly: BUY checks spot<=maxBuyPrice, SELL checks spot>=minSellPrice ✅
+          
+          TEST G - PARTIAL FILL + CANCEL: ✅ PASSED (2/2 parts)
+          • G1 - Partial Fill: Created and confirmed BUY intent, quantity=0.659621385 ✅
+            Execute with simulateFillQty=40% (0.263848554): status=partially_filled, state=PARTIALLY_FILLED, 
+            remainingQuantity=0.395772831 (>0) ✅
+            Execute again (full remaining): status=filled, state=FILLED ✅
+            Ledger has 2 fills for this intent ✅
+          • G2 - Cancel from Various States:
+            - Cancel from PENDING_CONFIRMATION: status=cancelled, state=CANCELLED ✅
+            - Cancel from CONFIRMED: status=cancelled, state=CANCELLED ✅
+            - Cancel from PARTIALLY_FILLED: status=cancelled, state=CANCELLED ✅
+          • All cancel transitions working correctly ✅
+          
+          TEST H - EXPLAIN READ-ONLY: ✅ PASSED
+          • Created, confirmed, and executed order to FILLED: orderIntentId=325f29a5-..., state=FILLED, amountUsd=1636.27 ✅
+          • Called explain endpoint (question: 'why was this created and what makes it stale?') ✅
+          • Explain returned: status=ready, explanation (1534 chars, non-empty) ✅
+          • Intent returned UNCHANGED: orderIntentId=325f29a5-... (same), state=FILLED (same), amountUsd=1636.27 (same) ✅
+          • Intent in database UNCHANGED: state=FILLED, amountUsd=1636.27 ✅
+          • LLM has NO writable path to alter intent (read-only explain only) ✅
+          
+          CLEANUP: ✅ COMPLETE
+          • Deleted test data from 9 MongoDB collections for 8 test PIDs (u_TEST_E_A through u_TEST_E_H) ✅
+          • Total deleted: 270 documents (96 decision_current, 99 decision_snapshots, 3 decision_history, 
+            12 order_intents, 5 paper_ledger, 52 order_audit, 3 paper_portfolio) ✅
+          
+          KEY VALIDATIONS:
+          • State machine: DRAFT->PENDING_CONFIRMATION->CONFIRMED->WORKING->PARTIALLY_FILLED->FILLED working correctly ✅
+          • Terminal states (FILLED, CANCELLED, REJECTED, EXPIRED) are immutable (no resurrection/retry/amend) ✅
+          • Illegal transitions rejected (execute before confirm -> ILLEGAL_STATE) ✅
+          • Idempotency: same pid+portfolioId+accountId+idempotencyKey returns existing intent (no double-orders) ✅
+          • Staleness: CONFIRM and EXECUTE independently re-resolve decision and require EXACT match on 
+            decisionInputsHash + engineVersion (no tolerance window) ✅
+          • TTL: expiresAt = createdAt + 300s (5 minutes), enforced synchronously at confirm+execute ✅
+          • Direction-aware slippage: BUY spot<=maxBuyPrice, SELL spot>=minSellPrice, else REJECTED SLIPPAGE_EXCEEDED ✅
+          • Partial fills: deterministic via explicit simulateFillQty (no probabilistic liquidity) ✅
+          • Ledger: append-only fills, materialize derives paper portfolio (baseline + ledger), reconcile surfaces divergence ✅
+          • Paper portfolio feeds next Albert decision (portfolio_summary reads paper_portfolio_col when present) ✅
+          • Explain endpoint: read-only, returns intent UNCHANGED + LLM prose (no mutate path) ✅
+          • Data is REAL (live market prices via ccxt, regime=BULL 95% confidence) ✅
+          
+          NO MAJOR ISSUES FOUND. Phase E (paper-only Execution Safety Layer) is fully functional and production-ready. 
+          Advisory/paper only (no live exchange transmission).
+
+
     implemented: true
     working: true
     file: "backend/albert/engine/*.py, backend/albert/repositories/decision_history.py, backend/server.py, backend/config.py"
@@ -7890,25 +8047,21 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Albert's Plan Phase D2 — flip conditions, immutable decision snapshot (+hash), discovery/eligibility, Ask-Albert explain, decision-change history"
+    - "Albert's Plan Phase E — paper-only Execution Safety Layer (Paper Order Manager)"
   stuck_tasks: []
   test_all: false
 
 agent_communication:
     -agent: "main"
     -message: |
-      PHASE D2 BACKEND TEST REQUEST (backend only; do NOT test frontend; advisory/paper only). See the top backend
-      task "Albert's Plan Phase D2 ...". Run against the external preview /api base with FRESH pids and CLEAN UP at
-      the end (mandate_col + portfolio_col + decision_current_col + decision_snapshots_col + decision_history_col).
-      Focus: (A) Phase A/B/C + D1 regression still green (math + SELL precedence). (B) /decisions returns the full
-      immutable envelope per decision (ids, decisionInputsHash, flipConditions>=1, eligible/ineligibilityReason,
-      mandateChecks, riskFlags, positionBefore/After, recommendedDeltaUsd, mandate/portfolio/regime versions).
-      (C) Ineligible high scorer (XRP not approved) -> scored but eligible=false, NOT_IN_APPROVED_UNIVERSE, WAIT,
-      never BUY. (D) decision-history: identical refresh -> stable decisionId + NO event; excluding a held coin ->
-      SELL/EMERGENCY_EXIT + new decisionId + 1 history event referencing prev/new decisionId+snapshotId; removing the
-      exclusion -> a chained second event (previous == prior.new). (E) explain-call returns a non-empty explanation
-      AND the decision echoed UNCHANGED (no mutated numbers). Treat portfolio-driven assertions (eligibility, SELL
-      reason/qty, history transitions) as the hard pass/fail; regime-dependent BUY counts may vary with live data.
+      PHASE E BACKEND TEST REQUEST (backend only; do NOT test frontend; PAPER only — no exchange transmission).
+      See the top backend task "Albert's Plan Phase E ...". External /api base, FRESH pids, CLEAN UP at end
+      (mandate_col, portfolio_col, decision_current/snapshots/history, order_intents_col, order_ledger_col,
+      order_audit_col, paper_portfolio_col). Verify the full order lifecycle + safety rules per points A–G in the
+      task: FILLED happy path + reconciliation + portfolio feedback + terminal immutability + single fill;
+      idempotency (no double intent); staleness independently at confirm AND execute; expiry cannot be revived;
+      directional BUY/SELL slippage; partial-fill -> PARTIALLY_FILLED -> FILLED; cancel from PENDING/CONFIRMED/
+      PARTIALLY_FILLED; illegal transitions error; explain-order-intent read-only (intent echoed unchanged).
 
 
     -agent: "testing"
