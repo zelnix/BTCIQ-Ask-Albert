@@ -7412,19 +7412,19 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
             bk, all_bks = _find_basket_for_message(pid, message)
             if not all_bks:
                 return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
-                        'text': "You don't have any active baskets to close right now."}
+                        'text': "You don't have any active strategies to close right now."}
             if not bk:
                 names = ', '.join(f"'{b.get('title')}'" for b in all_bks)
                 return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
-                        'text': f"Which basket should I close? You have: {names}."}
+                        'text': f"Which strategy should I close? You have: {names}."}
             try:
                 perf = _basket_perf(bk) or {}
             except Exception:  # noqa
                 perf = {}
             pnl = perf.get('total_pnl_pct')
             txt = (f"Want me to close **{bk.get('title')}**? It's currently at "
-                   f"{pnl if pnl is not None else 'n/a'}% P&L. Tap **Close basket** below to confirm — "
-                   f"this stops tracking it and moves it to your past baskets.")
+                   f"{pnl if pnl is not None else 'n/a'}% P&L. Tap **Close strategy** below to confirm — "
+                   f"this stops tracking it and moves it to your past strategies.")
             return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
                     'text': txt,
                     'basket_close': {'basket_id': bk['id'], 'title': bk.get('title'),
@@ -7436,12 +7436,12 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
             bk, all_bks = _find_basket_for_message(pid, message)
             if not all_bks:
                 return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
-                        'text': ("You don't have any active baskets to rebalance yet. Ask me to build one — "
-                                 "e.g. 'build a basket long the majors, short a laggard'.")}
+                        'text': ("You don't have any active strategies to rebalance yet. Ask me to build one — "
+                                 "e.g. 'build a strategy long the majors, short a laggard'.")}
             if not bk:
                 names = ', '.join(f"'{b.get('title')}'" for b in all_bks)
                 return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
-                        'text': f"Which basket should I rebalance? You have: {names}."}
+                        'text': f"Which strategy should I rebalance? You have: {names}."}
             sug = albert_basket_rebalance(bk['id'])
             if isinstance(sug, dict) and sug.get('status') == 'ready':
                 txt = (f"Here's how I'd rebalance **{bk.get('title')}** — {sug.get('rationale')}\n\n"
@@ -7459,7 +7459,7 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
                 legs_line = ', '.join(
                     f"{l['symbol']} {l['position']} {int(round(l.get('weight_pct') or 0))}%"
                     for l in draft['legs'])
-                txt = (f"Here's a basket I put together — **{draft.get('title', 'Multi-Coin Basket')}**. "
+                txt = (f"Here's a strategy I put together — **{draft.get('title', 'Multi-Coin Strategy')}**. "
                        f"{draft.get('thesis', '')}\n\nLegs: {legs_line}. "
                        f"Review it below and tap **Save & track** to start tracking it.")
                 try:
@@ -9190,9 +9190,10 @@ def albert_strategy_build(payload: dict = Body(default={})):
 # Performance is computed live on read (no changes to the single-coin eval job).
 # =====================================================================
 ALBERT_BASKET_SYSTEM = (
-    "You are 'Albert', a crypto quant. Design a MULTI-COIN BASKET strategy as STRICT JSON ONLY "
+    "You are 'Albert', a crypto quant. Design a MULTI-COIN crypto STRATEGY as STRICT JSON ONLY "
     "(no prose, no markdown). YOU decide which coins and how many (usually 2-6 liquid coins). Legs "
-    "may be LONG or SHORT (a basket can be market-neutral / a pairs trade). Schema:\n"
+    "may be LONG or SHORT (a strategy can be market-neutral / a pairs trade). Refer to it as a "
+    "'strategy' (never a 'basket'). Schema:\n"
     "{\n"
     '  "title": "<=70 chars",\n'
     '  "thesis": "<=500 chars, plain English",\n'
@@ -9267,7 +9268,7 @@ def _normalize_basket_draft(raw):
         horizon = max(3, min(180, int(raw.get('horizon_days') or 30)))
     except Exception:
         horizon = 30
-    return {'title': (raw.get('title') or 'Multi-Coin Basket')[:70],
+    return {'title': (raw.get('title') or 'Multi-Coin Strategy')[:70],
             'thesis': (raw.get('thesis') or '')[:500], 'horizon_days': horizon, 'legs': legs}
 
 
@@ -9317,29 +9318,32 @@ _BASKET_STATUS_HINTS = ('how are my', "how's my", 'how is my', 'how are the', "h
                         'compare', 'update on', 'status of')
 
 
+_STRATEGY_NOUNS = ('strategy', 'strategies', 'basket', 'portfolio')
+
+
 def _is_basket_build_request(msg):
-    """Detect a 'build me a multi-coin basket' request in free-form chat. Status/query
-    messages about EXISTING baskets ('how are my baskets doing?') return False and fall
-    through to the normal chat (baskets are already in the engine context)."""
+    """Detect a 'build me a (multi-coin) crypto strategy' request in free-form chat.
+    Status/query messages ('how are my strategies doing?') return False and fall through
+    to normal chat (the user's strategies are already in the engine context)."""
     m = (msg or '').lower()
-    if 'basket' not in m:
+    if not any(n in m for n in _STRATEGY_NOUNS):
         return False
     if any(k in m for k in _BASKET_STATUS_HINTS):
         return False
     if any(v in m for v in _BASKET_BUILD_VERBS):
         return True
-    # e.g. "a basket long the majors, short a laggard" — directional intent, no verb.
-    return ('long' in m) or ('short' in m)
+    # e.g. "a strategy long the majors, short a laggard" — directional multi-leg intent.
+    return ('long' in m) and ('short' in m)
 
 
 def _is_basket_rebalance_request(msg):
-    """Detect 'rebalance my <name> basket' in chat."""
+    """Detect 'rebalance my <name> strategy' in chat."""
     m = (msg or '').lower()
-    return 'rebalance' in m or ('reweight' in m and 'basket' in m)
+    return 'rebalance' in m or ('reweight' in m and any(n in m for n in _STRATEGY_NOUNS))
 
 
 _BASKET_STOPWORDS = {'the', 'and', 'vs', 'with', 'for', 'basket', 'long', 'short',
-                     'my', 'a', 'an', 'of', 'to', 'into', 'hedge', 'strategy'}
+                     'my', 'a', 'an', 'of', 'to', 'into', 'hedge', 'strategy', 'portfolio'}
 
 
 def _find_basket_for_message(pid, msg):
@@ -9376,9 +9380,9 @@ def _find_basket_for_message(pid, msg):
 
 
 def _is_basket_close_request(msg):
-    """Detect 'close/exit/delete my <name> basket' in chat."""
+    """Detect 'close/exit/delete my <name> strategy' in chat."""
     m = (msg or '').lower()
-    if 'basket' not in m:
+    if not any(n in m for n in _STRATEGY_NOUNS):
         return False
     return any(v in m for v in ('close', 'exit', 'delete', 'remove', 'stop tracking',
                                 'get rid of', 'shut down', 'wind down', 'unwind'))
@@ -9521,7 +9525,7 @@ def albert_basket_rebalance(bid: str, payload: dict = Body(default={})):
             sectors = _sector_strength()
         except Exception:  # noqa
             sectors = {}
-        umsg = ("Rebalance this multi-coin basket. Keep the SAME coins; only propose new weight_pct that sum to 100. "
+        umsg = ("Rebalance this multi-coin crypto strategy. Keep the SAME coins; only propose new weight_pct that sum to 100. "
                 "Lean into relative strength / rotation and trim laggards or overweights.\n"
                 f"Basket: {strat.get('title')}\nLegs:\n" + "\n".join(lines)
                 + f"\nSector 7d strength vs BTC: {sectors}\n\n"
@@ -9679,7 +9683,7 @@ def _basket_digest_job():
                    + ". Open Trading Strategies to review and trim/cut those legs.")
             sym0 = data['baskets'][0]['hits'][0]['symbol'] if (data['baskets'] and data['baskets'][0]['hits']) else 'BTC'
             push_alert('strategy', 'info',
-                       f"Basket digest — {n} leg event{'s' if n != 1 else ''} today",
+                       f"Strategy digest — {n} leg event{'s' if n != 1 else ''} today",
                        msg, f"basket-digest-{owner}-{today}", sym0, owner=owner)
         except Exception:  # noqa
             traceback.print_exc()
@@ -9729,10 +9733,10 @@ def _basket_rebalance_nudge_job():
             hot_now = ', '.join(hot_sorted[:3]) or 'n/a'
             sym0 = (bk.get('legs') or [{}])[0].get('symbol', 'BTC')
             push_alert('strategy', 'info',
-                       f"Rebalance check: {bk.get('title', 'Basket')}",
+                       f"Rebalance check: {bk.get('title', 'Strategy')}",
                        (f"Sector rotation shifted this week (now leading: {hot_now}; rotating in: {came_in}; "
                         f"cooling: {cooled}). Open Trading Strategies → Rebalance to realign "
-                        f"'{bk.get('title', 'your basket')}'."),
+                        f"'{bk.get('title', 'your strategy')}'."),
                        f"basket-rebalnudge-{bk['id']}-{today}", sym0, owner=bk.get('owner'),
                        extra={'action': 'basket_rebalance', 'basket_id': bk['id'],
                               'basket_title': bk.get('title')})
@@ -10753,8 +10757,9 @@ def _albert_engine_context(symbol='BTC', pid=None):
             _bq['owner'] = (str(pid) or '').strip()[:80]
         bks = list(strategies_col.find(_bq, {'_id': 0}).sort('created_at', -1).limit(6))
         if bks:
-            L.append("USER'S ACTIVE MULTI-COIN BASKETS (Albert tracks these — reference by name; when asked "
-                     "'how are my baskets doing' summarise THESE live numbers, do NOT invent any):")
+            L.append("USER'S ACTIVE MULTI-COIN STRATEGIES (Albert tracks these — reference by name; when asked "
+                     "'how are my strategies doing' summarise THESE live numbers, do NOT invent any). Call them "
+                     "'strategies', never 'baskets':")
             for b in bks:
                 try:
                     perf = _basket_perf(b) or {}
@@ -10765,7 +10770,7 @@ def _albert_engine_context(symbol='BTC', pid=None):
                     f"{lg.get('symbol')} {lg.get('position')} {lg.get('weight_pct')}% (P&L {lg.get('pnl_pct')}%)"
                     for lg in legs)
                 L.append(f"- '{b.get('title')}' [{len(legs)} legs, {b.get('horizon_days')}d, "
-                         f"{perf.get('days_active', 0)}d active] — basket P&L {perf.get('total_pnl_pct')}% "
+                         f"{perf.get('days_active', 0)}d active] — strategy P&L {perf.get('total_pnl_pct')}% "
                          f"(${perf.get('total_pnl_usd')} on ${b.get('size_usd')}). Legs: {leg_bits}.")
     except Exception:  # noqa
         pass

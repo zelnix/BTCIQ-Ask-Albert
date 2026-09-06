@@ -38,7 +38,7 @@ export default function BasketRebalanceCard({ rebalance }) {
   return (
     <div className="mt-2 rounded-xl border border-violet-500/30 bg-violet-500/[0.06] p-3">
       <div className="mb-1.5 flex items-center gap-1.5 text-[12px] font-semibold text-violet-300">
-        <Scale className="h-3.5 w-3.5" />{rebalance.title || 'Basket rebalance'}
+        <Scale className="h-3.5 w-3.5" />{rebalance.title || 'Strategy rebalance'}
       </div>
       <div className="space-y-1">
         {legs.map((l) => {

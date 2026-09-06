@@ -36,7 +36,7 @@ export default function BasketChatCard({ draft, pid }) {
   return (
     <div className="mt-2 rounded-xl border border-slate-700 bg-slate-950/70 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="truncate text-[13px] font-semibold text-slate-100">{draft.title || 'Multi-Coin Basket'}</p>
+        <p className="truncate text-[13px] font-semibold text-slate-100">{draft.title || 'Multi-Coin Strategy'}</p>
         <span className="shrink-0 rounded-full border border-slate-700 px-2 py-0.5 text-[10px] text-slate-400">
           {legs.length} legs · {draft.horizon_days || 30}d
         </span>

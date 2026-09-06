@@ -336,7 +336,7 @@ function BasketCompare({ baskets }) {
   const sel = 'rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-xs text-slate-200 focus:border-violet-500/50 focus:outline-none';
   return (
     <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
-      <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-300"><Scale className="h-3.5 w-3.5 text-violet-300" />Compare baskets</div>
+      <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-300"><Scale className="h-3.5 w-3.5 text-violet-300" />Compare strategies</div>
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <select value={aId} onChange={(e) => setAId(e.target.value)} className={sel}>{baskets.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</select>
         <span className="text-slate-600">vs</span>
@@ -454,7 +454,7 @@ function BasketCard({ b, onClose, closing, onReload }) {
             {rebBusy ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Scale className="mr-1 h-3 w-3" />}Rebalance
           </Button>
           <Button onClick={() => onClose(b.id)} disabled={closing} variant="outline" className="h-8 border-slate-700 bg-transparent text-xs text-slate-300 hover:bg-slate-800">
-            {closing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <X className="mr-1 h-3 w-3" />}Close basket
+            {closing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <X className="mr-1 h-3 w-3" />}Close strategy
           </Button>
         </div>
       )}
@@ -473,11 +473,11 @@ function BasketDigestPanel({ refreshKey }) {
   return (
     <div className="mt-4 rounded-xl border border-sky-500/25 bg-sky-500/[0.05] p-3">
       <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-sky-300">
-        <Bell className="h-3.5 w-3.5" />Basket digest · last 24h
+        <Bell className="h-3.5 w-3.5" />Strategy digest · last 24h
         {n > 0 && <span className="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300">{n}</span>}
       </div>
       {n === 0 ? (
-        <p className="text-[11px] text-slate-400">No basket legs hit a target or stop in the last 24 hours.</p>
+        <p className="text-[11px] text-slate-400">No strategy legs hit a target or stop in the last 24 hours.</p>
       ) : (
         <div className="space-y-1.5">
           {(dig.baskets || []).map((b) => (
@@ -543,15 +543,15 @@ function BasketSection() {
     <Card className="border-0 bg-gradient-to-br from-violet-500/[0.07] to-slate-900 p-5 ring-1 ring-violet-500/25">
       <div className="mb-3 flex items-center gap-2">
         <Scale className="h-5 w-5 text-violet-300" />
-        <h3 className="text-base font-bold text-white">Multi-Coin Baskets</h3>
+        <h3 className="text-base font-bold text-white">Multi-Coin Strategies</h3>
         <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold text-violet-300">NEW</span>
       </div>
-      <p className="mb-3 text-xs text-slate-400">Tell Albert a theme and he&apos;ll build a weighted multi-coin basket (long &amp; short) you can save and track as one — separate from your single-coin plays.</p>
+      <p className="mb-3 text-xs text-slate-400">Tell Albert a theme and he&apos;ll build a weighted multi-coin strategy (long &amp; short legs) you can save and track as one — a portfolio-style play alongside your single-coin strategies below.</p>
       <div className="flex flex-col gap-2 sm:flex-row">
         <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="e.g. long the majors, small short on a laggard (optional)"
           className="flex-1 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:border-violet-500/50 focus:outline-none" />
         <Button onClick={build} disabled={building} className="bg-violet-600 text-white hover:bg-violet-500">
-          {building ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}{building ? 'Albert is building…' : 'Build a basket'}
+          {building ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}{building ? 'Albert is building…' : 'Build a strategy'}
         </Button>
       </div>
       {draft && (
@@ -583,7 +583,7 @@ function BasketSection() {
       {active.length >= 2 && <BasketCompare baskets={active} />}
       {active.length > 0 && <div className="mt-4 space-y-3">{active.map((b) => <BasketCard key={b.id} b={b} onClose={closeBasket} closing={closing === b.id} onReload={load} />)}</div>}
       {history.length > 0 && (
-        <details className="mt-4"><summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">Past baskets ({history.length})</summary>
+        <details className="mt-4"><summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">Past strategies ({history.length})</summary>
           <div className="mt-2 space-y-3">{history.map((b) => <BasketCard key={b.id} b={b} onClose={closeBasket} closing={false} />)}</div>
         </details>
       )}
@@ -653,11 +653,16 @@ export default function StrategiesSection() {
   return (
     <div className="space-y-4">
       <SectionHead icon={Crosshair} title="Trading Strategies"
-        blurb={`Strategies Albert builds and babysits for ${coinName}. Each has an entry, profit targets, a stop and if-this-then-that rules on price, time and signals. Albert nudges you when it's time to act, paper-tracks the P&L, and keeps a history of how past plays performed.`} />
+        blurb={`Crypto strategies Albert builds and babysits — single-coin plays or multi-coin (portfolio-style) strategies, all in one place. Each has entries, profit targets, a stop and if-this-then-that rules on price, time and signals. Albert nudges you when it's time to act, paper-tracks the P&L, and keeps a history of how past plays performed.`} />
 
       <GuardrailsCard />
 
       <BasketSection />
+
+      <div className="flex items-center gap-2 pt-1">
+        <Crosshair className="h-4 w-4 text-sky-300" />
+        <h3 className="text-base font-bold text-white">Single-Coin Strategies</h3>
+      </div>
 
       {loading && !data ? (
         <Card className="border-0 bg-slate-900 p-8 text-center ring-1 ring-slate-800"><Loader2 className="mx-auto h-6 w-6 animate-spin text-slate-500" /></Card>

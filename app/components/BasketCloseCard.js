@@ -30,11 +30,11 @@ export default function BasketCloseCard({ close }) {
   return (
     <div className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/[0.06] p-3">
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        <span className="truncate text-[12px] font-semibold text-slate-100">{close.title || 'Basket'}</span>
+        <span className="truncate text-[12px] font-semibold text-slate-100">{close.title || 'Strategy'}</span>
         {pnl != null && <span className={`shrink-0 text-[11px] font-semibold ${pnlColor}`}>{pnl >= 0 ? '+' : ''}{pnl}%</span>}
       </div>
       {state === 'done' ? (
-        <p className="flex items-center gap-1.5 text-[12px] font-semibold text-emerald-300"><Check className="h-3.5 w-3.5" />Closed — moved to past baskets</p>
+        <p className="flex items-center gap-1.5 text-[12px] font-semibold text-emerald-300"><Check className="h-3.5 w-3.5" />Closed — moved to past strategies</p>
       ) : (
         <button
           onClick={doClose}
@@ -43,7 +43,7 @@ export default function BasketCloseCard({ close }) {
         >
           {state === 'closing' ? (<><Loader2 className="h-3.5 w-3.5 animate-spin" />Closing…</>)
             : state === 'error' ? (<><XCircle className="h-3.5 w-3.5" />Failed — tap to retry</>)
-            : (<><XCircle className="h-3.5 w-3.5" />Close basket</>)}
+            : (<><XCircle className="h-3.5 w-3.5" />Close strategy</>)}
         </button>
       )}
     </div>
