@@ -1459,7 +1459,40 @@ metadata:
   run_ui: false
 
 frontend:
-  - task: "NEW UI panels — Albert mentor chips, hero circuit-breaker chip, Drift panel, Projection overlays, Live Order Flow, FAISS analogs, Breaker demo toggle"
+  - task: "Albert's Plan Phase D3 — Command Centre UI (decision cards, SELL plan, flip conditions, Ask-Albert explain modal, decision-history timeline)"
+    implemented: true
+    working: "NA"
+    file: "app/components/AlbertPlan.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          D3 Command Centre UI built entirely inside app/components/AlbertPlan.js (already folded into the Trading
+          Strategies screen). All visible figures come straight from the backend snapshot (GET /api/v1/albert/decisions)
+          — nothing is recomputed on the client. Added:
+          (1) Decision table: Asset | Call (ActionPill BUY/SELL/HOLD/WAIT + SELL trim/exit pill + INELIGIBLE chip) |
+          Score | Confidence (kept separate) | Recommendation (BUY: $now / $planned; SELL: exact sellUsd + qty;
+          HOLD/WAIT text). (2) Expanded SELL plan block: governing reason + precedence #, action (TRIM 10/25/50 |
+          EXIT 100%), exact sellUsd/sellQty, recommendedDelta, positionBefore -> positionAfter, and 'also fired
+          (lower precedence)' from sellPlan.allSignals. (3) 'What would change this?' flip-conditions panel per asset
+          (toCall badge + detail). (4) 'Ask Albert about this call' modal -> POST /api/v1/albert/explain-call with the
+          decisionId; deterministic facts (call/reason/precedence/score/confidence/amounts/before->after/invalidation)
+          are shown DOMINANT at the top and Albert's prose is explicitly secondary + labelled read-only (UI rule:
+          prose never outranks the call; and the endpoint returns the snapshot unchanged). (5) Decision-history
+          timeline modal -> GET /api/v1/albert/decision-history?asset= showing changeType, timestamp, changeReason[],
+          and linked previous->new snapshot ids. riskFlags chips + ineligibility reason shown; score labelled as
+          separate from confidence.
+          Next.js compiled the component cleanly (no build errors). BACKEND PROOF (main, local, all green): D3 Paper
+          Lifecycle Demo 14/14 — WAIT->BUY->ADD->HOLD->TRIM->SELL->WAIT emerges purely from engine logic as
+          mandate/portfolio inputs change (no manual patching), audit chain: WAIT->BUY, BUY->HOLD, HOLD->SELL,
+          PROFIT_TAKE->EMERGENCY_EXIT, SELL->WAIT.
+          NOT yet UI-tested by an agent (frontend testing requires signed-in Google session + a seeded mandate/
+          portfolio via backend/seed_test_session.py). AWAITING USER PERMISSION before running the frontend testing
+          agent. Advisory/paper only.
+
     implemented: true
     working: true
     file: "app/page.js, app/components/Forecasts.js, app/components/Scorecard.js, app/components/Leverage.js, app/components/TimeMachine.js, app/components/FloatingAlbert.js"
