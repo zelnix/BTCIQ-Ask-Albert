@@ -186,6 +186,161 @@ function Stat({ label, value, sub, accent }) {
   );
 }
 
+const OSTATE_COLOR = {
+  DRAFT: 'text-slate-400', PENDING_CONFIRMATION: 'text-amber-300', CONFIRMED: 'text-sky-300',
+  WORKING: 'text-sky-300', PARTIALLY_FILLED: 'text-violet-300', FILLED: 'text-emerald-300',
+  CANCELLED: 'text-slate-400', REJECTED: 'text-rose-300', EXPIRED: 'text-slate-500',
+};
+const OUTCOME_MSG = {
+  STALE_DECISION: 'Albert\u2019s numbers moved \u2014 this frozen order is now stale. Return to the fresh call and create a new order.',
+  EXPIRED: 'This order intent expired (5-minute limit). Return to the fresh call to create a new one.',
+  SLIPPAGE_EXCEEDED: 'Execution price breached your slippage limit \u2014 the paper order was rejected, not filled at a worse price.',
+  NO_MARKET_PRICE: 'No market price available right now \u2014 rejected.',
+};
+const CANCELLABLE = ['PENDING_CONFIRMATION', 'CONFIRMED', 'WORKING', 'PARTIALLY_FILLED'];
+
+// Paper Order lifecycle modal. The confirmation screen shows the EXACT frozen
+// intent from create() — never a re-fetched/recomputed recommendation. PAPER only.
+function PaperOrderModal({ decision, onClose, onChanged }) {
+  const idemRef = React.useRef('ord_' + (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now() + '_' + Math.random().toString(36).slice(2)));
+  const [intent, setIntent] = React.useState(null);
+  const [audit, setAudit] = React.useState([]);
+  const [outcome, setOutcome] = React.useState(null); // {reason} | {error} | null
+  const [busy, setBusy] = React.useState(true);
+  const [showAudit, setShowAudit] = React.useState(false);
+  const [explain, setExplain] = React.useState(null); // {loading,text}
+  const [left, setLeft] = React.useState(null); // seconds to expiry
+
+  const post = (path, body) => fetch(`${API_BASE}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json());
+  const apply = (resp) => {
+    if (resp && resp.intent) setIntent(resp.intent);
+    if (resp && (resp.reason || resp.error)) setOutcome({ reason: resp.reason, error: resp.error }); else setOutcome(null);
+    if (resp && (resp.status === 'filled' || resp.status === 'partially_filled')) onChanged && onChanged();
+    return resp;
+  };
+  const refreshAudit = (oid) => fetch(`${API_BASE}/v1/albert/order/${oid}`, { cache: 'no-store' }).then((r) => r.json()).then((j) => { if (j.audit) setAudit(j.audit); }).catch(() => {});
+
+  React.useEffect(() => { // CREATE (frozen intent) — separate from confirm
+    let alive = true; setBusy(true);
+    post('/v1/albert/order/create', { pid: getPid(), asset: decision.symbol, idempotencyKey: idemRef.current })
+      .then((r) => { if (!alive) return; if (r.status === 'error') setOutcome({ error: r.error }); else { apply(r); refreshAudit(r.intent.orderIntentId); } })
+      .catch(() => alive && setOutcome({ error: 'NETWORK' })).finally(() => alive && setBusy(false));
+    return () => { alive = false; };
+  }, [decision]);
+
+  React.useEffect(() => { // expiry countdown
+    if (!intent) return; const t = setInterval(() => {
+      const s = Math.max(0, Math.round((new Date(intent.expiresAt).getTime() - Date.now()) / 1000)); setLeft(s);
+    }, 1000); return () => clearInterval(t);
+  }, [intent]);
+
+  const act = async (fn) => { setBusy(true); try { const r = await fn(); apply(r); if (r && r.intent) refreshAudit(r.intent.orderIntentId); } finally { setBusy(false); } };
+  const doConfirm = () => act(() => post(`/v1/albert/order/${intent.orderIntentId}/confirm`));
+  const doExecute = (q) => act(() => post(`/v1/albert/order/${intent.orderIntentId}/execute`, q != null ? { simulateFillQty: q } : {}));
+  const doCancel = () => act(() => post(`/v1/albert/order/${intent.orderIntentId}/cancel`));
+  const askAlbert = () => { setExplain({ loading: true, text: '' }); post('/v1/albert/explain-order-intent', { pid: getPid(), orderIntentId: intent.orderIntentId, question: 'Explain this paper order, any fill or rejection, and what would change it.' }).then((j) => setExplain({ loading: false, text: j.explanation || j.error || 'No explanation.' })).catch(() => setExplain({ loading: false, text: 'Could not reach Albert.' })); };
+  const returnToFresh = () => { onChanged && onChanged(); onClose(); };
+
+  const st = intent && intent.state;
+  const isBuy = intent && intent.side === 'BUY';
+  const terminalBad = st === 'REJECTED' || st === 'EXPIRED';
+
+  return (
+    <div className="fixed inset-0 z-[130] flex items-end justify-center bg-black/70 p-0 sm:items-center sm:p-4" onClick={onClose}>
+      <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-t-2xl border border-amber-500/30 bg-slate-950 p-4 sm:rounded-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-300">Paper / Simulation</span>
+            <span className="text-base font-bold text-white">{decision.symbol}</span>
+            {intent && <span className={`text-[11px] font-bold ${OSTATE_COLOR[st] || 'text-slate-400'}`}>{st}</span>}
+          </div>
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-200"><X className="h-4 w-4" /></button>
+        </div>
+
+        {busy && !intent && <div className="flex items-center gap-2 py-6 text-[12px] text-slate-400"><Loader2 className="h-4 w-4 animate-spin" />Freezing order intent…</div>}
+        {outcome && outcome.error === 'NO_ACTIONABLE_ORDER' && <p className="py-4 text-[12px] text-slate-400">This call is not actionable as an order (only eligible BUY/SELL calls can be ordered).</p>}
+        {outcome && outcome.error && outcome.error !== 'NO_ACTIONABLE_ORDER' && !intent && <p className="py-4 text-[12px] text-rose-300">Could not create order: {outcome.error}</p>}
+
+        {intent && (
+          <>
+            {/* FROZEN INTENT — exactly what will be confirmed, never recomputed */}
+            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-3 text-[12px]">
+              <div className="mb-1 flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-wide text-slate-500">Frozen order intent</span>
+                {st === 'PENDING_CONFIRMATION' && left != null && <span className={`text-[10px] font-semibold ${left < 30 ? 'text-rose-300' : 'text-slate-400'}`}>expires in {Math.floor(left / 60)}:{String(left % 60).padStart(2, '0')}</span>}
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1.5">
+                <div><span className="text-slate-500">Side</span><div className={`font-bold ${isBuy ? 'text-emerald-300' : 'text-rose-300'}`}>{intent.side}</div></div>
+                <div><span className="text-slate-500">Reason</span><div className="font-semibold text-slate-200">{REASON_LABEL[intent.reasonCode] || intent.reasonCode}</div></div>
+                <div><span className="text-slate-500">Amount</span><div className="font-semibold text-slate-200">{fmtX(intent.amountUsd)}</div></div>
+                <div><span className="text-slate-500">Quantity</span><div className="font-semibold text-slate-200">{qty(intent.quantity)} {intent.asset}</div></div>
+                <div><span className="text-slate-500">Decision price</span><div className="font-semibold text-slate-200">{fmtX(intent.referencePrice)}</div></div>
+                <div><span className="text-slate-500">Slippage tol.</span><div className="font-semibold text-slate-200">{intent.slippageToleranceBps} bps</div></div>
+                <div><span className="text-slate-500">{isBuy ? 'Max buy price' : 'Min sell price'}</span><div className="font-semibold text-slate-200">{fmtX(isBuy ? intent.maxBuyPrice : intent.minSellPrice)}</div></div>
+                <div><span className="text-slate-500">Filled / remaining</span><div className="font-semibold text-slate-200">{qty(intent.filledQuantity)} / {qty(intent.remainingQuantity)}</div></div>
+              </div>
+              <p className="mt-1.5 text-[9px] text-slate-600">decision {String(intent.decisionId || '').slice(0, 8)} · order {String(intent.orderIntentId || '').slice(0, 8)} · engine {intent.engineVersion}</p>
+            </div>
+
+            {/* FIRST-CLASS OUTCOMES */}
+            {outcome && outcome.reason && (
+              <div className="mt-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-2.5 text-[12px] text-rose-200">
+                <p className="font-bold">{outcome.reason.replace(/_/g, ' ')}</p>
+                <p className="mt-0.5 text-rose-300/90">{OUTCOME_MSG[outcome.reason] || 'The order was not executed.'}</p>
+                {(outcome.reason === 'STALE_DECISION' || outcome.reason === 'EXPIRED') && <button onClick={returnToFresh} className="mt-2 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/20">Return to fresh Albert call</button>}
+              </div>
+            )}
+            {st === 'CANCELLED' && <p className="mt-2 rounded-lg border border-slate-700 bg-slate-800/40 p-2 text-[12px] text-slate-300">Order cancelled. No paper fill recorded.</p>}
+            {(st === 'FILLED' || st === 'PARTIALLY_FILLED') && intent.fills && intent.fills.length > 0 && (
+              <div className="mt-2 rounded-lg border border-emerald-500/25 bg-emerald-500/[0.06] p-2.5 text-[12px]">
+                <p className="mb-1 text-[10px] uppercase text-emerald-300">{st === 'FILLED' ? 'Filled (paper)' : 'Partially filled (paper)'}</p>
+                {intent.fills.map((f, i) => <div key={i} className="flex justify-between text-slate-300"><span>{qty(f.quantity)} @ {fmtX(f.price)}</span><span>{fmtX(f.usd)}</span></div>)}
+                <p className="mt-1 text-[10px] text-slate-500">Albert has reassessed against your updated paper portfolio.</p>
+              </div>
+            )}
+
+            {/* ACTIONS driven by the state machine */}
+            <div className="mt-3 flex flex-wrap gap-2">
+              {st === 'PENDING_CONFIRMATION' && <button disabled={busy} onClick={doConfirm} className="inline-flex items-center gap-1 rounded-full bg-amber-500 px-3 py-1.5 text-[12px] font-bold text-slate-900 hover:bg-amber-400 disabled:opacity-50">{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Confirm paper order</button>}
+              {st === 'CONFIRMED' && <button disabled={busy} onClick={() => doExecute()} className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-3 py-1.5 text-[12px] font-bold text-slate-900 hover:bg-emerald-400 disabled:opacity-50">{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}Execute (paper fill)</button>}
+              {st === 'CONFIRMED' && <button disabled={busy} onClick={() => doExecute(Math.max(0.00000001, +(intent.remainingQuantity * 0.4).toFixed(8)))} className="rounded-full border border-violet-500/40 px-3 py-1.5 text-[12px] text-violet-200 hover:bg-violet-500/10 disabled:opacity-50">Simulate partial (40%)</button>}
+              {st === 'PARTIALLY_FILLED' && <button disabled={busy} onClick={() => doExecute()} className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-3 py-1.5 text-[12px] font-bold text-slate-900 hover:bg-emerald-400 disabled:opacity-50">{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}Fill remaining</button>}
+              {CANCELLABLE.includes(st) && <button disabled={busy} onClick={doCancel} className="rounded-full border border-slate-600 px-3 py-1.5 text-[12px] text-slate-300 hover:bg-slate-800 disabled:opacity-50">Cancel</button>}
+              {intent && <button onClick={askAlbert} className="inline-flex items-center gap-1 rounded-full border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 text-[12px] font-semibold text-violet-200 hover:bg-violet-500/20"><MessageCircle className="h-3 w-3" />Ask Albert</button>}
+              {terminalBad && !(outcome && (outcome.reason === 'STALE_DECISION' || outcome.reason === 'EXPIRED')) && <button onClick={returnToFresh} className="rounded-full border border-sky-500/40 px-3 py-1.5 text-[12px] text-sky-200 hover:bg-sky-500/10">Return to fresh call</button>}
+            </div>
+
+            {/* AUDIT TRAIL */}
+            <button onClick={() => setShowAudit(!showAudit)} className="mt-3 flex items-center gap-1 text-[10px] uppercase text-slate-500 hover:text-slate-300"><ChevronDown className={`h-3 w-3 transition-transform ${showAudit ? 'rotate-180' : ''}`} />Immutable audit trail ({audit.length})</button>
+            {showAudit && (
+              <ol className="mt-1 space-y-1 border-l border-slate-800 pl-3">
+                {audit.map((a, i) => (
+                  <li key={i} className="text-[11px]">
+                    <span className="text-slate-300">{a.stateBefore || '—'} {'→'} <span className="font-semibold">{a.stateAfter}</span></span>
+                    <span className="text-slate-600"> · {a.action}</span>
+                    {a.facts && a.facts.rejectionReason && <span className="text-rose-400"> · {a.facts.rejectionReason}</span>}
+                    {a.facts && a.facts.fillUsd != null && <span className="text-emerald-400"> · fill {fmtX(a.facts.fillUsd)} @ {fmtX(a.facts.executionSpot)} ({a.facts.actualSlippageBps} bps)</span>}
+                    <div className="text-[9px] text-slate-600">{new Date(a.ts).toLocaleTimeString()}</div>
+                  </li>
+                ))}
+              </ol>
+            )}
+
+            {/* ASK ALBERT (read-only) */}
+            {explain && (
+              <div className="mt-3 rounded-lg border border-violet-500/20 bg-violet-500/[0.05] p-2.5">
+                <p className="mb-1 flex items-center gap-1 text-[10px] uppercase text-violet-300"><MessageCircle className="h-3 w-3" />Albert&apos;s explanation (read-only)</p>
+                {explain.loading ? <div className="flex items-center gap-2 text-[12px] text-slate-400"><Loader2 className="h-3.5 w-3.5 animate-spin" />Reading the order…</div> : <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-slate-300">{explain.text}</p>}
+              </div>
+            )}
+          </>
+        )}
+        <p className="mt-3 text-[10px] text-slate-600">PAPER / SIMULATION only — no real trade is transmitted. Albert explains orders; he cannot create, confirm, or change them.</p>
+      </div>
+    </div>
+  );
+}
+
 export default function AlbertPlan() {
   const [summary, setSummary] = React.useState(null);
   const [mandate, setMandate] = React.useState(null);
@@ -194,6 +349,7 @@ export default function AlbertPlan() {
   const [expanded, setExpanded] = React.useState(null);
   const [explainFor, setExplainFor] = React.useState(null);
   const [historyFor, setHistoryFor] = React.useState(null);
+  const [orderFor, setOrderFor] = React.useState(null);
   const [openMandate, setOpenMandate] = React.useState(false);
   const [openPortfolio, setOpenPortfolio] = React.useState(false);
   const [savingM, setSavingM] = React.useState(false);
@@ -323,6 +479,9 @@ export default function AlbertPlan() {
                           <FlipConditions items={d.flipConditions} />
                         </div>
                         <div className="mt-2 flex flex-wrap gap-2">
+                          {d.eligible && (d.action === 'BUY' || d.action === 'SELL') && (
+                            <button onClick={() => setOrderFor(d)} className="inline-flex items-center gap-1 rounded-full bg-amber-500/90 px-2.5 py-1 text-[11px] font-bold text-slate-900 hover:bg-amber-400"><Layers className="h-3 w-3" />Create paper order</button>
+                          )}
                           <button onClick={() => setExplainFor(d)} className="inline-flex items-center gap-1 rounded-full border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-[11px] font-semibold text-violet-200 hover:bg-violet-500/20"><MessageCircle className="h-3 w-3" />Ask Albert about this call</button>
                           <button onClick={() => setHistoryFor(d.symbol)} className="inline-flex items-center gap-1 rounded-full border border-slate-700 px-2.5 py-1 text-[11px] text-slate-300 hover:bg-slate-800"><History className="h-3 w-3" />History</button>
                         </div>
@@ -402,6 +561,7 @@ export default function AlbertPlan() {
 
       {explainFor && <ExplainModal decision={explainFor} onClose={() => setExplainFor(null)} />}
       {historyFor && <HistoryDrawer asset={historyFor} onClose={() => setHistoryFor(null)} />}
+      {orderFor && <PaperOrderModal decision={orderFor} onClose={() => setOrderFor(null)} onChanged={load} />}
     </div>
   );
 }
