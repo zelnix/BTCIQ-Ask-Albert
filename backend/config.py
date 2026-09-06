@@ -81,6 +81,14 @@ mandate_col = db['user_mandates']  # per-user Trading Mandate (goals, risk limit
 price_watch_col = db['price_watches']  # "alert me at $X" watches created from Albert chat
 albert_calls_col = db['albert_calls']  # Albert's self-logged buy/sell calls + graded outcomes (track record)
 recap_col = db['albert_recap']  # cached weekly recap note
+# Phase D: auditable decision-change history (BUY/HOLD/SELL/WAIT transitions per asset, scoped by pid)
+decision_history_col = db['albert_decision_history']
+try:
+    decision_history_col.create_index([('pid', 1), ('asset', 1), ('changedAt', -1)])
+    decision_history_col.create_index([('pid', 1), ('decisionId', 1)])
+    decision_history_col.create_index([('pid', 1), ('snapshotId', 1)])
+except Exception:  # noqa
+    pass
 
 # ---- Native Google Sign-In (GIS ID-token flow) ----
 users_col = db['users']            # {_id(uuid), google_sub, email, name, picture, created_at, updated_at}
