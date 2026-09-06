@@ -11,9 +11,10 @@ const fmtX = (n) => (n == null || isNaN(n)) ? '—' : '$' + Number(n).toLocaleSt
 const qty = (n) => (n == null || isNaN(n)) ? '—' : Number(n).toLocaleString(undefined, { maximumFractionDigits: 8 });
 
 const REASON_LABEL = {
-  EMERGENCY_EXIT: 'Emergency exit', THESIS_INVALIDATION: 'Thesis invalidated', RISK_REDUCTION: 'Risk reduction',
+  EMERGENCY_EXIT: 'Emergency exit', PORTFOLIO_DRAWDOWN_RISK: 'Portfolio drawdown risk', THESIS_INVALIDATION: 'Thesis invalidated', RISK_REDUCTION: 'Risk reduction',
   REBALANCE: 'Rebalance', PROFIT_TAKE: 'Profit-take', OPPORTUNITY_ENTRY: 'Opportunity entry',
   THESIS_INTACT: 'Thesis intact', BELOW_ENTRY_LINE: 'Below entry line', GATED_BY_MANDATE: 'Gated by mandate',
+  GATED_BY_DRAWDOWN: 'Gated by drawdown protection',
   STALE_DATA: 'Stale data', NO_HEADROOM: 'No room to add',
 };
 const INELIG_LABEL = {
@@ -175,6 +176,52 @@ function RegimeBanner({ reg, buyThresh, pool }) {
     </div>
   );
 }
+
+function ProtectionBanner({ pr }) {
+  // Phase G: portfolio-level drawdown circuit breaker. When active this visually
+  // outranks regime/opportunity info. Values are read straight from the engine
+  // snapshot — never recomputed on the client.
+  if (!pr || !pr.protectionMode) return null;
+  const dd = pr.drawdownPct != null ? Number(pr.drawdownPct).toFixed(1) : '—';
+  const max = pr.maxDrawdownPct != null ? Number(pr.maxDrawdownPct).toFixed(1) : '—';
+  const rec = pr.recoveryThresholdPct != null ? Number(pr.recoveryThresholdPct).toFixed(1) : '—';
+  const cuts = Object.entries(pr.reductions || {});
+  return (
+    <div className="mb-2 overflow-hidden rounded-xl border-2 border-rose-500/60 bg-gradient-to-b from-rose-500/[0.14] to-rose-950/30">
+      <div className="flex items-start gap-2.5 p-3">
+        <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-rose-500/20 ring-1 ring-rose-500/50">
+          <AlertTriangle className="h-4 w-4 text-rose-300" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-extrabold uppercase tracking-wide text-rose-200">Portfolio Protection Active</p>
+            <span className="rounded-full border border-rose-500/50 bg-rose-500/10 px-2 py-0.5 text-[10px] font-bold text-rose-200">CIRCUIT BREAKER</span>
+          </div>
+          <p className="mt-1 text-[13px] font-semibold text-white">
+            Current drawdown <span className="text-rose-300">{dd}%</span> · Mandate limit <span className="text-rose-300">{max}%</span>
+          </p>
+          <p className="mt-0.5 text-[12px] text-rose-100/90">Albert has <b>suspended all new BUYs</b> and is reducing portfolio risk. Protection lifts when drawdown recovers to <b>&le;&nbsp;{rec}%</b>.</p>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-rose-100/80">
+            <span>High-water mark: <b className="text-white">{fmt(pr.highWaterMarkUsd)}</b></span>
+            <span>Current value: <b className="text-white">{fmt(pr.currentPortfolioValueUsd)}</b></span>
+            {pr.riskReductionRequiredUsd != null && <span>Risk reduction target: <b className="text-white">{fmt(pr.riskReductionRequiredUsd)}</b></span>}
+          </div>
+          {cuts.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {cuts.map(([sym, c]) => (
+                <span key={sym} className="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-950/40 px-2 py-0.5 text-[10px] text-rose-100" title={`basis: ${c.reductionBasis}`}>
+                  <span className="font-bold">{sym}</span>
+                  <span className="text-rose-300">reduce {Math.round((c.fraction || 0) * 100)}%</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 function Stat({ label, value, sub, accent }) {
   return (
@@ -436,6 +483,7 @@ export default function AlbertPlan() {
 
       {complete && decisions && decisions.regime && (
         <div className="mt-3">
+          <ProtectionBanner pr={decisions.portfolioRisk} />
           <RegimeBanner reg={decisions.regime} buyThresh={decisions.buyThreshold} pool={decisions.regimeDeployCeiling} />
           <div className="mt-2 rounded-xl border border-violet-500/25 bg-violet-500/[0.06] p-3">
             <p className="text-[10px] uppercase tracking-wide text-violet-300">Albert&apos;s call</p>
