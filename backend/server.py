@@ -7720,6 +7720,7 @@ import albert.deps as _albert_deps  # noqa: E402
 from albert.engine import regime as _albert_regime_mod  # noqa: E402
 from albert.engine import scoring as _albert_scoring_mod  # noqa: E402
 from albert.engine import decision as _albert_decision_mod  # noqa: E402
+from albert.repositories import decision_history as _decision_history_repo  # noqa: E402
 from albert.engine.constants import (  # noqa: E402,F401
     ALBERT_ENGINE_VERSION, REGIME_BUY_THRESHOLD as _REGIME_BUY_THRESHOLD,
     REGIME_DEPLOY_CEILING as _REGIME_DEPLOY_CEILING, ALBERT_UNIVERSE as _ALBERT_UNIVERSE,
@@ -7759,7 +7760,120 @@ def albert_decisions_endpoint(pid: str = ''):
     pid = (pid or '').strip()[:80]
     if not pid:
         return {'error': 'pid required'}
-    return _albert_decisions(pid)
+    snap = _albert_decisions(pid)
+    # Phase D2: reconcile against stored state -> stable ids + genuine change events only.
+    try:
+        events = _decision_history_repo.reconcile(pid, snap)
+        snap['changeEvents'] = events
+    except Exception:  # noqa
+        traceback.print_exc()
+        snap['changeEvents'] = []
+    return snap
+
+
+@app.get('/api/v1/albert/decision-history')
+def albert_decision_history(pid: str = '', asset: str = '', limit: int = 50):
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    rows = _decision_history_repo.list_history(pid, asset=(asset or '').strip() or None, limit=limit)
+    return {'status': 'ready', 'count': len(rows), 'events': rows}
+
+
+@app.get('/api/v1/albert/decision/{decision_id}')
+def albert_decision_fetch(decision_id: str, pid: str = ''):
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    env = _decision_history_repo.get_snapshot(pid, decision_id)
+    if not env:
+        return {'status': 'not_found'}
+    return {'status': 'ready', 'decision': env}
+
+
+# ---- Ask Albert About This Call (read-only explanation of an immutable snapshot) ----
+EXPLAIN_CALL_SYSTEM = (
+    "You are Albert, a disciplined crypto risk & strategy adviser. You are given ONE immutable, "
+    "already-decided DecisionSnapshot as read-only JSON. Your ONLY job is to EXPLAIN it in plain English. "
+    "ABSOLUTE RULES: (1) NEVER recalculate, round, or substitute any number. Use the EXACT figures given "
+    "(call, reasonCode, score, confidence, prices, quantities, sellUsd/sellQty, deployNow/tranche amounts, "
+    "invalidation, flip-condition thresholds). If it says SELL $4,216.37 you say $4,216.37 — never a new number. "
+    "(2) NEVER change the call or invent a different recommendation. (3) You MAY explain: why this call was made, "
+    "why that amount/fraction was chosen, which lower-precedence signal lost and why (see sellPlan.allSignals + "
+    "precedenceRuleApplied + precedenceOrder), the deployment tranches or sell plan, the mandate/risk constraints, "
+    "and exactly what would change the call (use flipConditions verbatim in intent). "
+    "(4) If asked to do maths or give a different number/target, refuse and restate the snapshot's numbers. "
+    "Be concise, concrete, and cite the snapshot's own fields. Do not output JSON."
+)
+
+
+def _explain_dto(env):
+    """Whitelisted, read-only projection of an immutable decision for the LLM."""
+    sp = env.get('sellPlan') or {}
+    dp = env.get('deploymentPlan') or {}
+    return {
+        'symbol': env.get('symbol'), 'call': env.get('call') or env.get('action'),
+        'reasonCode': env.get('reasonCode'), 'precedenceRuleApplied': env.get('precedenceRuleApplied'),
+        'opportunityScore': env.get('opportunityScore'), 'confidence': env.get('confidence'),
+        'regime': env.get('regime'), 'buyThreshold': env.get('buyThreshold'),
+        'eligible': env.get('eligible'), 'ineligibilityReason': env.get('ineligibilityReason'),
+        'invalidation': env.get('invalidation'), 'currentPrice': env.get('currentPrice'),
+        'positionBefore': env.get('positionBefore'), 'positionAfter': env.get('positionAfter'),
+        'recommendedDeltaUsd': env.get('recommendedDeltaUsd'),
+        'deploymentPlan': {'deployNowUsd': dp.get('deployNowUsd'), 'totalPlannedUsd': dp.get('totalPlannedUsd'),
+                           'tranches': dp.get('tranches')} if dp else None,
+        'sellPlan': {'action': sp.get('action'), 'fraction': sp.get('fraction'), 'sellUsd': sp.get('sellUsd'),
+                     'sellQty': sp.get('sellQty'), 'note': sp.get('note'),
+                     'allSignals': sp.get('allSignals')} if sp else None,
+        'mandateChecks': env.get('mandateChecks'), 'riskFlags': env.get('riskFlags'),
+        'flipConditions': env.get('flipConditions'), 'reasons': env.get('reasons'),
+        'warnings': env.get('warnings'), 'precedenceOrder': env.get('precedenceOrder'),
+    }
+
+
+@app.post('/api/v1/albert/explain-call')
+def albert_explain_call(payload: dict = Body(...)):
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    decision_id = (str(payload.get('decisionId') or '')).strip()
+    question = (str(payload.get('question') or '')).strip()[:400]
+    # Resolve the AUTHORITATIVE immutable snapshot; the LLM never gets a writable path.
+    env = None
+    source = 'store'
+    if decision_id:
+        env = _decision_history_repo.get_snapshot(pid, decision_id)
+    if env is None and payload.get('asset'):
+        env = _decision_history_repo.get_current(pid, str(payload.get('asset')).upper()[:8])
+    if env is None and isinstance(payload.get('decision'), dict):
+        env = payload['decision']
+        source = 'client'
+    if not env:
+        return {'status': 'not_found', 'error': 'No decision snapshot to explain.'}
+    dto = _explain_dto(env)
+    if not (LLM_READY_KEY and _HAS_LLM):
+        return {'status': 'ready', 'explanation': '', 'decision': env, 'source': source,
+                'error': 'LLM not configured'}
+    try:
+        q = ('Explain this decision to me.' if not question else question)
+        prompt = ('Immutable DecisionSnapshot (read-only JSON):\n' + json.dumps(dto, default=str)
+                  + '\n\nUser question: ' + q)
+
+        def _call():
+            async def _go():
+                chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'explain-{decision_id or dto.get("symbol")}',
+                                system_message=EXPLAIN_CALL_SYSTEM)
+                        .with_model('gemini', _model_for('chat_standard')).with_params(temperature=0.2, max_tokens=4000))
+                return await chat.send_message(UserMessage(text=prompt))
+            return asyncio.run(_go())
+        reply = _LLM_POOL.submit(_call).result(timeout=60)
+        text = reply.strip() if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '').strip()
+    except Exception:  # noqa
+        traceback.print_exc()
+        text = ''
+    # The snapshot is returned UNCHANGED alongside the explanation (LLM cannot mutate it).
+    return {'status': 'ready', 'explanation': text, 'decision': env, 'source': source,
+            'model': _model_for('chat_standard')}
 
 
 @app.get('/api/v1/albert/deployment-plan')

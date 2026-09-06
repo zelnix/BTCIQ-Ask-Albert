@@ -63,3 +63,25 @@ PRECEDENCE_ORDER = {
     'HOLD': 7,
     'WAIT': 8,
 }
+
+# ---------------------------------------------------------------------------
+# Phase D2: flip conditions + immutable snapshot + eligibility + history
+# ---------------------------------------------------------------------------
+# Data-confidence floor referenced by flip conditions ("BUY -> WAIT if data
+# confidence becomes insufficient"). NOT a hard gate on existing calls (added to
+# avoid changing Phase C/D1 behaviour) — only surfaced in flip conditions.
+CONFIDENCE_MIN = 50
+
+# riskFlag thresholds (display / audit only — do not alter the call).
+NEAR_INVALIDATION_PCT = 5.0     # price within this %% above invalidation
+LARGE_LOSS_FLAG_PCT = 20.0      # unrealized loss worse than this flags LARGE_UNREALIZED_LOSS
+
+# Canonical eligibility reason codes (discovery vs eligibility separation).
+ELIGIBILITY_REASONS = (
+    'EXCLUDED_BY_MANDATE', 'NOT_IN_APPROVED_UNIVERSE', 'MANDATE_INCOMPLETE', 'STALE_DATA',
+)
+
+# How many immutable snapshots to retain per (pid, asset) before trimming oldest.
+DECISION_SNAPSHOT_RETENTION = 200
+# How many change-history events to return by default.
+DECISION_HISTORY_DEFAULT_LIMIT = 50

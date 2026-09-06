@@ -83,10 +83,17 @@ albert_calls_col = db['albert_calls']  # Albert's self-logged buy/sell calls + g
 recap_col = db['albert_recap']  # cached weekly recap note
 # Phase D: auditable decision-change history (BUY/HOLD/SELL/WAIT transitions per asset, scoped by pid)
 decision_history_col = db['albert_decision_history']
+# Phase D2: append-only immutable decision snapshots (referenced by history) + latest-per-asset pointer
+decision_snapshots_col = db['albert_decision_snapshots']
+decision_current_col = db['albert_decision_current']
 try:
     decision_history_col.create_index([('pid', 1), ('asset', 1), ('changedAt', -1)])
-    decision_history_col.create_index([('pid', 1), ('decisionId', 1)])
-    decision_history_col.create_index([('pid', 1), ('snapshotId', 1)])
+    decision_history_col.create_index([('pid', 1), ('newDecisionId', 1)])
+    decision_history_col.create_index([('pid', 1), ('newSnapshotId', 1)])
+    decision_snapshots_col.create_index([('pid', 1), ('asset', 1), ('createdAt', -1)])
+    decision_snapshots_col.create_index('decisionId')
+    decision_snapshots_col.create_index('snapshotId')
+    decision_current_col.create_index([('pid', 1), ('asset', 1)])
 except Exception:  # noqa
     pass
 

@@ -114,7 +114,161 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
-  - task: "Albert's Plan Phase D1 — deterministic SELL engine + decision precedence (+ D0 engine extraction to albert/ package)"
+  - task: "Albert's Plan Phase D2 — flip conditions, immutable decision snapshot (+hash), discovery/eligibility, Ask-Albert explain, decision-change history"
+    implemented: true
+    working: true
+    file: "backend/albert/engine/*.py, backend/albert/repositories/decision_history.py, backend/server.py, backend/config.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          PHASE D2 (built on the D0 albert/ package + D1 SELL engine; all D1/C behaviour preserved). Five parts:
+          (1) FLIP CONDITIONS (albert/engine/flip_conditions.py): every BUY/SELL/HOLD/WAIT decision now returns
+          engine-generated `flipConditions` [{toCall,trigger,detail,threshold?}] derived purely from engine state +
+          versioned thresholds (never the LLM). Hysteresis bands REGIME_BUY_ENTER vs REGIME_BUY_REMAIN (BULL 72/68,
+          RANGE 78/74, BEAR 85/81) so small score wobble does not flap the call. SELL flips respect D1 precedence
+          (a PROFIT_TAKE flip notes a higher-precedence risk trigger would override it, etc.).
+          (2) IMMUTABLE DECISION SNAPSHOT: each decision carries the full audit envelope — decisionId, snapshotId,
+          engineVersion, marketDataTimestamp, call, reasonCode, precedenceRuleApplied, score, confidence,
+          positionBefore, recommendedDeltaUsd, positionAfter, invalidation, flipConditions, riskFlags, mandateChecks,
+          deploymentPlan, sellPlan, mandateVersion, portfolioVersion, regimeSnapshotId, eligible, ineligibilityReason,
+          decisionInputs (canonical) + decisionInputsHash. Hash (albert/engine/hashing.py) is sha256 of a
+          canonicalised INPUT set only — excludes ids/timestamps/explanation/reason-strings so those cannot corrupt
+          it. Same inputs+engineVersion => same hash & decision; a material input change => new hash.
+          (3) DISCOVERY vs ELIGIBILITY vs DECISION (albert/engine/universe.py): explicit stages. Discovery scores the
+          universe (+held); eligibility applies mandate/data rules with canonical codes (EXCLUDED_BY_MANDATE,
+          NOT_IN_APPROVED_UNIVERSE, MANDATE_INCOMPLETE, STALE_DATA) that MIRROR the existing Phase C/D1 hard gates
+          (no behaviour change). An ineligible asset is still SCORED and shown (e.g. XRP score 96, eligible:false,
+          reason NOT_IN_APPROVED_UNIVERSE, call WAIT) but can NEVER become BUY.
+          (4) ASK ALBERT ABOUT THIS CALL: POST /api/v1/albert/explain-call {pid, decisionId | asset | decision,
+          question?} loads the AUTHORITATIVE immutable snapshot (store first, client fallback), builds a whitelisted
+          read-only DTO, and asks the LLM under a strict system prompt to EXPLAIN ONLY. The endpoint returns the LLM
+          text PLUS the snapshot UNCHANGED — there is no writable path for the LLM to alter call/score/price/qty/
+          deployment/sell/invalidation/flip conditions. GET /api/v1/albert/decision/{decisionId}?pid= fetches an
+          immutable snapshot.
+          (5) DECISION CHANGE HISTORY (albert/repositories/decision_history.py + 3 collections): reconcile() runs on
+          every GET /api/v1/albert/decisions. It keeps decision_current_col (latest per pid+asset), and on a GENUINE
+          identity change (call/reasonCode/eligibility/sell-action/deployment-tier) it mints new decisionId+snapshotId,
+          appends an immutable record to decision_snapshots_col, and writes a decision_history_col EVENT that
+          REFERENCES snapshots (previousDecisionId,newDecisionId,previousSnapshotId,newSnapshotId,changedAt,changeType,
+          changeReason[]). An identical refresh (identity unchanged) REUSES the stable ids and writes NO event (no
+          spam even if score drifts 81->82). GET /api/v1/albert/decision-history?pid=&asset=&limit=.
+          LOCAL TESTS by main: 25/25 acceptance-gate assertions PASS — hash determinism (same/material-change/engine-
+          version/excludes ids+ts), ineligible-scored-never-bought, flip conditions on every call, hysteresis present,
+          full envelope, history transitions + no-spam + audit-chain linkage (event.previous==prior.new across two
+          transitions), explain returns decision unchanged (LLM cited exact score), D1 precedence unchanged
+          (RISK_REDUCTION beats co-firing REBALANCE), A/B/C portfolio math. Advisory/paper only.
+          PLEASE RETEST (backend only, external /api base, FRESH pids, clean up mandate_col+portfolio_col+
+          decision_current_col+decision_snapshots_col+decision_history_col at end):
+          A) Regression: all Phase A/B/C + D1 endpoints still 200 with correct math + SELL precedence intact.
+          B) GET /api/v1/albert/decisions now returns per-decision full envelope incl decisionId, snapshotId,
+             decisionInputsHash, flipConditions (>=1 each), eligible/ineligibilityReason, mandateChecks, riskFlags,
+             positionBefore/After, recommendedDeltaUsd, mandateVersion/portfolioVersion/regimeSnapshotId.
+          C) Eligibility: a high scorer NOT in approved_coins (e.g. XRP) -> opportunityScore>0, eligible=false,
+             ineligibilityReason='NOT_IN_APPROVED_UNIVERSE', action WAIT (NEVER BUY).
+          D) History: call /decisions (establish). Call again unchanged -> SAME decisionId, decision-history count 0.
+             Then change the mandate to EXCLUDE a held coin -> next /decisions flips that coin to SELL/EMERGENCY_EXIT,
+             mints a NEW decisionId, and decision-history has 1 event whose previousDecisionId == the first id and
+             newDecisionId == the new id, with changeType + non-empty changeReason[]. Remove the exclusion -> a second
+             event whose previousDecisionId == the second id (chain links).
+          E) Explain: GET /api/v1/albert/decision/{decisionId}?pid= returns the snapshot; POST /api/v1/albert/explain-call
+             {pid, decisionId} returns status ready, a non-empty explanation (LLM ~ up to 60s), AND decision echoed
+             UNCHANGED (same decisionId/call/score/reasonCode/recommendedDeltaUsd). Confirm the endpoint never returns
+             a mutated number vs the stored snapshot.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Phase D2 backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ALL 5 TESTS PASSED (5/5): Test A (Regression), Test B (Immutable Envelope), Test C (Discovery vs Eligibility), 
+          Test D (Decision-Change History), Test E (Ask Albert Explain).
+          
+          TEST A - REGRESSION (Phase A/B/C + D1): ✅ PASSED (4/4 sub-tests)
+          • A1: GET /api/v1/albert/regime returns HTTP 200 with regime=BULL, confidence=95 ✅
+          • A2: Portfolio summary math correct: usdc=5000, reserve_pct=25 → protected_reserve=1250.00, deployable=3750.00 ✅
+          • A3: BUY decision tranche sums validated: ETH tranches sum=2250.00 matches totalPlanned=2250.00 ✅
+          • A4: D1 SELL precedence intact: BTC (1 BTC @ ~$80k vs $5k USDC, allocation ~90%+) → action=SELL, 
+            reasonCode=RISK_REDUCTION (highest precedence), allSignals=['RISK_REDUCTION','REBALANCE'] (collision confirmed) ✅
+          
+          TEST B - IMMUTABLE ENVELOPE: ✅ PASSED
+          • Top-level snapshot fields present: engineVersion, mandateVersion, portfolioVersion, regimeSnapshotId, 
+            precedenceOrder, changeEvents ✅
+          • Per-decision envelope: ALL 25 required fields present in every decision (decisionId, snapshotId, engineVersion, 
+            marketDataTimestamp, call, reasonCode, precedenceRuleApplied, score, confidence, positionBefore, 
+            recommendedDeltaUsd, positionAfter, invalidation, flipConditions, riskFlags, mandateChecks, deploymentPlan, 
+            sellPlan, mandateVersion, portfolioVersion, regimeSnapshotId, eligible, ineligibilityReason, decisionInputs, 
+            decisionInputsHash) ✅
+          • flipConditions: Non-empty list in every decision (XRP: 1 condition, ETH: 4 conditions, SOL: 1 condition). 
+            Each flip condition has toCall, trigger, detail fields ✅
+          • mandateChecks: Dict with all 5 required keys (excluded, inApprovedUniverse, withinCap, withinRiskBudget, 
+            mandateComplete) ✅
+          • riskFlags: List present in every decision ✅
+          
+          TEST C - DISCOVERY vs ELIGIBILITY: ✅ PASSED
+          • Setup: mandate with approved_coins=['BTC','ETH'] (XRP NOT in approved list) ✅
+          • Found ineligible high-scorer: XRP with opportunityScore=96.1 (scored), eligible=False, 
+            ineligibilityReason='NOT_IN_APPROVED_UNIVERSE', action=WAIT (NEVER BUY) ✅
+          • Validated: NO ineligible asset has action=BUY across all decisions ✅
+          • Discovery stage scores all assets in universe; eligibility stage applies mandate gates with canonical codes; 
+            ineligible assets are scored and shown but can NEVER become BUY ✅
+          
+          TEST D - DECISION-CHANGE HISTORY: ✅ PASSED (4/4 sub-tests)
+          • D1: Initial setup (approved=['BTC','ETH'], hold 0.1 BTC) → BTC decisionId=51385e52-ac4c-4088-8d82-66552390e908, 
+            action=SELL, reasonCode=RISK_REDUCTION ✅
+          • D2: Called /decisions again with NO changes → decisionId STABLE (still 51385e52-...), decision-history count=0 
+            (no spam) ✅
+          • D3: Excluded BTC from mandate → NEW decisionId=8fbb56a8-9923-4499-a7f7-d650fe386b50, action=SELL, 
+            reasonCode=EMERGENCY_EXIT (changed from RISK_REDUCTION). decision-history count=1 with event: 
+            previousDecisionId=51385e52-..., newDecisionId=8fbb56a8-..., previousSnapshotId & newSnapshotId present 
+            (different), changeType='RISK_REDUCTION->EMERGENCY_EXIT', changeReason=['Reason RISK_REDUCTION -> EMERGENCY_EXIT', 
+            'Eligibility eligible -> ineligible'] ✅
+          • D4: Removed BTC from excluded_coins → NEW decisionId=77b3a6a3-81b9-4b6b-8641-cd222857bfbc. History chain links 
+            correctly: Event 1 (51385e52-... → 8fbb56a8-...), Event 2 (8fbb56a8-... → 77b3a6a3-...). 
+            previousDecisionId of Event 2 matches newDecisionId of Event 1 (audit chain intact) ✅
+          • Validated: Genuine identity changes mint new decisionId+snapshotId and write history events; identical refreshes 
+            reuse stable IDs and write NO events (no spam) ✅
+          
+          TEST E - ASK ALBERT EXPLAIN (read-only): ✅ PASSED (4/4 sub-tests)
+          • E1: Setup complete, BTC decisionId=84c445bf-9b23-4b45-b7d5-c6cdcd10b8a6 ✅
+          • E2: GET /api/v1/albert/decision/{decisionId}?pid= returns HTTP 200, status='ready', decision with 
+            decisionId=84c445bf-..., call=SELL, score=84.2, reasonCode=RISK_REDUCTION ✅
+          • E3: POST /api/v1/albert/explain-call {pid, decisionId, question='Why this call and what would change it?'} 
+            returns HTTP 200, status='ready', explanation (1184 chars, non-empty) ✅. LLM explanation cites exact values 
+            from snapshot (score 84.2, RISK_REDUCTION precedence rule, BULL regime, 96% confidence) ✅
+          • E4: Decision returned in explain response is UNCHANGED vs stored snapshot: decisionId=84c445bf-... (same), 
+            call=SELL (same), score=84.2 (same), reasonCode=RISK_REDUCTION (same), recommendedDeltaUsd=-7951.93 (same) ✅
+          • Validated: LLM has NO writable path to alter call/score/price/qty/deployment/sell/invalidation/flip conditions. 
+            Endpoint returns LLM explanation PLUS immutable snapshot UNCHANGED ✅
+          
+          CLEANUP: ✅ COMPLETE
+          • Deleted test data from 5 MongoDB collections (user_mandates, user_portfolios, albert_decision_current, 
+            albert_decision_snapshots, albert_decision_history) for 5 test PIDs (u_TEST_D2_REGR, u_TEST_D2_ENV, 
+            u_TEST_D2_ELIG, u_TEST_D2_HIST, u_TEST_D2_EXPL) ✅
+          • Total deleted: 60 decision_current docs, 62 decision_snapshots docs, 2 decision_history events ✅
+          
+          KEY VALIDATIONS:
+          • Phase A/B/C + D1 regression: All endpoints return HTTP 200 with correct math. BUY tranche sums exact. 
+            deployNow<=deployable. D1 SELL precedence intact (RISK_REDUCTION beats REBALANCE in collision) ✅
+          • Immutable envelope: Every decision has full audit fields (25 fields). flipConditions non-empty (>=1 per decision). 
+            mandateChecks dict with 5 keys. riskFlags list. Top-level snapshot has engineVersion, mandateVersion, 
+            portfolioVersion, regimeSnapshotId, precedenceOrder, changeEvents ✅
+          • Discovery vs eligibility: Ineligible assets (NOT_IN_APPROVED_UNIVERSE) are scored (opportunityScore>0) and shown 
+            but action=WAIT (NEVER BUY). No ineligible asset has action=BUY ✅
+          • Decision-change history: Stable decisionId when identity unchanged (no spam). New decisionId+snapshotId on genuine 
+            transitions (call/reasonCode/eligibility/sell-action/deployment-tier change). History events reference snapshots 
+            (previousDecisionId, newDecisionId, previousSnapshotId, newSnapshotId). Audit chain links correctly across 
+            multiple transitions ✅
+          • Ask Albert explain: GET /decision/{decisionId} fetches immutable snapshot. POST /explain-call returns LLM 
+            explanation (non-empty) PLUS decision UNCHANGED (same decisionId/call/score/reasonCode/recommendedDeltaUsd). 
+            LLM cites exact snapshot values. No writable path for LLM to mutate decision ✅
+          • Data is REAL (live market prices via ccxt, regime=BULL 95% confidence) ✅
+          
+          NO MAJOR ISSUES FOUND. Phase D2 (flip conditions, immutable decision snapshot, discovery/eligibility, Ask-Albert 
+          explain, decision-change history) is fully functional and production-ready. Advisory/paper only (no live execution).
+
+
     implemented: true
     working: true
     file: "backend/albert/engine/*.py, backend/albert/deps.py, backend/server.py, backend/config.py"
@@ -7607,25 +7761,25 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Albert's Plan Phase D1 — deterministic SELL engine + decision precedence (+ D0 engine extraction to albert/ package)"
+    - "Albert's Plan Phase D2 — flip conditions, immutable decision snapshot (+hash), discovery/eligibility, Ask-Albert explain, decision-change history"
   stuck_tasks: []
   test_all: false
 
 agent_communication:
     -agent: "main"
     -message: |
-      PHASE D1 BACKEND TEST REQUEST. I extracted the Albert deterministic engine out of server.py into an albert/
-      package (D0, behaviour-identical) and added a deterministic SELL engine + decision precedence (D1). Please run
-      a BACKEND-ONLY regression + new-feature suite as described in the top backend task
-      "Albert's Plan Phase D1 — deterministic SELL engine + decision precedence". Key points:
-      - Test via the external preview /api base. Use FRESH test pids and clean them up (mandate_col + portfolio_col).
-      - Regression: all Phase A/B/C Albert endpoints must still be 200 with correct math (BUY allocation, tranche
-        sums, deployNow<=deployable, protected reserve untouched, whitelist/excluded hard gates still block BUY).
-      - NEW: SELL is emitted ONLY for HELD assets; a falling score alone must NEVER produce SELL. Verify the five
-        reason classes + precedence (EMERGENCY_EXIT > THESIS_INVALIDATION > RISK_REDUCTION > REBALANCE > PROFIT_TAKE
-        > BUY > HOLD > WAIT), the permitted actions (TRIM_10/25/50, EXIT_100), and that sellPlan amounts are
-        internally consistent (positionAfter.valueUsd == positionBefore.valueUsd*(1-fraction)).
-      - Do NOT test any live execution (this is advisory/paper only) and do NOT test the frontend.
+      PHASE D2 BACKEND TEST REQUEST (backend only; do NOT test frontend; advisory/paper only). See the top backend
+      task "Albert's Plan Phase D2 ...". Run against the external preview /api base with FRESH pids and CLEAN UP at
+      the end (mandate_col + portfolio_col + decision_current_col + decision_snapshots_col + decision_history_col).
+      Focus: (A) Phase A/B/C + D1 regression still green (math + SELL precedence). (B) /decisions returns the full
+      immutable envelope per decision (ids, decisionInputsHash, flipConditions>=1, eligible/ineligibilityReason,
+      mandateChecks, riskFlags, positionBefore/After, recommendedDeltaUsd, mandate/portfolio/regime versions).
+      (C) Ineligible high scorer (XRP not approved) -> scored but eligible=false, NOT_IN_APPROVED_UNIVERSE, WAIT,
+      never BUY. (D) decision-history: identical refresh -> stable decisionId + NO event; excluding a held coin ->
+      SELL/EMERGENCY_EXIT + new decisionId + 1 history event referencing prev/new decisionId+snapshotId; removing the
+      exclusion -> a chained second event (previous == prior.new). (E) explain-call returns a non-empty explanation
+      AND the decision echoed UNCHANGED (no mutated numbers). Treat portfolio-driven assertions (eligibility, SELL
+      reason/qty, history transitions) as the hard pass/fail; regime-dependent BUY counts may vary with live data.
 
 
     -agent: "testing"

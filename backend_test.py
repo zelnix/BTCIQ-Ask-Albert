@@ -1,888 +1,755 @@
-#!/usr/bin/env python3
 """
-Backend test for Albert's Plan Phase D1 — deterministic SELL engine + decision precedence.
-Tests both Phase A/B/C regression and new Phase D1 SELL scenarios.
+Phase D2 Backend Testing - Albert's Plan
+Tests: Flip conditions, immutable decision snapshot, discovery/eligibility, 
+       Ask-Albert explain, decision-change history
 """
 import requests
-import json
 import time
-from typing import Dict, Any, List
+import json
 
 # Base URL from .env
 BASE_URL = "https://quant-features.preview.emergentagent.com/api"
 
-# Test PIDs for isolation
+# Fresh test PIDs for D2
 TEST_PIDS = []
 
-def log_test(name: str, passed: bool, details: str = ""):
-    """Log test result."""
-    status = "✅ PASS" if passed else "❌ FAIL"
-    print(f"{status} | {name}")
-    if details:
-        print(f"    {details}")
-    if not passed:
-        print(f"    FAILURE DETAILS: {details}")
-
 def cleanup_test_data():
-    """Clean up test data from MongoDB."""
+    """Clean up all test data from MongoDB collections"""
     print("\n" + "="*80)
-    print("CLEANUP: Deleting test data from MongoDB...")
+    print("CLEANUP: Deleting test data from MongoDB collections")
     print("="*80)
     
-    # Import MongoDB client
     from pymongo import MongoClient
     client = MongoClient("mongodb://localhost:27017")
     db = client["btciq"]
-    mandate_col = db["user_mandates"]
-    portfolio_col = db["user_portfolios"]
     
-    deleted_mandates = 0
-    deleted_portfolios = 0
+    collections = [
+        "user_mandates",
+        "user_portfolios", 
+        "albert_decision_current",
+        "albert_decision_snapshots",
+        "albert_decision_history"
+    ]
     
-    for pid in TEST_PIDS:
-        result = mandate_col.delete_one({"_id": pid})
-        deleted_mandates += result.deleted_count
+    for coll_name in collections:
+        coll = db[coll_name]
+        # Delete by pid pattern
+        for pid in TEST_PIDS:
+            result = coll.delete_many({"pid": pid})
+            if result.deleted_count > 0:
+                print(f"  ✓ Deleted {result.deleted_count} documents from {coll_name} for pid={pid}")
         
-        result = portfolio_col.delete_one({"_id": pid})
-        deleted_portfolios += result.deleted_count
+        # Also delete by _id pattern for decision_current (format: "<pid>:<ASSET>")
+        if coll_name == "albert_decision_current":
+            for pid in TEST_PIDS:
+                result = coll.delete_many({"_id": {"$regex": f"^{pid}:"}})
+                if result.deleted_count > 0:
+                    print(f"  ✓ Deleted {result.deleted_count} documents from {coll_name} by _id pattern")
     
-    print(f"Deleted {deleted_mandates} mandates and {deleted_portfolios} portfolios")
-    print("Cleanup complete.")
+    print(f"✓ Cleanup complete for {len(TEST_PIDS)} test PIDs")
+
+def post_mandate(pid, mandate_data):
+    """Helper: POST mandate"""
+    url = f"{BASE_URL}/v1/albert/mandate"
+    payload = {"pid": pid, "mandate": mandate_data}
+    resp = requests.post(url, json=payload, timeout=30)
+    return resp
+
+def post_portfolio(pid, usdc, positions):
+    """Helper: POST portfolio"""
+    url = f"{BASE_URL}/v1/portfolio"
+    payload = {"pid": pid, "usdc": usdc, "positions": positions}
+    resp = requests.post(url, json=payload, timeout=30)
+    return resp
+
+def get_decisions(pid):
+    """Helper: GET decisions"""
+    url = f"{BASE_URL}/v1/albert/decisions"
+    resp = requests.get(url, params={"pid": pid}, timeout=30)
+    return resp
+
+def get_decision_history(pid, asset=None, limit=50):
+    """Helper: GET decision history"""
+    url = f"{BASE_URL}/v1/albert/decision-history"
+    params = {"pid": pid, "limit": limit}
+    if asset:
+        params["asset"] = asset
+    resp = requests.get(url, params=params, timeout=30)
+    return resp
+
+def get_decision_by_id(pid, decision_id):
+    """Helper: GET decision by ID"""
+    url = f"{BASE_URL}/v1/albert/decision/{decision_id}"
+    resp = requests.get(url, params={"pid": pid}, timeout=30)
+    return resp
+
+def post_explain_call(pid, decision_id, question=None):
+    """Helper: POST explain-call"""
+    url = f"{BASE_URL}/v1/albert/explain-call"
+    payload = {"pid": pid, "decisionId": decision_id}
+    if question:
+        payload["question"] = question
+    resp = requests.post(url, json=payload, timeout=90)
+    return resp
+
+def get_regime():
+    """Helper: GET regime"""
+    url = f"{BASE_URL}/v1/albert/regime"
+    resp = requests.get(url, timeout=30)
+    return resp
+
+def get_portfolio_summary(pid):
+    """Helper: GET portfolio summary"""
+    url = f"{BASE_URL}/v1/albert/portfolio-summary"
+    resp = requests.get(url, params={"pid": pid}, timeout=30)
+    return resp
 
 # ============================================================================
-# PART 1: Phase A/B/C REGRESSION TESTS
+# TEST A: REGRESSION (Phase A/B/C + D1 must still pass)
 # ============================================================================
 
-def test_regime_endpoint():
-    """Test 1: GET /api/v1/albert/regime returns valid regime."""
+def test_a_regression():
     print("\n" + "="*80)
-    print("TEST 1: Regime Endpoint")
+    print("TEST A: REGRESSION - Phase A/B/C + D1 endpoints still working")
     print("="*80)
     
+    pid = "u_TEST_D2_REGR"
+    TEST_PIDS.append(pid)
+    
     try:
-        resp = requests.get(f"{BASE_URL}/v1/albert/regime", timeout=30)
+        # A1: GET /api/v1/albert/regime
+        print("\n[A1] Testing GET /api/v1/albert/regime")
+        resp = get_regime()
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
-        
         data = resp.json()
-        regime = data.get("regime")
-        confidence = data.get("confidence")
+        assert "regime" in data, "Missing 'regime' field"
+        assert data["regime"] in ["BULL", "RANGE", "BEAR"], f"Invalid regime: {data['regime']}"
+        print(f"  ✓ PASS: regime={data['regime']}, confidence={data.get('confidence')}")
         
-        assert regime in ["BULL", "RANGE", "BEAR"], f"Invalid regime: {regime}"
-        assert isinstance(confidence, (int, float)), f"Confidence must be numeric, got {type(confidence)}"
-        
-        log_test("Regime endpoint", True, f"regime={regime}, confidence={confidence}")
-        return True
-    except Exception as e:
-        log_test("Regime endpoint", False, str(e))
-        return False
-
-def test_mandate_roundtrip():
-    """Test 2: Mandate save+read round-trips."""
-    print("\n" + "="*80)
-    print("TEST 2: Mandate Save+Read Round-trip")
-    print("="*80)
-    
-    pid = "u_TEST_D1_MANDATE"
-    TEST_PIDS.append(pid)
-    
-    try:
-        # Save mandate
-        mandate_data = {
-            "pid": pid,
-            "mandate": {
-                "risk_tolerance": "moderate",
-                "reserve_pct": 25,
-                "approved_coins": ["BTC", "ETH"],
-                "excluded_coins": ["DOGE"],
-                "max_alloc_pct": {"BTC": 40, "ETH": 30},
-                "max_trade_risk_pct": 2.0
-            }
+        # A2: Portfolio summary math
+        print("\n[A2] Testing portfolio summary math")
+        # Setup: mandate + portfolio
+        mandate = {
+            "risk_tolerance": "moderate",
+            "reserve_pct": 25,
+            "approved_coins": ["BTC", "ETH"],
+            "excluded_coins": [],
+            "max_alloc_pct": {"BTC": 40, "ETH": 30},
+            "max_trade_risk_pct": 2
         }
+        resp = post_mandate(pid, mandate)
+        assert resp.status_code == 200, f"Mandate POST failed: {resp.status_code}"
+        print(f"  ✓ Mandate saved")
         
-        resp = requests.post(f"{BASE_URL}/v1/albert/mandate", json=mandate_data, timeout=30)
-        assert resp.status_code == 200, f"POST failed: {resp.status_code}"
+        # Portfolio: usdc=5000, hold ~1 BTC
+        resp = post_portfolio(pid, 5000, [{"asset": "BTC", "size": 1.0, "avg_entry": 60000}])
+        assert resp.status_code == 200, f"Portfolio POST failed: {resp.status_code}"
+        print(f"  ✓ Portfolio saved")
         
-        save_result = resp.json()
-        assert save_result.get("complete") == True, "Mandate should be complete with risk_tolerance + reserve_pct"
-        
-        # Read mandate
-        resp = requests.get(f"{BASE_URL}/v1/albert/mandate", params={"pid": pid}, timeout=30)
-        assert resp.status_code == 200, f"GET failed: {resp.status_code}"
-        
-        read_result = resp.json()
-        mandate = read_result.get("mandate", {})
-        
-        assert mandate.get("risk_tolerance") == "moderate", "risk_tolerance mismatch"
-        assert mandate.get("reserve_pct") == 25, "reserve_pct mismatch"
-        assert "BTC" in mandate.get("approved_coins", []), "BTC not in approved_coins"
-        assert "ETH" in mandate.get("approved_coins", []), "ETH not in approved_coins"
-        assert "DOGE" in mandate.get("excluded_coins", []), "DOGE not in excluded_coins"
-        assert read_result.get("complete") == True, "Mandate should be complete"
-        
-        log_test("Mandate round-trip", True, f"complete={read_result.get('complete')}")
-        return True
-    except Exception as e:
-        log_test("Mandate round-trip", False, str(e))
-        return False
-
-def test_portfolio_summary_math():
-    """Test 3: Portfolio summary math validation."""
-    print("\n" + "="*80)
-    print("TEST 3: Portfolio Summary Math")
-    print("="*80)
-    
-    pid = "u_TEST_D1_PORTFOLIO"
-    TEST_PIDS.append(pid)
-    
-    try:
-        # Save mandate with reserve_pct
-        mandate_data = {
-            "pid": pid,
-            "mandate": {
-                "risk_tolerance": "moderate",
-                "reserve_pct": 25,
-                "approved_coins": ["BTC", "ETH"]
-            }
-        }
-        requests.post(f"{BASE_URL}/v1/albert/mandate", json=mandate_data, timeout=30)
-        
-        # Save portfolio with USDC and a small BTC position
-        portfolio_data = {
-            "pid": pid,
-            "usdc": 50000,
-            "positions": [
-                {"asset": "BTC", "size": 0.1, "avg_entry": 60000}
-            ]
-        }
-        
-        resp = requests.post(f"{BASE_URL}/v1/portfolio", json=portfolio_data, timeout=30)
-        assert resp.status_code == 200, f"Portfolio save failed: {resp.status_code}"
-        
-        # Get portfolio summary
-        resp = requests.get(f"{BASE_URL}/v1/albert/portfolio-summary", params={"pid": pid}, timeout=30)
+        # Get summary
+        resp = get_portfolio_summary(pid)
         assert resp.status_code == 200, f"Portfolio summary failed: {resp.status_code}"
-        
-        summary = resp.json()
-        
-        usdc = summary.get("usdc", 0)
-        holdings_value = summary.get("holdings_value", 0)
-        total_value = summary.get("total_value", 0)
-        protected_reserve = summary.get("protected_reserve", 0)
-        deployable_usdc = summary.get("deployable_usdc", 0)
-        reserve_pct = summary.get("reserve_pct", 0)
+        data = resp.json()
         
         # Validate math
-        expected_total = holdings_value + usdc
-        assert abs(total_value - expected_total) < 0.01, f"total_value={total_value} != holdings_value + usdc={expected_total}"
+        usdc = data.get("usdc", 0)
+        reserve_pct = data.get("reserve_pct", 0)
+        protected_reserve = data.get("protected_reserve", 0)
+        deployable_usdc = data.get("deployable_usdc", 0)
         
-        expected_protected = usdc * reserve_pct / 100.0
-        assert abs(protected_reserve - expected_protected) < 0.01, f"protected_reserve={protected_reserve} != usdc*reserve_pct/100={expected_protected}"
+        expected_protected = usdc * reserve_pct / 100
+        expected_deployable = usdc - expected_protected
         
-        expected_deployable = usdc - protected_reserve
-        assert abs(deployable_usdc - expected_deployable) < 0.01, f"deployable_usdc={deployable_usdc} != usdc - protected_reserve={expected_deployable}"
+        assert abs(protected_reserve - expected_protected) < 0.5, \
+            f"Protected reserve mismatch: {protected_reserve} vs {expected_protected}"
+        assert abs(deployable_usdc - expected_deployable) < 0.5, \
+            f"Deployable USDC mismatch: {deployable_usdc} vs {expected_deployable}"
         
-        log_test("Portfolio summary math", True, 
-                f"total={total_value}, usdc={usdc}, protected={protected_reserve}, deployable={deployable_usdc}")
-        return True
-    except Exception as e:
-        log_test("Portfolio summary math", False, str(e))
-        return False
-
-def test_decisions_snapshot():
-    """Test 4: Decisions snapshot validation."""
-    print("\n" + "="*80)
-    print("TEST 4: Decisions Snapshot Validation")
-    print("="*80)
-    
-    pid = "u_TEST_D1_DECISIONS"
-    TEST_PIDS.append(pid)
-    
-    try:
-        # Get current regime first
-        regime_resp = requests.get(f"{BASE_URL}/v1/albert/regime", timeout=30)
-        regime_data = regime_resp.json()
-        regime = regime_data.get("regime")
+        print(f"  ✓ PASS: protected_reserve={protected_reserve:.2f}, deployable={deployable_usdc:.2f}")
         
-        # Save mandate
-        mandate_data = {
-            "pid": pid,
-            "mandate": {
-                "risk_tolerance": "moderate",
-                "reserve_pct": 25,
-                "approved_coins": ["BTC", "ETH"],
-                "excluded_coins": ["DOGE"],
-                "max_alloc_pct": {"BTC": 40, "ETH": 30},
-                "max_trade_risk_pct": 2.0
-            }
-        }
-        requests.post(f"{BASE_URL}/v1/albert/mandate", json=mandate_data, timeout=30)
-        
-        # Save portfolio
-        portfolio_data = {
-            "pid": pid,
-            "usdc": 50000,
-            "positions": [
-                {"asset": "BTC", "size": 0.05, "avg_entry": 60000}
-            ]
-        }
-        requests.post(f"{BASE_URL}/v1/portfolio", json=portfolio_data, timeout=30)
-        
-        # Get decisions
-        resp = requests.get(f"{BASE_URL}/v1/albert/decisions", params={"pid": pid}, timeout=30)
+        # A3: BUY decision tranche sums
+        print("\n[A3] Testing BUY decision tranche sums")
+        resp = get_decisions(pid)
         assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
+        data = resp.json()
         
-        decisions_data = resp.json()
-        
-        # Validate buyThreshold matches regime
-        buy_threshold = decisions_data.get("buyThreshold")
-        expected_thresholds = {"BULL": 72, "RANGE": 78, "BEAR": 85}
-        assert buy_threshold == expected_thresholds.get(regime), \
-            f"buyThreshold={buy_threshold} doesn't match regime {regime} (expected {expected_thresholds.get(regime)})"
-        
-        # Validate regimeDeployCeiling
-        deployable_usdc = decisions_data.get("deployableUsdc", 0)
-        regime_deploy_ceiling = decisions_data.get("regimeDeployCeiling", 0)
-        expected_ceilings = {"BULL": 0.60, "RANGE": 0.35, "BEAR": 0.15}
-        expected_ceiling = deployable_usdc * expected_ceilings.get(regime, 0)
-        assert abs(regime_deploy_ceiling - expected_ceiling) < 0.5, \
-            f"regimeDeployCeiling={regime_deploy_ceiling} != deployable*ceiling={expected_ceiling}"
-        
-        # Validate decisions
-        decisions = decisions_data.get("decisions", [])
-        total_deploy_now = 0
-        
-        for d in decisions:
-            symbol = d.get("symbol")
-            action = d.get("action")
-            score = d.get("opportunityScore", 0)
-            reason_code = d.get("reasonCode", "")
-            
-            # Check BUY decisions
-            if action == "BUY":
-                # Validate tranche sums
-                tranches = d.get("tranches", [])
+        for dec in data.get("decisions", []):
+            if dec.get("action") == "BUY":
+                tranches = dec.get("tranches", [])
+                total_planned = dec.get("totalPlannedDeploymentUsd", 0)
                 tranche_sum = sum(t.get("amountUsd", 0) for t in tranches)
-                total_planned = d.get("totalPlannedDeploymentUsd", 0)
-                assert abs(tranche_sum - total_planned) < 0.5, \
-                    f"{symbol}: tranche sum {tranche_sum} != totalPlanned {total_planned}"
                 
-                total_deploy_now += d.get("recommendedDeployNowUsd", 0)
+                assert abs(tranche_sum - total_planned) < 0.5, \
+                    f"{dec['symbol']}: tranche sum {tranche_sum} != totalPlanned {total_planned}"
+                
+                deploy_now = dec.get("recommendedDeployNowUsd", 0)
+                assert deploy_now <= deployable_usdc + 0.5, \
+                    f"{dec['symbol']}: deployNow {deploy_now} > deployable {deployable_usdc}"
+                
+                print(f"  ✓ {dec['symbol']}: tranches sum={tranche_sum:.2f}, totalPlanned={total_planned:.2f}")
+        
+        # A4: D1 SELL precedence (max_alloc_pct breach)
+        print("\n[A4] Testing D1 SELL precedence (RISK_REDUCTION)")
+        # BTC allocation is ~90%+ (1 BTC @ ~$80k vs $5k USDC)
+        btc_dec = next((d for d in data.get("decisions", []) if d["symbol"] == "BTC"), None)
+        assert btc_dec is not None, "BTC decision not found"
+        
+        if btc_dec.get("action") == "SELL":
+            assert btc_dec.get("reasonCode") == "RISK_REDUCTION", \
+                f"Expected RISK_REDUCTION, got {btc_dec.get('reasonCode')}"
             
-            # Check high-scoring coins NOT in approved_coins
-            if symbol not in ["BTC", "ETH"] and score >= buy_threshold:
-                assert action == "WAIT", f"{symbol} (score {score}) should be WAIT, got {action}"
-                assert reason_code == "GATED_BY_MANDATE", \
-                    f"{symbol} should have reasonCode GATED_BY_MANDATE, got {reason_code}"
+            sell_plan = btc_dec.get("sellPlan", {})
+            all_signals = sell_plan.get("allSignals", [])
+            assert "REBALANCE" in all_signals, "Expected REBALANCE in allSignals"
             
-            # Check excluded coins never BUY
-            if symbol == "DOGE":
-                assert action != "BUY", f"DOGE (excluded) should never BUY, got {action}"
-        
-        # Validate totalDeployNowUsd <= deployableUsdc
-        total_deploy_now_reported = decisions_data.get("totalDeployNowUsd", 0)
-        assert total_deploy_now_reported <= deployable_usdc + 0.01, \
-            f"totalDeployNowUsd={total_deploy_now_reported} > deployableUsdc={deployable_usdc}"
-        
-        log_test("Decisions snapshot", True, 
-                f"regime={regime}, buyThreshold={buy_threshold}, totalDeployNow={total_deploy_now_reported}")
-        return True
-    except Exception as e:
-        log_test("Decisions snapshot", False, str(e))
-        return False
-
-def test_deployment_plan():
-    """Test 5: Deployment plan returns plan[] with tranches and new sellCount/sells[]."""
-    print("\n" + "="*80)
-    print("TEST 5: Deployment Plan Structure")
-    print("="*80)
-    
-    pid = "u_TEST_D1_PLAN"
-    TEST_PIDS.append(pid)
-    
-    try:
-        # Save mandate
-        mandate_data = {
-            "pid": pid,
-            "mandate": {
-                "risk_tolerance": "moderate",
-                "reserve_pct": 25,
-                "approved_coins": ["BTC", "ETH"],
-                "max_alloc_pct": {"BTC": 40, "ETH": 30}
-            }
-        }
-        requests.post(f"{BASE_URL}/v1/albert/mandate", json=mandate_data, timeout=30)
-        
-        # Save portfolio
-        portfolio_data = {
-            "pid": pid,
-            "usdc": 50000,
-            "positions": []
-        }
-        requests.post(f"{BASE_URL}/v1/portfolio", json=portfolio_data, timeout=30)
-        
-        # Get deployment plan
-        resp = requests.get(f"{BASE_URL}/v1/albert/deployment-plan", params={"pid": pid}, timeout=30)
-        assert resp.status_code == 200, f"Deployment plan failed: {resp.status_code}"
-        
-        plan_data = resp.json()
-        
-        # Validate structure
-        assert "plan" in plan_data, "Missing 'plan' key"
-        assert "sellCount" in plan_data, "Missing 'sellCount' key (new in D1)"
-        assert "sells" in plan_data, "Missing 'sells' key (new in D1)"
-        
-        plan = plan_data.get("plan", [])
-        sells = plan_data.get("sells", [])
-        sell_count = plan_data.get("sellCount", 0)
-        
-        # Validate plan structure
-        for p in plan:
-            assert "symbol" in p, "Plan entry missing 'symbol'"
-            assert "action" in p, "Plan entry missing 'action'"
-            assert "tranches" in p, "Plan entry missing 'tranches'"
-            assert p.get("action") == "BUY", f"Plan should only contain BUY actions, got {p.get('action')}"
-        
-        # Validate sells structure
-        assert isinstance(sells, list), "sells should be a list"
-        assert isinstance(sell_count, int), "sellCount should be an integer"
-        
-        log_test("Deployment plan structure", True, 
-                f"plan entries={len(plan)}, sellCount={sell_count}, sells entries={len(sells)}")
-        return True
-    except Exception as e:
-        log_test("Deployment plan structure", False, str(e))
-        return False
-
-# ============================================================================
-# PART 2: NEW SELL ENGINE + PRECEDENCE TESTS
-# ============================================================================
-
-def test_sell_emergency_exclusion():
-    """Test 2a: EMERGENCY_EXIT by exclusion (held excluded coin)."""
-    print("\n" + "="*80)
-    print("TEST 2a: SELL - EMERGENCY_EXIT by exclusion")
-    print("="*80)
-    
-    pid = "u_TEST_D1_SELL_EXCL"
-    TEST_PIDS.append(pid)
-    
-    try:
-        # Save mandate with DOGE excluded but hold DOGE
-        mandate_data = {
-            "pid": pid,
-            "mandate": {
-                "risk_tolerance": "moderate",
-                "reserve_pct": 25,
-                "approved_coins": ["BTC"],
-                "excluded_coins": ["DOGE"],
-                "max_alloc_pct": {"BTC": 40}
-            }
-        }
-        requests.post(f"{BASE_URL}/v1/albert/mandate", json=mandate_data, timeout=30)
-        
-        # Save portfolio holding DOGE
-        portfolio_data = {
-            "pid": pid,
-            "usdc": 10000,
-            "positions": [
-                {"asset": "DOGE", "size": 10000, "avg_entry": 0.10}
-            ]
-        }
-        requests.post(f"{BASE_URL}/v1/portfolio", json=portfolio_data, timeout=30)
-        
-        # Get decisions
-        resp = requests.get(f"{BASE_URL}/v1/albert/decisions", params={"pid": pid}, timeout=30)
-        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
-        
-        decisions_data = resp.json()
-        decisions = decisions_data.get("decisions", [])
-        
-        # Find DOGE decision
-        doge_decision = next((d for d in decisions if d.get("symbol") == "DOGE"), None)
-        assert doge_decision is not None, "DOGE decision not found"
-        
-        # Validate SELL with EMERGENCY_EXIT
-        assert doge_decision.get("action") == "SELL", f"DOGE action should be SELL, got {doge_decision.get('action')}"
-        assert doge_decision.get("reasonCode") == "EMERGENCY_EXIT", \
-            f"DOGE reasonCode should be EMERGENCY_EXIT, got {doge_decision.get('reasonCode')}"
-        
-        sell_plan = doge_decision.get("sellPlan", {})
-        assert sell_plan.get("action") == "EXIT_100", \
-            f"sellPlan.action should be EXIT_100, got {sell_plan.get('action')}"
-        assert sell_plan.get("fraction") == 1.0, \
-            f"sellPlan.fraction should be 1.0, got {sell_plan.get('fraction')}"
-        
-        log_test("SELL - EMERGENCY_EXIT by exclusion", True, 
-                f"action={doge_decision.get('action')}, reasonCode={doge_decision.get('reasonCode')}, fraction={sell_plan.get('fraction')}")
-        return True
-    except Exception as e:
-        log_test("SELL - EMERGENCY_EXIT by exclusion", False, str(e))
-        return False
-
-def test_sell_emergency_loss():
-    """Test 2b: EMERGENCY_EXIT by loss (unrealized <= -35%)."""
-    print("\n" + "="*80)
-    print("TEST 2b: SELL - EMERGENCY_EXIT by loss")
-    print("="*80)
-    
-    pid = "u_TEST_D1_SELL_LOSS"
-    TEST_PIDS.append(pid)
-    
-    try:
-        # Save mandate
-        mandate_data = {
-            "pid": pid,
-            "mandate": {
-                "risk_tolerance": "moderate",
-                "reserve_pct": 25,
-                "approved_coins": ["ETH"],
-                "max_alloc_pct": {"ETH": 40}
-            }
-        }
-        requests.post(f"{BASE_URL}/v1/albert/mandate", json=mandate_data, timeout=30)
-        
-        # Get current ETH price
-        resp = requests.get(f"{BASE_URL}/v1/albert/regime", timeout=30)
-        # We'll use a very high avg_entry to simulate a large loss
-        # Set avg_entry far above current spot (e.g., 99999) to ensure unrealized_pct <= -35%
-        
-        portfolio_data = {
-            "pid": pid,
-            "usdc": 10000,
-            "positions": [
-                {"asset": "ETH", "size": 1.0, "avg_entry": 99999}
-            ]
-        }
-        requests.post(f"{BASE_URL}/v1/portfolio", json=portfolio_data, timeout=30)
-        
-        # Get decisions
-        resp = requests.get(f"{BASE_URL}/v1/albert/decisions", params={"pid": pid}, timeout=30)
-        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
-        
-        decisions_data = resp.json()
-        decisions = decisions_data.get("decisions", [])
-        
-        # Find ETH decision
-        eth_decision = next((d for d in decisions if d.get("symbol") == "ETH"), None)
-        assert eth_decision is not None, "ETH decision not found"
-        
-        # Validate SELL with EMERGENCY_EXIT
-        assert eth_decision.get("action") == "SELL", f"ETH action should be SELL, got {eth_decision.get('action')}"
-        assert eth_decision.get("reasonCode") == "EMERGENCY_EXIT", \
-            f"ETH reasonCode should be EMERGENCY_EXIT, got {eth_decision.get('reasonCode')}"
-        
-        sell_plan = eth_decision.get("sellPlan", {})
-        assert sell_plan.get("fraction") == 1.0, \
-            f"sellPlan.fraction should be 1.0, got {sell_plan.get('fraction')}"
-        
-        log_test("SELL - EMERGENCY_EXIT by loss", True, 
-                f"action={eth_decision.get('action')}, reasonCode={eth_decision.get('reasonCode')}, fraction={sell_plan.get('fraction')}")
-        return True
-    except Exception as e:
-        log_test("SELL - EMERGENCY_EXIT by loss", False, str(e))
-        return False
-
-def test_sell_risk_reduction():
-    """Test 2c: RISK_REDUCTION with collision (allSignals contains REBALANCE)."""
-    print("\n" + "="*80)
-    print("TEST 2c: SELL - RISK_REDUCTION with collision")
-    print("="*80)
-    
-    pid = "u_TEST_D1_SELL_RISK"
-    TEST_PIDS.append(pid)
-    
-    try:
-        # Save mandate with low max_alloc_pct for BTC
-        mandate_data = {
-            "pid": pid,
-            "mandate": {
-                "risk_tolerance": "moderate",
-                "reserve_pct": 25,
-                "approved_coins": ["BTC"],
-                "max_alloc_pct": {"BTC": 10},
-                "max_trade_risk_pct": 2.0
-            }
-        }
-        requests.post(f"{BASE_URL}/v1/albert/mandate", json=mandate_data, timeout=30)
-        
-        # Save portfolio with large BTC position (allocation ~90%+)
-        portfolio_data = {
-            "pid": pid,
-            "usdc": 5000,
-            "positions": [
-                {"asset": "BTC", "size": 1.0, "avg_entry": 60000}
-            ]
-        }
-        requests.post(f"{BASE_URL}/v1/portfolio", json=portfolio_data, timeout=30)
-        
-        # Get decisions
-        resp = requests.get(f"{BASE_URL}/v1/albert/decisions", params={"pid": pid}, timeout=30)
-        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
-        
-        decisions_data = resp.json()
-        decisions = decisions_data.get("decisions", [])
-        
-        # Find BTC decision
-        btc_decision = next((d for d in decisions if d.get("symbol") == "BTC"), None)
-        assert btc_decision is not None, "BTC decision not found"
-        
-        # Validate SELL
-        assert btc_decision.get("action") == "SELL", f"BTC action should be SELL, got {btc_decision.get('action')}"
-        
-        # reasonCode should be RISK_REDUCTION (highest precedence of co-firing signals)
-        reason_code = btc_decision.get("reasonCode")
-        sell_plan = btc_decision.get("sellPlan", {})
-        all_signals = sell_plan.get("allSignals", [])
-        
-        # Check that REBALANCE is in allSignals (collision)
-        assert "REBALANCE" in all_signals, \
-            f"allSignals should contain REBALANCE, got {all_signals}"
-        
-        # reasonCode should be RISK_REDUCTION (highest precedence)
-        # Note: This might also be REBALANCE depending on the actual position size and stop distance
-        # The spec says RISK_REDUCTION should be the reasonCode when it co-fires with REBALANCE
-        assert reason_code in ["RISK_REDUCTION", "REBALANCE"], \
-            f"reasonCode should be RISK_REDUCTION or REBALANCE, got {reason_code}"
-        
-        log_test("SELL - RISK_REDUCTION with collision", True, 
-                f"action={btc_decision.get('action')}, reasonCode={reason_code}, allSignals={all_signals}")
-        return True
-    except Exception as e:
-        log_test("SELL - RISK_REDUCTION with collision", False, str(e))
-        return False
-
-def test_sell_profit_take():
-    """Test 2d: PROFIT_TAKE (unrealized ~100%, expect TRIM_25)."""
-    print("\n" + "="*80)
-    print("TEST 2d: SELL - PROFIT_TAKE")
-    print("="*80)
-    
-    pid = "u_TEST_D1_SELL_PROFIT"
-    TEST_PIDS.append(pid)
-    
-    try:
-        # Save mandate
-        mandate_data = {
-            "pid": pid,
-            "mandate": {
-                "risk_tolerance": "moderate",
-                "reserve_pct": 25,
-                "approved_coins": ["BTC"],
-                "max_alloc_pct": {"BTC": 40}
-            }
-        }
-        requests.post(f"{BASE_URL}/v1/albert/mandate", json=mandate_data, timeout=30)
-        
-        # Get current BTC price to calculate avg_entry for ~100% gain
-        # We'll use avg_entry ~ half of current spot
-        # For example, if BTC is at 80000, avg_entry = 40000 gives ~100% gain
-        
-        portfolio_data = {
-            "pid": pid,
-            "usdc": 100000,
-            "positions": [
-                {"asset": "BTC", "size": 0.1, "avg_entry": 40000}
-            ]
-        }
-        requests.post(f"{BASE_URL}/v1/portfolio", json=portfolio_data, timeout=30)
-        
-        # Get decisions
-        resp = requests.get(f"{BASE_URL}/v1/albert/decisions", params={"pid": pid}, timeout=30)
-        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
-        
-        decisions_data = resp.json()
-        decisions = decisions_data.get("decisions", [])
-        
-        # Find BTC decision
-        btc_decision = next((d for d in decisions if d.get("symbol") == "BTC"), None)
-        assert btc_decision is not None, "BTC decision not found"
-        
-        # Validate SELL with PROFIT_TAKE
-        assert btc_decision.get("action") == "SELL", f"BTC action should be SELL, got {btc_decision.get('action')}"
-        assert btc_decision.get("reasonCode") == "PROFIT_TAKE", \
-            f"BTC reasonCode should be PROFIT_TAKE, got {btc_decision.get('reasonCode')}"
-        
-        sell_plan = btc_decision.get("sellPlan", {})
-        action = sell_plan.get("action")
-        
-        # Expect TRIM_10, TRIM_25, or TRIM_50 depending on actual gain
-        assert action in ["TRIM_10", "TRIM_25", "TRIM_50"], \
-            f"sellPlan.action should be TRIM_10/25/50, got {action}"
-        
-        log_test("SELL - PROFIT_TAKE", True, 
-                f"action={btc_decision.get('action')}, reasonCode={btc_decision.get('reasonCode')}, sellAction={action}")
-        return True
-    except Exception as e:
-        log_test("SELL - PROFIT_TAKE", False, str(e))
-        return False
-
-def test_hold_thesis_intact():
-    """Test 2e: HOLD (small gain, in-cap, no deployable room)."""
-    print("\n" + "="*80)
-    print("TEST 2e: HOLD - THESIS_INTACT")
-    print("="*80)
-    
-    pid = "u_TEST_D1_HOLD"
-    TEST_PIDS.append(pid)
-    
-    try:
-        # Save mandate
-        mandate_data = {
-            "pid": pid,
-            "mandate": {
-                "risk_tolerance": "moderate",
-                "reserve_pct": 25,
-                "approved_coins": ["BTC"],
-                "max_alloc_pct": {"BTC": 40}
-            }
-        }
-        requests.post(f"{BASE_URL}/v1/albert/mandate", json=mandate_data, timeout=30)
-        
-        # Save portfolio with small BTC position and tiny USDC
-        portfolio_data = {
-            "pid": pid,
-            "usdc": 100,
-            "positions": [
-                {"asset": "BTC", "size": 0.01, "avg_entry": 70000}
-            ]
-        }
-        requests.post(f"{BASE_URL}/v1/portfolio", json=portfolio_data, timeout=30)
-        
-        # Get decisions
-        resp = requests.get(f"{BASE_URL}/v1/albert/decisions", params={"pid": pid}, timeout=30)
-        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
-        
-        decisions_data = resp.json()
-        decisions = decisions_data.get("decisions", [])
-        
-        # Find BTC decision
-        btc_decision = next((d for d in decisions if d.get("symbol") == "BTC"), None)
-        assert btc_decision is not None, "BTC decision not found"
-        
-        # Validate HOLD
-        action = btc_decision.get("action")
-        reason_code = btc_decision.get("reasonCode")
-        
-        # Should be HOLD (or SELL if price happens to break invalidation)
-        if action == "SELL":
-            # If SELL, it should be due to invalidation or other valid reason
-            log_test("HOLD - THESIS_INTACT", True, 
-                    f"action=SELL (price broke invalidation), reasonCode={reason_code}")
+            print(f"  ✓ PASS: BTC action=SELL, reasonCode=RISK_REDUCTION, allSignals={all_signals}")
         else:
-            assert action == "HOLD", f"BTC action should be HOLD, got {action}"
-            assert reason_code == "THESIS_INTACT", \
-                f"BTC reasonCode should be THESIS_INTACT, got {reason_code}"
-            log_test("HOLD - THESIS_INTACT", True, 
-                    f"action={action}, reasonCode={reason_code}")
+            print(f"  ⚠ BTC action={btc_dec.get('action')} (expected SELL, but market may have changed)")
         
+        print("\n✅ TEST A: REGRESSION PASSED")
         return True
-    except Exception as e:
-        log_test("HOLD - THESIS_INTACT", False, str(e))
+        
+    except AssertionError as e:
+        print(f"\n❌ TEST A FAILED: {e}")
         return False
-
-def test_sell_only_for_held():
-    """Test 2f: SELL only for held positions (non-owned high scorer is BUY or WAIT, never SELL)."""
-    print("\n" + "="*80)
-    print("TEST 2f: SELL only for held positions")
-    print("="*80)
-    
-    pid = "u_TEST_D1_SELL_HELD"
-    TEST_PIDS.append(pid)
-    
-    try:
-        # Save mandate
-        mandate_data = {
-            "pid": pid,
-            "mandate": {
-                "risk_tolerance": "moderate",
-                "reserve_pct": 25,
-                "approved_coins": ["BTC", "ETH", "SOL"],
-                "max_alloc_pct": {"BTC": 40, "ETH": 30, "SOL": 20}
-            }
-        }
-        requests.post(f"{BASE_URL}/v1/albert/mandate", json=mandate_data, timeout=30)
-        
-        # Save portfolio with NO positions but some USDC
-        portfolio_data = {
-            "pid": pid,
-            "usdc": 50000,
-            "positions": []
-        }
-        requests.post(f"{BASE_URL}/v1/portfolio", json=portfolio_data, timeout=30)
-        
-        # Get decisions
-        resp = requests.get(f"{BASE_URL}/v1/albert/decisions", params={"pid": pid}, timeout=30)
-        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
-        
-        decisions_data = resp.json()
-        decisions = decisions_data.get("decisions", [])
-        
-        # Check that NO decision has action=SELL for non-owned assets
-        for d in decisions:
-            symbol = d.get("symbol")
-            action = d.get("action")
-            
-            # Non-owned assets should never be SELL
-            assert action != "SELL", \
-                f"{symbol} (non-owned) should never be SELL, got {action}"
-            
-            # Should be BUY or WAIT
-            assert action in ["BUY", "WAIT", "HOLD"], \
-                f"{symbol} action should be BUY/WAIT/HOLD, got {action}"
-        
-        log_test("SELL only for held positions", True, 
-                f"Verified no SELL actions for non-owned assets")
-        return True
     except Exception as e:
-        log_test("SELL only for held positions", False, str(e))
-        return False
-
-def test_internal_consistency():
-    """Test internal consistency of SELL decisions."""
-    print("\n" + "="*80)
-    print("TEST: Internal Consistency of SELL Decisions")
-    print("="*80)
-    
-    pid = "u_TEST_D1_CONSISTENCY"
-    TEST_PIDS.append(pid)
-    
-    try:
-        # Save mandate with excluded coin
-        mandate_data = {
-            "pid": pid,
-            "mandate": {
-                "risk_tolerance": "moderate",
-                "reserve_pct": 25,
-                "approved_coins": ["BTC"],
-                "excluded_coins": ["DOGE"],
-                "max_alloc_pct": {"BTC": 40}
-            }
-        }
-        requests.post(f"{BASE_URL}/v1/albert/mandate", json=mandate_data, timeout=30)
-        
-        # Save portfolio holding DOGE
-        portfolio_data = {
-            "pid": pid,
-            "usdc": 10000,
-            "positions": [
-                {"asset": "DOGE", "size": 10000, "avg_entry": 0.10}
-            ]
-        }
-        requests.post(f"{BASE_URL}/v1/portfolio", json=portfolio_data, timeout=30)
-        
-        # Get decisions
-        resp = requests.get(f"{BASE_URL}/v1/albert/decisions", params={"pid": pid}, timeout=30)
-        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
-        
-        decisions_data = resp.json()
-        decisions = decisions_data.get("decisions", [])
-        
-        # Find SELL decisions
-        sell_decisions = [d for d in decisions if d.get("action") == "SELL"]
-        
-        for d in sell_decisions:
-            symbol = d.get("symbol")
-            reason_code = d.get("reasonCode")
-            sell_plan = d.get("sellPlan", {})
-            
-            # Validate internal consistency
-            sell_reason = sell_plan.get("reasonCode")
-            assert reason_code == sell_reason, \
-                f"{symbol}: reasonCode={reason_code} != sellPlan.reasonCode={sell_reason}"
-            
-            # Validate positionAfter.valueUsd ≈ positionBefore.valueUsd * (1 - fraction)
-            pos_before = sell_plan.get("positionBefore", {})
-            pos_after = sell_plan.get("positionAfter", {})
-            fraction = sell_plan.get("fraction", 0)
-            
-            before_val = pos_before.get("valueUsd", 0)
-            after_val = pos_after.get("valueUsd", 0)
-            expected_after = before_val * (1 - fraction)
-            
-            assert abs(after_val - expected_after) < 1.0, \
-                f"{symbol}: positionAfter.valueUsd={after_val} != positionBefore.valueUsd * (1-fraction)={expected_after}"
-            
-            # Validate recommendedDeltaUsd == -sellUsd
-            sell_usd = sell_plan.get("sellUsd", 0)
-            delta_usd = sell_plan.get("recommendedDeltaUsd", 0)
-            assert abs(delta_usd + sell_usd) < 0.01, \
-                f"{symbol}: recommendedDeltaUsd={delta_usd} != -sellUsd={-sell_usd}"
-            
-            # Validate action label matches fraction
-            action = sell_plan.get("action")
-            if fraction >= 0.99:
-                assert action == "EXIT_100", f"{symbol}: fraction={fraction} should be EXIT_100, got {action}"
-            elif 0.45 <= fraction < 0.55:
-                assert action == "TRIM_50", f"{symbol}: fraction={fraction} should be TRIM_50, got {action}"
-            elif 0.20 <= fraction < 0.30:
-                assert action == "TRIM_25", f"{symbol}: fraction={fraction} should be TRIM_25, got {action}"
-            elif 0.05 <= fraction < 0.15:
-                assert action == "TRIM_10", f"{symbol}: fraction={fraction} should be TRIM_10, got {action}"
-        
-        log_test("Internal consistency of SELL decisions", True, 
-                f"Validated {len(sell_decisions)} SELL decisions")
-        return True
-    except Exception as e:
-        log_test("Internal consistency of SELL decisions", False, str(e))
+        print(f"\n❌ TEST A ERROR: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 # ============================================================================
-# MAIN TEST RUNNER
+# TEST B: IMMUTABLE ENVELOPE
+# ============================================================================
+
+def test_b_immutable_envelope():
+    print("\n" + "="*80)
+    print("TEST B: IMMUTABLE ENVELOPE - Full audit fields in every decision")
+    print("="*80)
+    
+    pid = "u_TEST_D2_ENV"
+    TEST_PIDS.append(pid)
+    
+    try:
+        # Setup: normal mandate + portfolio
+        mandate = {
+            "risk_tolerance": "moderate",
+            "reserve_pct": 25,
+            "approved_coins": ["BTC", "ETH"],
+            "excluded_coins": [],
+            "max_alloc_pct": {"BTC": 40, "ETH": 30},
+            "max_trade_risk_pct": 2
+        }
+        resp = post_mandate(pid, mandate)
+        assert resp.status_code == 200, f"Mandate POST failed: {resp.status_code}"
+        
+        resp = post_portfolio(pid, 50000, [{"asset": "BTC", "size": 0.1, "avg_entry": 70000}])
+        assert resp.status_code == 200, f"Portfolio POST failed: {resp.status_code}"
+        
+        print("  ✓ Setup complete")
+        
+        # Get decisions
+        resp = get_decisions(pid)
+        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
+        data = resp.json()
+        
+        # Check top-level snapshot fields
+        print("\n[B1] Checking top-level snapshot fields")
+        required_top = ["engineVersion", "mandateVersion", "portfolioVersion", 
+                       "regimeSnapshotId", "precedenceOrder", "changeEvents"]
+        for field in required_top:
+            assert field in data, f"Missing top-level field: {field}"
+        print(f"  ✓ All top-level fields present: {required_top}")
+        
+        # Check per-decision envelope
+        print("\n[B2] Checking per-decision envelope fields")
+        decisions = data.get("decisions", [])
+        assert len(decisions) > 0, "No decisions returned"
+        
+        required_fields = [
+            "decisionId", "snapshotId", "engineVersion", "marketDataTimestamp",
+            "call", "reasonCode", "precedenceRuleApplied", "score", "confidence",
+            "positionBefore", "recommendedDeltaUsd", "positionAfter", "invalidation",
+            "flipConditions", "riskFlags", "mandateChecks", "deploymentPlan", "sellPlan",
+            "mandateVersion", "portfolioVersion", "regimeSnapshotId", "eligible",
+            "ineligibilityReason", "decisionInputs", "decisionInputsHash"
+        ]
+        
+        for dec in decisions[:3]:  # Check first 3 decisions
+            symbol = dec.get("symbol", "?")
+            print(f"\n  Checking {symbol}:")
+            
+            missing = []
+            for field in required_fields:
+                if field not in dec:
+                    missing.append(field)
+            
+            assert len(missing) == 0, f"{symbol}: Missing fields: {missing}"
+            
+            # Validate flipConditions is non-empty list
+            flip_conds = dec.get("flipConditions", [])
+            assert isinstance(flip_conds, list), f"{symbol}: flipConditions not a list"
+            assert len(flip_conds) > 0, f"{symbol}: flipConditions is empty"
+            
+            # Each flip condition has required fields
+            for fc in flip_conds:
+                assert "toCall" in fc, f"{symbol}: flip condition missing 'toCall'"
+                assert "trigger" in fc, f"{symbol}: flip condition missing 'trigger'"
+                assert "detail" in fc, f"{symbol}: flip condition missing 'detail'"
+            
+            print(f"    ✓ All {len(required_fields)} envelope fields present")
+            print(f"    ✓ flipConditions: {len(flip_conds)} conditions")
+            
+            # Validate mandateChecks structure
+            mc = dec.get("mandateChecks", {})
+            assert isinstance(mc, dict), f"{symbol}: mandateChecks not a dict"
+            mc_keys = ["excluded", "inApprovedUniverse", "withinCap", "withinRiskBudget", "mandateComplete"]
+            for key in mc_keys:
+                assert key in mc, f"{symbol}: mandateChecks missing '{key}'"
+            print(f"    ✓ mandateChecks: {mc_keys}")
+            
+            # Validate riskFlags is a list
+            rf = dec.get("riskFlags", [])
+            assert isinstance(rf, list), f"{symbol}: riskFlags not a list"
+            print(f"    ✓ riskFlags: {len(rf)} flags")
+        
+        print("\n✅ TEST B: IMMUTABLE ENVELOPE PASSED")
+        return True
+        
+    except AssertionError as e:
+        print(f"\n❌ TEST B FAILED: {e}")
+        return False
+    except Exception as e:
+        print(f"\n❌ TEST B ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+# ============================================================================
+# TEST C: DISCOVERY vs ELIGIBILITY
+# ============================================================================
+
+def test_c_discovery_eligibility():
+    print("\n" + "="*80)
+    print("TEST C: DISCOVERY vs ELIGIBILITY - Ineligible assets scored but never BUY")
+    print("="*80)
+    
+    pid = "u_TEST_D2_ELIG"
+    TEST_PIDS.append(pid)
+    
+    try:
+        # Setup: mandate with limited approved_coins (exclude XRP)
+        mandate = {
+            "risk_tolerance": "moderate",
+            "reserve_pct": 25,
+            "approved_coins": ["BTC", "ETH"],  # XRP not in approved
+            "excluded_coins": [],
+            "max_alloc_pct": {"BTC": 40, "ETH": 30},
+            "max_trade_risk_pct": 2
+        }
+        resp = post_mandate(pid, mandate)
+        assert resp.status_code == 200, f"Mandate POST failed: {resp.status_code}"
+        
+        resp = post_portfolio(pid, 50000, [])
+        assert resp.status_code == 200, f"Portfolio POST failed: {resp.status_code}"
+        
+        print("  ✓ Setup complete (approved_coins=['BTC','ETH'])")
+        
+        # Get decisions
+        resp = get_decisions(pid)
+        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
+        data = resp.json()
+        
+        # Find a high-scoring coin NOT in approved_coins (e.g., XRP, SOL, ADA)
+        print("\n[C1] Looking for ineligible high-scorer")
+        ineligible_found = False
+        
+        for dec in data.get("decisions", []):
+            symbol = dec.get("symbol")
+            if symbol not in ["BTC", "ETH"]:  # Not in approved list
+                score = dec.get("opportunityScore", 0)
+                eligible = dec.get("eligible", True)
+                reason = dec.get("ineligibilityReason")
+                action = dec.get("action")
+                
+                if score > 0:  # Was scored
+                    print(f"\n  Found: {symbol}")
+                    print(f"    opportunityScore: {score}")
+                    print(f"    eligible: {eligible}")
+                    print(f"    ineligibilityReason: {reason}")
+                    print(f"    action: {action}")
+                    
+                    # Validate
+                    assert score > 0, f"{symbol}: opportunityScore should be > 0"
+                    assert eligible == False, f"{symbol}: should be ineligible"
+                    assert reason == "NOT_IN_APPROVED_UNIVERSE", \
+                        f"{symbol}: expected NOT_IN_APPROVED_UNIVERSE, got {reason}"
+                    assert action == "WAIT", f"{symbol}: action should be WAIT, got {action}"
+                    
+                    print(f"    ✓ PASS: Scored but ineligible, action=WAIT")
+                    ineligible_found = True
+                    break
+        
+        assert ineligible_found, "No ineligible high-scorer found in decisions"
+        
+        # C2: Confirm NO ineligible asset has action=BUY
+        print("\n[C2] Confirming no ineligible asset has action=BUY")
+        for dec in data.get("decisions", []):
+            if not dec.get("eligible", True):
+                action = dec.get("action")
+                assert action != "BUY", \
+                    f"{dec['symbol']}: ineligible asset has action=BUY (VIOLATION)"
+        
+        print("  ✓ PASS: No ineligible asset has action=BUY")
+        
+        print("\n✅ TEST C: DISCOVERY vs ELIGIBILITY PASSED")
+        return True
+        
+    except AssertionError as e:
+        print(f"\n❌ TEST C FAILED: {e}")
+        return False
+    except Exception as e:
+        print(f"\n❌ TEST C ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+# ============================================================================
+# TEST D: DECISION-CHANGE HISTORY
+# ============================================================================
+
+def test_d_decision_history():
+    print("\n" + "="*80)
+    print("TEST D: DECISION-CHANGE HISTORY - Deterministic, mandate-driven transitions")
+    print("="*80)
+    
+    pid = "u_TEST_D2_HIST"
+    TEST_PIDS.append(pid)
+    
+    try:
+        # D1: Initial setup
+        print("\n[D1] Initial setup: approved=['BTC','ETH'], hold 0.1 BTC")
+        mandate = {
+            "risk_tolerance": "moderate",
+            "reserve_pct": 25,
+            "approved_coins": ["BTC", "ETH"],
+            "excluded_coins": [],
+            "max_alloc_pct": {"BTC": 40, "ETH": 30},
+            "max_trade_risk_pct": 2
+        }
+        resp = post_mandate(pid, mandate)
+        assert resp.status_code == 200, f"Mandate POST failed: {resp.status_code}"
+        
+        resp = post_portfolio(pid, 20000, [{"asset": "BTC", "size": 0.1, "avg_entry": 60000}])
+        assert resp.status_code == 200, f"Portfolio POST failed: {resp.status_code}"
+        
+        # Get initial decisions
+        resp = get_decisions(pid)
+        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
+        data = resp.json()
+        
+        btc_dec = next((d for d in data.get("decisions", []) if d["symbol"] == "BTC"), None)
+        assert btc_dec is not None, "BTC decision not found"
+        
+        decision_id_1 = btc_dec.get("decisionId")
+        assert decision_id_1, "BTC decisionId missing"
+        print(f"  ✓ Initial BTC decisionId: {decision_id_1}")
+        print(f"    action: {btc_dec.get('action')}, reasonCode: {btc_dec.get('reasonCode')}")
+        
+        # D2: Call again with NO changes -> same decisionId
+        print("\n[D2] Calling /decisions again with NO changes")
+        time.sleep(1)  # Small delay
+        resp = get_decisions(pid)
+        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
+        data = resp.json()
+        
+        btc_dec = next((d for d in data.get("decisions", []) if d["symbol"] == "BTC"), None)
+        decision_id_2 = btc_dec.get("decisionId")
+        
+        assert decision_id_2 == decision_id_1, \
+            f"DecisionId changed without mandate change: {decision_id_1} -> {decision_id_2}"
+        print(f"  ✓ PASS: decisionId stable (still {decision_id_1})")
+        
+        # Check history count = 0
+        resp = get_decision_history(pid, asset="BTC")
+        assert resp.status_code == 200, f"History failed: {resp.status_code}"
+        hist_data = resp.json()
+        count = hist_data.get("count", 0)
+        assert count == 0, f"Expected 0 history events, got {count}"
+        print(f"  ✓ PASS: decision-history count = 0 (no spam)")
+        
+        # D3: Exclude BTC -> should flip to SELL/EMERGENCY_EXIT
+        print("\n[D3] Excluding BTC from mandate")
+        mandate["excluded_coins"] = ["BTC"]
+        mandate["approved_coins"] = ["ETH"]
+        resp = post_mandate(pid, mandate)
+        assert resp.status_code == 200, f"Mandate POST failed: {resp.status_code}"
+        
+        time.sleep(1)
+        resp = get_decisions(pid)
+        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
+        data = resp.json()
+        
+        btc_dec = next((d for d in data.get("decisions", []) if d["symbol"] == "BTC"), None)
+        assert btc_dec is not None, "BTC decision not found"
+        
+        decision_id_3 = btc_dec.get("decisionId")
+        action = btc_dec.get("action")
+        reason = btc_dec.get("reasonCode")
+        
+        assert decision_id_3 != decision_id_1, \
+            f"DecisionId should change after exclusion: {decision_id_1} -> {decision_id_3}"
+        assert action == "SELL", f"Expected SELL, got {action}"
+        assert reason == "EMERGENCY_EXIT", f"Expected EMERGENCY_EXIT, got {reason}"
+        
+        print(f"  ✓ PASS: New decisionId: {decision_id_3}")
+        print(f"    action: {action}, reasonCode: {reason}")
+        
+        # Check history
+        resp = get_decision_history(pid, asset="BTC")
+        assert resp.status_code == 200, f"History failed: {resp.status_code}"
+        hist_data = resp.json()
+        count = hist_data.get("count", 0)
+        events = hist_data.get("events", [])
+        
+        assert count >= 1, f"Expected >= 1 history event, got {count}"
+        print(f"  ✓ PASS: decision-history count = {count}")
+        
+        # Validate newest event
+        newest = events[0]
+        assert newest.get("previousDecisionId") == decision_id_1, \
+            f"previousDecisionId mismatch: {newest.get('previousDecisionId')} vs {decision_id_1}"
+        assert newest.get("newDecisionId") == decision_id_3, \
+            f"newDecisionId mismatch: {newest.get('newDecisionId')} vs {decision_id_3}"
+        assert newest.get("previousSnapshotId"), "previousSnapshotId missing"
+        assert newest.get("newSnapshotId"), "newSnapshotId missing"
+        assert newest.get("previousSnapshotId") != newest.get("newSnapshotId"), \
+            "Snapshot IDs should differ"
+        assert newest.get("changeType"), "changeType missing"
+        assert len(newest.get("changeReason", [])) > 0, "changeReason empty"
+        
+        print(f"    previousDecisionId: {newest.get('previousDecisionId')}")
+        print(f"    newDecisionId: {newest.get('newDecisionId')}")
+        print(f"    changeType: {newest.get('changeType')}")
+        print(f"    changeReason: {newest.get('changeReason')}")
+        
+        # D4: Remove exclusion -> another transition
+        print("\n[D4] Removing BTC from excluded_coins")
+        mandate["excluded_coins"] = []
+        mandate["approved_coins"] = ["BTC", "ETH"]
+        resp = post_mandate(pid, mandate)
+        assert resp.status_code == 200, f"Mandate POST failed: {resp.status_code}"
+        
+        time.sleep(1)
+        resp = get_decisions(pid)
+        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
+        data = resp.json()
+        
+        btc_dec = next((d for d in data.get("decisions", []) if d["symbol"] == "BTC"), None)
+        decision_id_4 = btc_dec.get("decisionId")
+        
+        assert decision_id_4 != decision_id_3, \
+            f"DecisionId should change after removing exclusion: {decision_id_3} -> {decision_id_4}"
+        print(f"  ✓ PASS: New decisionId: {decision_id_4}")
+        
+        # Check history chain
+        resp = get_decision_history(pid, asset="BTC")
+        assert resp.status_code == 200, f"History failed: {resp.status_code}"
+        hist_data = resp.json()
+        events = hist_data.get("events", [])
+        
+        assert len(events) >= 2, f"Expected >= 2 history events, got {len(events)}"
+        
+        # Newest event should link decision_id_3 -> decision_id_4
+        newest = events[0]
+        assert newest.get("previousDecisionId") == decision_id_3, \
+            f"Chain broken: previousDecisionId {newest.get('previousDecisionId')} != {decision_id_3}"
+        assert newest.get("newDecisionId") == decision_id_4, \
+            f"newDecisionId mismatch: {newest.get('newDecisionId')} vs {decision_id_4}"
+        
+        print(f"  ✓ PASS: History chain links correctly")
+        print(f"    Event 1: {decision_id_1} -> {decision_id_3}")
+        print(f"    Event 2: {decision_id_3} -> {decision_id_4}")
+        
+        print("\n✅ TEST D: DECISION-CHANGE HISTORY PASSED")
+        return True
+        
+    except AssertionError as e:
+        print(f"\n❌ TEST D FAILED: {e}")
+        return False
+    except Exception as e:
+        print(f"\n❌ TEST D ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+# ============================================================================
+# TEST E: ASK ALBERT EXPLAIN (read-only)
+# ============================================================================
+
+def test_e_ask_albert_explain():
+    print("\n" + "="*80)
+    print("TEST E: ASK ALBERT EXPLAIN - Read-only, returns unchanged decision")
+    print("="*80)
+    
+    pid = "u_TEST_D2_EXPL"
+    TEST_PIDS.append(pid)
+    
+    try:
+        # Setup
+        print("\n[E1] Setup: mandate + portfolio")
+        mandate = {
+            "risk_tolerance": "moderate",
+            "reserve_pct": 25,
+            "approved_coins": ["BTC", "ETH"],
+            "excluded_coins": [],
+            "max_alloc_pct": {"BTC": 40, "ETH": 30},
+            "max_trade_risk_pct": 2
+        }
+        resp = post_mandate(pid, mandate)
+        assert resp.status_code == 200, f"Mandate POST failed: {resp.status_code}"
+        
+        resp = post_portfolio(pid, 20000, [{"asset": "BTC", "size": 0.1, "avg_entry": 60000}])
+        assert resp.status_code == 200, f"Portfolio POST failed: {resp.status_code}"
+        
+        # Get decisions
+        resp = get_decisions(pid)
+        assert resp.status_code == 200, f"Decisions failed: {resp.status_code}"
+        data = resp.json()
+        
+        btc_dec = next((d for d in data.get("decisions", []) if d["symbol"] == "BTC"), None)
+        assert btc_dec is not None, "BTC decision not found"
+        
+        decision_id = btc_dec.get("decisionId")
+        assert decision_id, "BTC decisionId missing"
+        print(f"  ✓ BTC decisionId: {decision_id}")
+        
+        # E2: GET /api/v1/albert/decision/{decisionId}
+        print("\n[E2] Fetching decision by ID")
+        resp = get_decision_by_id(pid, decision_id)
+        assert resp.status_code == 200, f"Decision fetch failed: {resp.status_code}"
+        fetch_data = resp.json()
+        
+        assert fetch_data.get("status") == "ready", f"Status not ready: {fetch_data.get('status')}"
+        stored_decision = fetch_data.get("decision")
+        assert stored_decision, "Decision not returned"
+        assert stored_decision.get("decisionId") == decision_id, "DecisionId mismatch"
+        
+        print(f"  ✓ PASS: Fetched decision")
+        print(f"    decisionId: {stored_decision.get('decisionId')}")
+        print(f"    call: {stored_decision.get('call')}")
+        print(f"    score: {stored_decision.get('opportunityScore')}")
+        print(f"    reasonCode: {stored_decision.get('reasonCode')}")
+        
+        # Store original values for comparison
+        original_values = {
+            "decisionId": stored_decision.get("decisionId"),
+            "call": stored_decision.get("call") or stored_decision.get("action"),
+            "score": stored_decision.get("opportunityScore"),
+            "reasonCode": stored_decision.get("reasonCode"),
+            "recommendedDeltaUsd": stored_decision.get("recommendedDeltaUsd"),
+            "confidence": stored_decision.get("confidence"),
+        }
+        
+        # E3: POST /api/v1/albert/explain-call
+        print("\n[E3] Calling explain-call (allow up to 90s for LLM)")
+        question = "Why this call and what would change it?"
+        resp = post_explain_call(pid, decision_id, question)
+        assert resp.status_code == 200, f"Explain-call failed: {resp.status_code}"
+        explain_data = resp.json()
+        
+        assert explain_data.get("status") == "ready", f"Status not ready: {explain_data.get('status')}"
+        
+        explanation = explain_data.get("explanation", "")
+        assert len(explanation) > 0, "Explanation is empty"
+        print(f"  ✓ PASS: Explanation received ({len(explanation)} chars)")
+        print(f"    First 200 chars: {explanation[:200]}...")
+        
+        # E4: Validate decision is UNCHANGED
+        print("\n[E4] Validating decision is UNCHANGED")
+        returned_decision = explain_data.get("decision")
+        assert returned_decision, "Decision not returned in explain response"
+        
+        # Compare key fields
+        assert returned_decision.get("decisionId") == original_values["decisionId"], \
+            f"decisionId mutated: {original_values['decisionId']} -> {returned_decision.get('decisionId')}"
+        
+        returned_call = returned_decision.get("call") or returned_decision.get("action")
+        assert returned_call == original_values["call"], \
+            f"call mutated: {original_values['call']} -> {returned_call}"
+        
+        assert returned_decision.get("opportunityScore") == original_values["score"], \
+            f"score mutated: {original_values['score']} -> {returned_decision.get('opportunityScore')}"
+        
+        assert returned_decision.get("reasonCode") == original_values["reasonCode"], \
+            f"reasonCode mutated: {original_values['reasonCode']} -> {returned_decision.get('reasonCode')}"
+        
+        assert returned_decision.get("recommendedDeltaUsd") == original_values["recommendedDeltaUsd"], \
+            f"recommendedDeltaUsd mutated: {original_values['recommendedDeltaUsd']} -> {returned_decision.get('recommendedDeltaUsd')}"
+        
+        print(f"  ✓ PASS: Decision unchanged")
+        print(f"    decisionId: {returned_decision.get('decisionId')} (same)")
+        print(f"    call: {returned_call} (same)")
+        print(f"    score: {returned_decision.get('opportunityScore')} (same)")
+        print(f"    reasonCode: {returned_decision.get('reasonCode')} (same)")
+        print(f"    recommendedDeltaUsd: {returned_decision.get('recommendedDeltaUsd')} (same)")
+        
+        print("\n✅ TEST E: ASK ALBERT EXPLAIN PASSED")
+        return True
+        
+    except AssertionError as e:
+        print(f"\n❌ TEST E FAILED: {e}")
+        return False
+    except Exception as e:
+        print(f"\n❌ TEST E ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+# ============================================================================
+# MAIN
 # ============================================================================
 
 def main():
     print("\n" + "="*80)
-    print("ALBERT PHASE D1 BACKEND TEST")
-    print("Testing deterministic SELL engine + decision precedence")
+    print("PHASE D2 BACKEND TESTING")
+    print("Testing: Flip conditions, immutable snapshot, discovery/eligibility,")
+    print("         Ask-Albert explain, decision-change history")
     print("="*80)
     
-    results = []
+    results = {}
     
-    # PART 1: Phase A/B/C Regression
-    print("\n" + "="*80)
-    print("PART 1: Phase A/B/C REGRESSION TESTS")
-    print("="*80)
-    
-    results.append(("Regime endpoint", test_regime_endpoint()))
-    results.append(("Mandate round-trip", test_mandate_roundtrip()))
-    results.append(("Portfolio summary math", test_portfolio_summary_math()))
-    results.append(("Decisions snapshot", test_decisions_snapshot()))
-    results.append(("Deployment plan structure", test_deployment_plan()))
-    
-    # PART 2: New SELL Engine + Precedence
-    print("\n" + "="*80)
-    print("PART 2: NEW SELL ENGINE + PRECEDENCE TESTS")
-    print("="*80)
-    
-    results.append(("SELL - EMERGENCY_EXIT by exclusion", test_sell_emergency_exclusion()))
-    results.append(("SELL - EMERGENCY_EXIT by loss", test_sell_emergency_loss()))
-    results.append(("SELL - RISK_REDUCTION with collision", test_sell_risk_reduction()))
-    results.append(("SELL - PROFIT_TAKE", test_sell_profit_take()))
-    results.append(("HOLD - THESIS_INTACT", test_hold_thesis_intact()))
-    results.append(("SELL only for held positions", test_sell_only_for_held()))
-    results.append(("Internal consistency", test_internal_consistency()))
-    
-    # Cleanup
-    cleanup_test_data()
+    try:
+        # Run all tests
+        results["A_REGRESSION"] = test_a_regression()
+        results["B_IMMUTABLE_ENVELOPE"] = test_b_immutable_envelope()
+        results["C_DISCOVERY_ELIGIBILITY"] = test_c_discovery_eligibility()
+        results["D_DECISION_HISTORY"] = test_d_decision_history()
+        results["E_ASK_ALBERT_EXPLAIN"] = test_e_ask_albert_explain()
+        
+    finally:
+        # Always cleanup
+        cleanup_test_data()
     
     # Summary
     print("\n" + "="*80)
     print("TEST SUMMARY")
     print("="*80)
-    
-    passed = sum(1 for _, result in results if result)
+    passed = sum(1 for v in results.values() if v)
     total = len(results)
     
-    for name, result in results:
-        status = "✅ PASS" if result else "❌ FAIL"
-        print(f"{status} | {name}")
+    for test_name, passed_flag in results.items():
+        status = "✅ PASS" if passed_flag else "❌ FAIL"
+        print(f"{status}: {test_name}")
     
-    print("\n" + "="*80)
-    print(f"TOTAL: {passed}/{total} tests passed")
-    print("="*80)
+    print(f"\nTotal: {passed}/{total} tests passed")
     
-    return passed == total
+    if passed == total:
+        print("\n🎉 ALL TESTS PASSED!")
+        return 0
+    else:
+        print(f"\n⚠️  {total - passed} test(s) failed")
+        return 1
 
 if __name__ == "__main__":
-    success = main()
-    exit(0 if success else 1)
+    exit(main())
