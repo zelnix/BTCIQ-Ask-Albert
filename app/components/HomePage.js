@@ -93,7 +93,7 @@ export default function HomePage({ onAuthed }) {
             <span className="text-lg font-semibold tracking-tight text-white">Ask Albert</span>
           </div>
           <div className="mb-4 inline-flex items-center gap-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 px-3 py-1 text-xs font-medium text-sky-300">
-            <Sparkles className="h-3.5 w-3.5" /> Your AI crypto quant, powered by Gemini
+            <Sparkles className="h-3.5 w-3.5" /> Your Hucentai crypto quant
           </div>
           <h1 className="max-w-3xl text-4xl font-bold leading-tight tracking-tight text-white sm:text-5xl md:text-6xl">
             Meet <span className="bg-gradient-to-r from-sky-400 to-violet-400 bg-clip-text text-transparent">Albert</span> — the market, read for you every morning

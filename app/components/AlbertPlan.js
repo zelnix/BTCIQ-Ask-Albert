@@ -210,6 +210,7 @@ function PaperOrderModal({ decision, onClose, onChanged }) {
   const [showAudit, setShowAudit] = React.useState(false);
   const [explain, setExplain] = React.useState(null); // {loading,text}
   const [left, setLeft] = React.useState(null); // seconds to expiry
+  const [showSim, setShowSim] = React.useState(false); // simulation controls (partial fill)
 
   const post = (path, body) => fetch(`${API_BASE}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) }).then((r) => r.json());
   const apply = (resp) => {
@@ -303,12 +304,24 @@ function PaperOrderModal({ decision, onClose, onChanged }) {
             <div className="mt-3 flex flex-wrap gap-2">
               {st === 'PENDING_CONFIRMATION' && <button disabled={busy} onClick={doConfirm} className="inline-flex items-center gap-1 rounded-full bg-amber-500 px-3 py-1.5 text-[12px] font-bold text-slate-900 hover:bg-amber-400 disabled:opacity-50">{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Confirm paper order</button>}
               {st === 'CONFIRMED' && <button disabled={busy} onClick={() => doExecute()} className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-3 py-1.5 text-[12px] font-bold text-slate-900 hover:bg-emerald-400 disabled:opacity-50">{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}Execute (paper fill)</button>}
-              {st === 'CONFIRMED' && <button disabled={busy} onClick={() => doExecute(Math.max(0.00000001, +(intent.remainingQuantity * 0.4).toFixed(8)))} className="rounded-full border border-violet-500/40 px-3 py-1.5 text-[12px] text-violet-200 hover:bg-violet-500/10 disabled:opacity-50">Simulate partial (40%)</button>}
               {st === 'PARTIALLY_FILLED' && <button disabled={busy} onClick={() => doExecute()} className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-3 py-1.5 text-[12px] font-bold text-slate-900 hover:bg-emerald-400 disabled:opacity-50">{busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}Fill remaining</button>}
               {CANCELLABLE.includes(st) && <button disabled={busy} onClick={doCancel} className="rounded-full border border-slate-600 px-3 py-1.5 text-[12px] text-slate-300 hover:bg-slate-800 disabled:opacity-50">Cancel</button>}
               {intent && <button onClick={askAlbert} className="inline-flex items-center gap-1 rounded-full border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 text-[12px] font-semibold text-violet-200 hover:bg-violet-500/20"><MessageCircle className="h-3 w-3" />Ask Albert</button>}
               {terminalBad && !(outcome && (outcome.reason === 'STALE_DECISION' || outcome.reason === 'EXPIRED')) && <button onClick={returnToFresh} className="rounded-full border border-sky-500/40 px-3 py-1.5 text-[12px] text-sky-200 hover:bg-sky-500/10">Return to fresh call</button>}
             </div>
+
+            {/* SIMULATION CONTROLS — partial fill is a testing tool, not the default action */}
+            {st === 'CONFIRMED' && (
+              <div className="mt-2">
+                <button onClick={() => setShowSim(!showSim)} className="flex items-center gap-1 text-[10px] uppercase text-slate-500 hover:text-slate-300"><ChevronDown className={`h-3 w-3 transition-transform ${showSim ? 'rotate-180' : ''}`} />Simulation controls</button>
+                {showSim && (
+                  <div className="mt-1.5 rounded-lg border border-slate-800 bg-slate-950/40 p-2.5">
+                    <p className="mb-1.5 text-[11px] text-slate-400">For testing the state machine. Normal paper use: just <span className="font-semibold text-emerald-300">Execute</span> for a full fill.</p>
+                    <button disabled={busy} onClick={() => doExecute(Math.max(0.00000001, +(intent.remainingQuantity * 0.4).toFixed(8)))} className="rounded-full border border-violet-500/40 px-3 py-1.5 text-[12px] text-violet-200 hover:bg-violet-500/10 disabled:opacity-50">Simulate partial fill (40%)</button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* AUDIT TRAIL */}
             <button onClick={() => setShowAudit(!showAudit)} className="mt-3 flex items-center gap-1 text-[10px] uppercase text-slate-500 hover:text-slate-300"><ChevronDown className={`h-3 w-3 transition-transform ${showAudit ? 'rotate-180' : ''}`} />Immutable audit trail ({audit.length})</button>
