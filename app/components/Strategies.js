@@ -308,6 +308,149 @@ function GuardrailsCard() {
   );
 }
 
+// ---- Multi-coin BASKET strategies (Albert-drafted, weighted, long/short) ----
+function BasketLegPnl({ pct }) {
+  const up = (pct || 0) >= 0;
+  return <span className={up ? 'text-emerald-400' : 'text-red-400'}>{up ? '+' : ''}{(pct || 0).toFixed(2)}%</span>;
+}
+
+function BasketCard({ b, onClose, closing }) {
+  const perf = b.perf || {};
+  const up = (perf.total_pnl_pct || 0) >= 0;
+  return (
+    <Card className="border-0 bg-slate-900/60 p-4 ring-1 ring-slate-800">
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h4 className="truncate font-bold text-white">{b.title}</h4>
+          {b.thesis ? <p className="mt-0.5 line-clamp-2 text-xs text-slate-400">{b.thesis}</p> : null}
+        </div>
+        <div className="shrink-0 text-right">
+          <div className={`text-lg font-black ${up ? 'text-emerald-400' : 'text-red-400'}`}>{up ? '+' : ''}{(perf.total_pnl_pct || 0).toFixed(2)}%</div>
+          <div className="text-[10px] text-slate-500">weighted P&amp;L</div>
+        </div>
+      </div>
+      <div className="overflow-x-auto rounded-lg border border-slate-800">
+        <table className="w-full text-xs">
+          <thead className="bg-slate-950/50 text-slate-500">
+            <tr><th className="px-2 py-1 text-left">Coin</th><th className="px-2 py-1 text-left">Side</th><th className="px-2 py-1 text-right">Wt</th><th className="px-2 py-1 text-right">Entry</th><th className="px-2 py-1 text-right">Now</th><th className="px-2 py-1 text-right">P&amp;L</th></tr>
+          </thead>
+          <tbody>
+            {(perf.legs || []).map((l) => (
+              <tr key={l.symbol} className="border-t border-slate-800/70">
+                <td className="px-2 py-1 font-semibold text-slate-200">{l.symbol}</td>
+                <td className="px-2 py-1">{l.position === 'long' ? <span className="text-emerald-400">Long</span> : <span className="text-red-400">Short</span>}</td>
+                <td className="px-2 py-1 text-right text-slate-400">{Math.round(l.weight_pct)}%</td>
+                <td className="px-2 py-1 text-right text-slate-400">{fmtUsd(l.entry_price)}</td>
+                <td className="px-2 py-1 text-right text-slate-300">{fmtUsd(l.current_price)}</td>
+                <td className="px-2 py-1 text-right font-semibold"><BasketLegPnl pct={l.pnl_pct} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {b.status === 'active' && (
+        <div className="mt-3 flex justify-end">
+          <Button onClick={() => onClose(b.id)} disabled={closing} variant="outline" className="h-8 border-slate-700 bg-transparent text-xs text-slate-300 hover:bg-slate-800">
+            {closing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <X className="mr-1 h-3 w-3" />}Close basket
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function BasketSection() {
+  const [data, setData] = React.useState(null);
+  const [goal, setGoal] = React.useState('');
+  const [building, setBuilding] = React.useState(false);
+  const [draft, setDraft] = React.useState(null);
+  const [saving, setSaving] = React.useState(false);
+  const [closing, setClosing] = React.useState('');
+  const load = React.useCallback(() => {
+    fetch(`${API_BASE}/v1/albert/strategy/baskets?pid=${encodeURIComponent(getPid())}`, { cache: 'no-store' })
+      .then((r) => r.json()).then(setData).catch(() => {});
+  }, []);
+  React.useEffect(() => { load(); }, [load]);
+  const build = async () => {
+    setBuilding(true); setDraft(null);
+    try {
+      const r = await fetch(`${API_BASE}/v1/albert/strategy/basket/build`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ goal }),
+      });
+      const d = await r.json();
+      if (d.draft) setDraft(d.draft);
+    } catch (e) { /* noop */ } finally { setBuilding(false); }
+  };
+  const save = async () => {
+    if (!draft) return;
+    setSaving(true);
+    try {
+      await fetch(`${API_BASE}/v1/albert/strategy/basket`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ draft, pid: getPid() }),
+      });
+      setDraft(null); setGoal(''); load();
+    } catch (e) { /* noop */ } finally { setSaving(false); }
+  };
+  const closeBasket = async (id) => {
+    setClosing(id);
+    try {
+      await fetch(`${API_BASE}/v1/albert/strategy/basket/${id}/close`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      load();
+    } catch (e) { /* noop */ } finally { setClosing(''); }
+  };
+  const active = (data && data.active) || [];
+  const history = (data && data.history) || [];
+  return (
+    <Card className="border-0 bg-gradient-to-br from-violet-500/[0.07] to-slate-900 p-5 ring-1 ring-violet-500/25">
+      <div className="mb-3 flex items-center gap-2">
+        <Scale className="h-5 w-5 text-violet-300" />
+        <h3 className="text-base font-bold text-white">Multi-Coin Baskets</h3>
+        <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-semibold text-violet-300">NEW</span>
+      </div>
+      <p className="mb-3 text-xs text-slate-400">Tell Albert a theme and he&apos;ll build a weighted multi-coin basket (long &amp; short) you can save and track as one — separate from your single-coin plays.</p>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input value={goal} onChange={(e) => setGoal(e.target.value)} placeholder="e.g. long the majors, small short on a laggard (optional)"
+          className="flex-1 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600 focus:border-violet-500/50 focus:outline-none" />
+        <Button onClick={build} disabled={building} className="bg-violet-600 text-white hover:bg-violet-500">
+          {building ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}{building ? 'Albert is building…' : 'Build a basket'}
+        </Button>
+      </div>
+      {draft && (
+        <div className="mt-4 rounded-xl border border-violet-500/30 bg-slate-950/50 p-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="min-w-0"><h4 className="truncate font-bold text-white">{draft.title}</h4><p className="text-[11px] text-slate-500">Draft · {draft.horizon_days}-day horizon · {(draft.legs || []).length} legs</p></div>
+            <button onClick={() => setDraft(null)} className="text-slate-500 hover:text-slate-300"><X className="h-4 w-4" /></button>
+          </div>
+          {draft.thesis ? <p className="mb-3 text-xs text-slate-400">{draft.thesis}</p> : null}
+          <div className="space-y-1.5">
+            {(draft.legs || []).map((l) => (
+              <div key={l.symbol} className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-1.5 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold text-slate-200">{l.symbol}</span>
+                  {l.position === 'long' ? <span className="flex items-center gap-0.5 text-emerald-400"><TrendingUp className="h-3 w-3" />Long</span> : <span className="flex items-center gap-0.5 text-red-400"><TrendingDown className="h-3 w-3" />Short</span>}
+                  <span className="text-slate-500">{Math.round(l.weight_pct)}%</span>
+                </div>
+                <div className="text-slate-500">entry {fmtUsd(l.entry_price)}{l.stop ? ` · stop ${fmtUsd(l.stop.price)}` : ''}</div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <Button onClick={build} disabled={building || saving} variant="outline" className="h-8 border-slate-700 bg-transparent text-xs text-slate-300 hover:bg-slate-800"><RefreshCw className="mr-1 h-3 w-3" />Regenerate</Button>
+            <Button onClick={save} disabled={saving} className="h-8 bg-emerald-600 text-xs text-white hover:bg-emerald-500">{saving ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Check className="mr-1 h-3 w-3" />}Save &amp; track</Button>
+          </div>
+        </div>
+      )}
+      {active.length > 0 && <div className="mt-4 space-y-3">{active.map((b) => <BasketCard key={b.id} b={b} onClose={closeBasket} closing={closing === b.id} />)}</div>}
+      {history.length > 0 && (
+        <details className="mt-4"><summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">Past baskets ({history.length})</summary>
+          <div className="mt-2 space-y-3">{history.map((b) => <BasketCard key={b.id} b={b} onClose={closeBasket} closing={false} />)}</div>
+        </details>
+      )}
+    </Card>
+  );
+}
+
+
 export default function StrategiesSection() {
   const symbol = React.useContext(SymbolContext);
   const [data, setData] = React.useState(null);   // {active, history, stats}
@@ -372,6 +515,8 @@ export default function StrategiesSection() {
         blurb={`Strategies Albert builds and babysits for ${coinName}. Each has an entry, profit targets, a stop and if-this-then-that rules on price, time and signals. Albert nudges you when it's time to act, paper-tracks the P&L, and keeps a history of how past plays performed.`} />
 
       <GuardrailsCard />
+
+      <BasketSection />
 
       {loading && !data ? (
         <Card className="border-0 bg-slate-900 p-8 text-center ring-1 ring-slate-800"><Loader2 className="mx-auto h-6 w-6 animate-spin text-slate-500" /></Card>

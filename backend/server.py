@@ -9010,7 +9010,7 @@ def _persist_strategy(strat):
 def _strategy_eval_job():
     """Scheduler: evaluate every active strategy, fire nudges, persist."""
     try:
-        active = list(strategies_col.find({'status': 'active'}, {'_id': 0}))
+        active = list(strategies_col.find({'status': 'active', 'kind': {'$ne': 'basket'}}, {'_id': 0}))
     except Exception:  # noqa
         return
     price_cache = {}
@@ -9042,6 +9042,232 @@ def albert_strategy_build(payload: dict = Body(default={})):
     except Exception:  # noqa
         traceback.print_exc()
         return JSONResponse({'status': 'error'}, status_code=500)
+
+
+# =====================================================================
+# MULTI-COIN (BASKET) STRATEGIES — Albert drafts a weighted multi-leg basket
+# (long &/or short); the user saves & tracks it. Coexists with single-coin
+# strategies (kind='basket' vs missing/'single'). Owner-scoped by pid.
+# Performance is computed live on read (no changes to the single-coin eval job).
+# =====================================================================
+ALBERT_BASKET_SYSTEM = (
+    "You are 'Albert', a crypto quant. Design a MULTI-COIN BASKET strategy as STRICT JSON ONLY "
+    "(no prose, no markdown). YOU decide which coins and how many (usually 2-6 liquid coins). Legs "
+    "may be LONG or SHORT (a basket can be market-neutral / a pairs trade). Schema:\n"
+    "{\n"
+    '  "title": "<=70 chars",\n'
+    '  "thesis": "<=500 chars, plain English",\n'
+    '  "horizon_days": <int 3-180>,\n'
+    '  "legs": [\n'
+    '    {"symbol":"BTC","position":"long|short","weight_pct":<int>,\n'
+    '     "targets":[{"price":<num>,"label":"TP1","pct_of_position":<int>}],\n'
+    '     "stop":{"price":<num>}}\n'
+    "  ]\n"
+    "}\n"
+    "Rules: use REAL ticker symbols. weight_pct across legs should sum to ~100 (leave equal if unsure). "
+    "Targets/stops are ABSOLUTE USD prices near the given current prices. For SHORT legs, targets are "
+    "BELOW entry and the stop is ABOVE. Output ONLY the JSON object."
+)
+
+BASKET_UNIVERSE = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOGE', 'LINK', 'DOT', 'LTC', 'TRX']
+
+
+def _normalize_basket_leg(raw):
+    symbol = (raw.get('symbol') or '').upper().strip()
+    if not symbol:
+        return None
+    spot = _spot_price(symbol)
+    if not spot:
+        return None
+    position = (raw.get('position') or 'long').lower()
+    if position not in ('long', 'short'):
+        position = 'long'
+    try:
+        weight = max(0.0, float(raw.get('weight_pct') or 0))
+    except Exception:
+        weight = 0.0
+    targets = []
+    for t in (raw.get('targets') or [])[:3]:
+        try:
+            price = round(float(t.get('price')), 2)
+        except Exception:
+            continue
+        try:
+            pct = int(t.get('pct_of_position') or 50)
+        except Exception:
+            pct = 50
+        targets.append({'price': price, 'label': (t.get('label') or f'TP{len(targets)+1}')[:20],
+                        'pct_of_position': max(1, min(100, pct)), 'hit': False})
+    stop = None
+    try:
+        if (raw.get('stop') or {}).get('price') is not None:
+            stop = {'price': round(float(raw['stop']['price']), 2), 'hit': False}
+    except Exception:
+        stop = None
+    return {'symbol': symbol, 'coin_name': _strat_coin_name(symbol), 'position': position,
+            'weight_pct': weight, 'entry_price': round(spot, 2), 'targets': targets, 'stop': stop}
+
+
+def _normalize_basket_draft(raw):
+    legs, seen = [], set()
+    for lr in (raw.get('legs') or [])[:8]:
+        leg = _normalize_basket_leg(lr)
+        if leg and leg['symbol'] not in seen:
+            seen.add(leg['symbol'])
+            legs.append(leg)
+    tot = sum(l['weight_pct'] for l in legs)
+    if legs:
+        if tot <= 0:
+            eq = round(100.0 / len(legs), 2)
+            for l in legs:
+                l['weight_pct'] = eq
+        elif abs(tot - 100) > 0.5:
+            for l in legs:
+                l['weight_pct'] = round(l['weight_pct'] / tot * 100, 2)
+    try:
+        horizon = max(3, min(180, int(raw.get('horizon_days') or 30)))
+    except Exception:
+        horizon = 30
+    return {'title': (raw.get('title') or 'Multi-Coin Basket')[:70],
+            'thesis': (raw.get('thesis') or '')[:500], 'horizon_days': horizon, 'legs': legs}
+
+
+def _fallback_basket_draft(goal=''):
+    raw = {'title': 'Majors Momentum Basket',
+           'thesis': 'Equal-weight long on the large-cap majors with disciplined stops — ride broad market strength.',
+           'horizon_days': 30, 'legs': []}
+    for s in ['BTC', 'ETH', 'SOL']:
+        spot = _spot_price(s) or 0
+        raw['legs'].append({'symbol': s, 'position': 'long', 'weight_pct': round(100 / 3, 2),
+                            'targets': [{'price': round(spot * 1.1, 2), 'label': 'TP1', 'pct_of_position': 100}],
+                            'stop': {'price': round(spot * 0.9, 2)}})
+    return _normalize_basket_draft(raw)
+
+
+def _build_basket_draft(goal=''):
+    if not (LLM_READY_KEY and _HAS_LLM):
+        return _fallback_basket_draft(goal)
+    ctx = build_chat_context('BTC')
+    prices = [f"{s}=${_spot_price(s):,.2f}" for s in BASKET_UNIVERSE if _spot_price(s)]
+    umsg = ((f"User's goal/constraints: {goal}\n" if goal else '')
+            + "Live prices: " + ', '.join(prices) + "\n\n"
+            + f"=== LIVE BTC DASHBOARD CONTEXT ===\n{ctx}\n\nDesign the BASKET JSON now.")
+
+    def _call():
+        async def _go():
+            chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'basket-{uuid.uuid4().hex[:8]}',
+                            system_message=ALBERT_BASKET_SYSTEM)
+                    .with_model('gemini', _model_for('strategy')).with_params(temperature=0.5, max_tokens=3000))
+            return await chat.send_message(UserMessage(text=umsg))
+        return asyncio.run(_go())
+    try:
+        reply = _LLM_POOL.submit(_call).result(timeout=45)
+        text = (reply if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '')).strip()
+        s, e = text.find('{'), text.rfind('}')
+        draft = _normalize_basket_draft(json.loads(text[s:e + 1]))
+        return draft if draft.get('legs') else _fallback_basket_draft(goal)
+    except Exception:  # noqa
+        traceback.print_exc()
+        return _fallback_basket_draft(goal)
+
+
+def _basket_perf(strat):
+    legs_out, weighted_pct = [], 0.0
+    size = strat.get('size_usd') or 1000
+    active = strat.get('status') == 'active'
+    for leg in (strat.get('legs') or []):
+        entry = leg.get('entry_price') or 0
+        long = leg.get('position', 'long') == 'long'
+        sign = 1 if long else -1
+        cur = _spot_price(leg.get('symbol')) if active else (leg.get('close_price') or leg.get('entry_price'))
+        pnl_pct = ((cur - entry) / entry * 100 * sign) if (entry and cur) else 0.0
+        w = leg.get('weight_pct', 0) or 0
+        weighted_pct += (w / 100.0) * pnl_pct
+        tgts = [{**t, 'hit': bool(cur and ((long and cur >= t['price']) or ((not long) and cur <= t['price'])))}
+                for t in (leg.get('targets') or [])]
+        stop = leg.get('stop')
+        stop_hit = bool(stop and cur and ((long and cur <= stop['price']) or ((not long) and cur >= stop['price'])))
+        legs_out.append({'symbol': leg.get('symbol'), 'coin_name': leg.get('coin_name'),
+                         'position': leg.get('position'), 'weight_pct': w,
+                         'entry_price': round(entry, 2) if entry else None,
+                         'current_price': round(cur, 2) if cur else None,
+                         'pnl_pct': round(pnl_pct, 2),
+                         'pnl_usd': round(size * (w / 100.0) * (pnl_pct / 100.0), 2),
+                         'targets': tgts, 'stop': ({**stop, 'hit': stop_hit} if stop else None)})
+    try:
+        created = datetime.datetime.fromisoformat((strat.get('created_at') or '').replace('Z', ''))
+        end = datetime.datetime.utcnow() if active else datetime.datetime.fromisoformat((strat.get('closed_at') or strat.get('created_at')).replace('Z', ''))
+        days_active = max(0, (end - created).days)
+    except Exception:
+        days_active = 0
+    return {'total_pnl_pct': round(weighted_pct, 2), 'total_pnl_usd': round(size * (weighted_pct / 100.0), 2),
+            'days_active': days_active, 'legs': legs_out}
+
+
+def _basket_public(strat):
+    return {'id': strat.get('id'), 'kind': 'basket', 'title': strat.get('title'),
+            'thesis': strat.get('thesis'), 'horizon_days': strat.get('horizon_days'),
+            'status': strat.get('status'), 'created_at': strat.get('created_at'),
+            'closed_at': strat.get('closed_at'), 'size_usd': strat.get('size_usd'),
+            'perf': _basket_perf(strat)}
+
+
+@app.post('/api/v1/albert/strategy/basket/build')
+def albert_basket_build(payload: dict = Body(default={})):
+    """Albert drafts a multi-coin basket (he picks the coins). Returns a DRAFT (not saved)."""
+    goal = (payload.get('goal') or '').strip()[:400]
+    try:
+        return {'status': 'ready', 'draft': _build_basket_draft(goal)}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return JSONResponse({'status': 'error'}, status_code=500)
+
+
+@app.post('/api/v1/albert/strategy/basket')
+def albert_basket_activate(payload: dict = Body(...)):
+    """Save/activate a multi-coin basket for the signed-in user."""
+    draft = payload.get('draft') or payload
+    pid = (str(payload.get('pid') or draft.get('pid') or '')).strip()[:80]
+    norm = _normalize_basket_draft(draft)
+    if not norm.get('legs'):
+        return JSONResponse({'status': 'error', 'message': 'No valid legs (need live prices for the coins).'}, status_code=400)
+    now = datetime.datetime.utcnow()
+    strat = {'id': uuid.uuid4().hex, 'owner': pid, 'kind': 'basket',
+             'title': norm['title'], 'thesis': norm['thesis'], 'horizon_days': norm['horizon_days'],
+             'legs': norm['legs'], 'size_usd': 1000, 'status': 'active',
+             'created_at': now.isoformat(),
+             'expires_at': (now + datetime.timedelta(days=norm['horizon_days'])).isoformat(), 'closed_at': None}
+    strategies_col.update_one({'id': strat['id']}, {'$set': strat}, upsert=True)
+    return {'status': 'ready', 'basket': _basket_public(strat)}
+
+
+@app.get('/api/v1/albert/strategy/baskets')
+def albert_basket_list(pid: str = ''):
+    """List the user's multi-coin baskets (active + closed) with live performance."""
+    pid = (pid or '').strip()[:80]
+    try:
+        rows = list(strategies_col.find({'kind': 'basket', 'owner': pid}, {'_id': 0}).sort('created_at', -1).limit(40))
+    except Exception:  # noqa
+        rows = []
+    baskets = [_basket_public(r) for r in rows]
+    return {'status': 'ready',
+            'active': [b for b in baskets if b['status'] == 'active'],
+            'history': [b for b in baskets if b['status'] != 'active']}
+
+
+@app.post('/api/v1/albert/strategy/basket/{bid}/close')
+def albert_basket_close(bid: str, payload: dict = Body(default={})):
+    strat = strategies_col.find_one({'id': bid, 'kind': 'basket'}, {'_id': 0})
+    if not strat:
+        return JSONResponse({'status': 'error', 'message': 'Basket not found.'}, status_code=404)
+    now = datetime.datetime.utcnow()
+    for leg in (strat.get('legs') or []):
+        leg['close_price'] = _spot_price(leg.get('symbol')) or leg.get('entry_price')
+    strategies_col.update_one({'id': bid}, {'$set': {'status': 'closed', 'closed_at': now.isoformat(), 'legs': strat['legs']}})
+    strat['status'] = 'closed'
+    strat['closed_at'] = now.isoformat()
+    return {'status': 'ready', 'basket': _basket_public(strat)}
+
 
 
 @app.post('/api/v1/albert/strategy')
@@ -10027,7 +10253,7 @@ def _albert_engine_context(symbol='BTC', pid=None):
         pass
     # User's ACTIVE tracked strategies (fast DB read).
     try:
-        _sq = {'status': 'active'}
+        _sq = {'status': 'active', 'kind': {'$ne': 'basket'}}
         if pid:
             _sq['owner'] = (str(pid) or '').strip()[:80]
         strats = list(strategies_col.find(_sq, {'_id': 0}).sort('created_at', -1).limit(8))
