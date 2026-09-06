@@ -4348,20 +4348,22 @@ def _score_band(s):
 EMAIL_ALERTS_ENABLED = False
 
 
-def push_alert(category, severity, title, message, sig, symbol='BTC'):
+def push_alert(category, severity, title, message, sig, symbol='BTC', owner=None):
     """Create an in-app notification (surfaced by the bell + browser push) for
     events that used to be emailed (drift breaker, model decay, live cascade).
-    Idempotent per (day, category, sig)."""
+    Idempotent per (day, category, sig). `owner` (optional) tags the alert with the
+    user pid it belongs to (basket nudges/digests) for future per-user scoping."""
     try:
         day = datetime.datetime.utcnow().strftime('%Y-%m-%d-%H')
         key = f"notif_{day}_{category}_{sig}"
-        res = smart_alerts_col.update_one(
-            {'_id': key},
-            {'$setOnInsert': {
-                '_id': key, 'id': key, 'ts': datetime.datetime.utcnow().isoformat(),
-                'as_of': day, 'symbol': (symbol or 'BTC').upper(), 'category': category, 'severity': severity,
-                'title': title, 'message': message, 'seen': False,
-            }}, upsert=True)
+        doc = {
+            '_id': key, 'id': key, 'ts': datetime.datetime.utcnow().isoformat(),
+            'as_of': day, 'symbol': (symbol or 'BTC').upper(), 'category': category, 'severity': severity,
+            'title': title, 'message': message, 'seen': False,
+        }
+        if owner:
+            doc['owner'] = str(owner)[:80]
+        res = smart_alerts_col.update_one({'_id': key}, {'$setOnInsert': doc}, upsert=True)
         return res.upserted_id is not None
     except Exception:  # noqa
         traceback.print_exc()
@@ -5266,6 +5268,25 @@ def _startup():
         except Exception:  # noqa
             scheduler.add_job(_alert_digest_job, 'cron', hour=DIGEST_HOUR, minute=DIGEST_MINUTE,
                               id='alert_digest', replace_existing=True, coalesce=True, max_instances=1)
+        # Multi-coin BASKET daily digest — one consolidated summary per user of legs that
+        # hit a target/stop in the last 24h (same local morning hour as the alert digest).
+        try:
+            scheduler.add_job(_basket_digest_job, 'cron', hour=DIGEST_HOUR, minute=DIGEST_MINUTE,
+                              timezone=DIGEST_TZ, id='basket_digest', replace_existing=True,
+                              coalesce=True, max_instances=1)
+        except Exception:  # noqa
+            scheduler.add_job(_basket_digest_job, 'cron', hour=DIGEST_HOUR, minute=DIGEST_MINUTE,
+                              id='basket_digest', replace_existing=True, coalesce=True, max_instances=1)
+        # Auto-rebalance cadence — Monday morning nudge to rebalance a basket when sector
+        # rotation has shifted materially since last week.
+        try:
+            scheduler.add_job(_basket_rebalance_nudge_job, 'cron', day_of_week='mon', hour=DIGEST_HOUR,
+                              minute=DIGEST_MINUTE, timezone=DIGEST_TZ, id='basket_rebal_nudge',
+                              replace_existing=True, coalesce=True, max_instances=1)
+        except Exception:  # noqa
+            scheduler.add_job(_basket_rebalance_nudge_job, 'cron', day_of_week='mon', hour=DIGEST_HOUR,
+                              minute=DIGEST_MINUTE, id='basket_rebal_nudge', replace_existing=True,
+                              coalesce=True, max_instances=1)
         # Albert self-check: grade his logged buy/sell calls once their horizon elapses.
         scheduler.add_job(_grade_albert_calls, 'interval', minutes=30, id='albert_call_grade')
         # Weekly recap auto-post: drop Albert's recap into the notification bell every Monday.
@@ -7378,6 +7399,29 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
     if not (LLM_READY_KEY and _HAS_LLM):
         return {'error': 'llm_unconfigured',
                 'text': 'The Ask Quant chat model is not configured on this server.'}
+    # Basket-from-chat: if the user asks Albert to BUILD a multi-coin basket, draft it
+    # inline and return a save-able card (the chat UI renders a "Save & track" button).
+    # Status questions ("how are my baskets doing?") fall through to normal chat.
+    try:
+        if _is_basket_build_request(message):
+            draft = _build_basket_draft(message)
+            if draft and draft.get('legs'):
+                legs_line = ', '.join(
+                    f"{l['symbol']} {l['position']} {int(round(l.get('weight_pct') or 0))}%"
+                    for l in draft['legs'])
+                txt = (f"Here's a basket I put together — **{draft.get('title', 'Multi-Coin Basket')}**. "
+                       f"{draft.get('thesis', '')}\n\nLegs: {legs_line}. "
+                       f"Review it below and tap **Save & track** to start tracking it.")
+                try:
+                    chat_col.insert_one({'_id': str(uuid.uuid4()), 'session_id': session_id,
+                                         'user': message, 'assistant': txt, 'model': _model_for('strategy'),
+                                         'created_at': datetime.datetime.utcnow().isoformat()})
+                except Exception:  # noqa
+                    pass
+                return {'session_id': session_id, 'text': txt, 'basket_draft': draft,
+                        'model': _model_for('strategy'), 'deep': deep, 'sources': []}
+    except Exception:  # noqa
+        traceback.print_exc()
     try:
         ctx = build_chat_context(sym)
         section = payload.get('section')
@@ -9216,6 +9260,29 @@ def _build_basket_draft(goal=''):
         return _fallback_basket_draft(goal)
 
 
+_BASKET_BUILD_VERBS = ('build', 'make', 'create', 'draft', 'design', 'construct',
+                       'set up', 'put together', 'give me', 'assemble', 'come up with')
+_BASKET_STATUS_HINTS = ('how are my', "how's my", 'how is my', 'how are the', "how're my",
+                        'doing', 'performance', 'performing', 'p&l', 'pnl', 'rebalance',
+                        'compare', 'update on', 'status of')
+
+
+def _is_basket_build_request(msg):
+    """Detect a 'build me a multi-coin basket' request in free-form chat. Status/query
+    messages about EXISTING baskets ('how are my baskets doing?') return False and fall
+    through to the normal chat (baskets are already in the engine context)."""
+    m = (msg or '').lower()
+    if 'basket' not in m:
+        return False
+    if any(k in m for k in _BASKET_STATUS_HINTS):
+        return False
+    if any(v in m for v in _BASKET_BUILD_VERBS):
+        return True
+    # e.g. "a basket long the majors, short a laggard" — directional intent, no verb.
+    return ('long' in m) or ('short' in m)
+
+
+
 def _basket_perf(strat):
     legs_out, weighted_pct = [], 0.0
     size = strat.get('size_usd') or 1000
@@ -9398,6 +9465,148 @@ def albert_basket_reweight(bid: str, payload: dict = Body(...)):
     strategies_col.update_one({'id': bid}, {'$set': {'legs': legs}})
     strat['legs'] = legs
     return {'status': 'ready', 'basket': _basket_public(strat)}
+
+
+def _iso_after(iso, cutoff):
+    """True if an ISO timestamp is on/after `cutoff` (a naive UTC datetime)."""
+    try:
+        return datetime.datetime.fromisoformat(str(iso).replace('Z', '')) >= cutoff
+    except Exception:  # noqa
+        return False
+
+
+def _basket_digest_data(pid, cutoff, hours):
+    """Roll up every basket leg that hit a target or stop since `cutoff`, per basket.
+    pid='' means all owners (used by the per-owner scheduler which passes a real pid)."""
+    q = {'status': 'active', 'kind': 'basket'}
+    if pid:
+        q['owner'] = str(pid)[:80]
+    try:
+        baskets = list(strategies_col.find(q, {'_id': 0}).sort('created_at', -1).limit(40))
+    except Exception:  # noqa
+        baskets = []
+    out_baskets, total = [], 0
+    for bk in baskets:
+        hits = []
+        for leg in (bk.get('legs') or []):
+            sym = leg.get('symbol')
+            side = leg.get('position', 'long')
+            for t in (leg.get('targets') or []):
+                if t.get('hit') and t.get('hit_at') and _iso_after(t['hit_at'], cutoff):
+                    hits.append({'symbol': sym, 'side': side, 'kind': 'target',
+                                 'label': t.get('label', 'TP'), 'price': t.get('price'), 'at': t['hit_at']})
+            stop = leg.get('stop')
+            if stop and stop.get('hit') and stop.get('hit_at') and _iso_after(stop['hit_at'], cutoff):
+                hits.append({'symbol': sym, 'side': side, 'kind': 'stop',
+                             'label': 'stop', 'price': stop.get('price'), 'at': stop['hit_at']})
+        if hits:
+            hits.sort(key=lambda h: h['at'], reverse=True)
+            total += len(hits)
+            out_baskets.append({'id': bk.get('id'), 'title': bk.get('title'), 'hits': hits})
+    return {'window_hours': hours, 'generated_at': datetime.datetime.utcnow().isoformat(),
+            'total_hits': total, 'baskets': out_baskets}
+
+
+@app.get('/api/v1/albert/basket-digest')
+def albert_basket_digest(pid: str = '', hours: int = 24):
+    """One consolidated summary of every basket leg that hit a target/stop in the window."""
+    pid = (pid or '').strip()[:80]
+    try:
+        hours = max(1, min(168, int(hours or 24)))
+    except Exception:  # noqa
+        hours = 24
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
+    return {'status': 'ready', **_basket_digest_data(pid, cutoff, hours)}
+
+
+def _basket_digest_job():
+    """Daily: push ONE in-app digest per user summarising basket legs that hit a
+    target/stop in the last 24h (fires at the local morning hour)."""
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=24)
+    try:
+        owners = [o for o in strategies_col.distinct('owner', {'status': 'active', 'kind': 'basket'}) if o]
+    except Exception:  # noqa
+        owners = []
+    today = datetime.date.today().isoformat()
+    for owner in owners:
+        try:
+            data = _basket_digest_data(owner, cutoff, 24)
+            if data['total_hits'] <= 0:
+                continue
+            parts = []
+            for b in data['baskets']:
+                tp = sum(1 for h in b['hits'] if h['kind'] == 'target')
+                sl = sum(1 for h in b['hits'] if h['kind'] == 'stop')
+                bits = []
+                if tp:
+                    bits.append(f"{tp} target{'s' if tp != 1 else ''} hit")
+                if sl:
+                    bits.append(f"{sl} stop{'s' if sl != 1 else ''} hit")
+                parts.append(f"{b['title']}: " + ', '.join(bits))
+            n = data['total_hits']
+            msg = ("In the last 24h — " + '; '.join(parts)
+                   + ". Open Trading Strategies to review and trim/cut those legs.")
+            sym0 = data['baskets'][0]['hits'][0]['symbol'] if (data['baskets'] and data['baskets'][0]['hits']) else 'BTC'
+            push_alert('strategy', 'info',
+                       f"Basket digest — {n} leg event{'s' if n != 1 else ''} today",
+                       msg, f"basket-digest-{owner}-{today}", sym0, owner=owner)
+        except Exception:  # noqa
+            traceback.print_exc()
+
+
+def _basket_rebalance_nudge_job():
+    """Weekly (Mon AM): nudge users to rebalance a basket ONLY when sector rotation has
+    shifted materially since the last check. Stores a rotation snapshot per basket so the
+    first run just primes the baseline (no nudge), and dedupes to ~once/6 days/basket."""
+    try:
+        baskets = list(strategies_col.find({'status': 'active', 'kind': 'basket'}, {'_id': 0}))
+    except Exception:  # noqa
+        return
+    if not baskets:
+        return
+    try:
+        strengths = _sector_strength() or {}
+    except Exception:  # noqa
+        strengths = {}
+    hot_sorted = sorted([s for s, v in strengths.items() if (v or 0) > 0],
+                        key=lambda s: strengths.get(s, 0), reverse=True)
+    hot_set = set(hot_sorted[:3])
+    now = datetime.datetime.utcnow()
+    now_iso = now.isoformat()
+    today = datetime.date.today().isoformat()
+    for bk in baskets:
+        try:
+            first_time = 'rotation_hot' not in bk
+            prev = set(bk.get('rotation_hot') or [])
+            # Always refresh the stored snapshot.
+            strategies_col.update_one({'id': bk['id']},
+                                      {'$set': {'rotation_hot': list(hot_set), 'rotation_checked_at': now_iso}})
+            if first_time:
+                continue  # prime the baseline; don't nudge on first sighting
+            if prev == hot_set:
+                continue  # rotation hasn't shifted materially
+            # Dedupe: at most one rebalance nudge per basket per ~6 days.
+            last = bk.get('last_rebalance_nudge')
+            if last:
+                try:
+                    if (now - datetime.datetime.fromisoformat(str(last).replace('Z', ''))).days < 6:
+                        continue
+                except Exception:  # noqa
+                    pass
+            came_in = ', '.join(sorted(hot_set - prev)) or '—'
+            cooled = ', '.join(sorted(prev - hot_set)) or '—'
+            hot_now = ', '.join(hot_sorted[:3]) or 'n/a'
+            sym0 = (bk.get('legs') or [{}])[0].get('symbol', 'BTC')
+            push_alert('strategy', 'info',
+                       f"Rebalance check: {bk.get('title', 'Basket')}",
+                       (f"Sector rotation shifted this week (now leading: {hot_now}; rotating in: {came_in}; "
+                        f"cooling: {cooled}). Open Trading Strategies → Rebalance to realign "
+                        f"'{bk.get('title', 'your basket')}'."),
+                       f"basket-rebalnudge-{bk['id']}-{today}", sym0, owner=bk.get('owner'))
+            strategies_col.update_one({'id': bk['id']}, {'$set': {'last_rebalance_nudge': now_iso}})
+        except Exception:  # noqa
+            traceback.print_exc()
+
 
 
 
@@ -10401,6 +10610,30 @@ def _albert_engine_context(symbol='BTC', pid=None):
                 stance = s.get('bias') or s.get('position') or ''
                 L.append(f"- {s.get('symbol')}: '{s.get('title')}' [{stance}] — entry ${s.get('entry_price')}, "
                          f"P&L {pnl if pnl is not None else 'n/a'}%, {perf.get('status') or s.get('status')}.")
+    except Exception:  # noqa
+        pass
+    # User's ACTIVE multi-coin baskets — so Albert can answer "how are my baskets doing?"
+    # straight from saved baskets (live numbers; he must not invent them).
+    try:
+        _bq = {'status': 'active', 'kind': 'basket'}
+        if pid:
+            _bq['owner'] = (str(pid) or '').strip()[:80]
+        bks = list(strategies_col.find(_bq, {'_id': 0}).sort('created_at', -1).limit(6))
+        if bks:
+            L.append("USER'S ACTIVE MULTI-COIN BASKETS (Albert tracks these — reference by name; when asked "
+                     "'how are my baskets doing' summarise THESE live numbers, do NOT invent any):")
+            for b in bks:
+                try:
+                    perf = _basket_perf(b) or {}
+                except Exception:  # noqa
+                    perf = {}
+                legs = perf.get('legs', []) or []
+                leg_bits = ', '.join(
+                    f"{lg.get('symbol')} {lg.get('position')} {lg.get('weight_pct')}% (P&L {lg.get('pnl_pct')}%)"
+                    for lg in legs)
+                L.append(f"- '{b.get('title')}' [{len(legs)} legs, {b.get('horizon_days')}d, "
+                         f"{perf.get('days_active', 0)}d active] — basket P&L {perf.get('total_pnl_pct')}% "
+                         f"(${perf.get('total_pnl_usd')} on ${b.get('size_usd')}). Legs: {leg_bits}.")
     except Exception:  # noqa
         pass
     return ('\n'.join(L)) if L else ''
