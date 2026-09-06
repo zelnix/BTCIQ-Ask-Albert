@@ -18,6 +18,8 @@ from albert.engine import scoring as scoring_mod
 from albert.engine import sell as sell_mod
 from albert.engine import flip_conditions as flip_mod
 from albert.engine import universe as universe_mod
+from albert.engine import portfolio_risk as pr_engine
+from albert.repositories import portfolio_risk as pr_repo
 from albert.engine import hashing
 from albert.engine.constants import (
     ALBERT_ENGINE_VERSION, REGIME_BUY_THRESHOLD, REGIME_DEPLOY_CEILING, STABLES,
@@ -31,6 +33,7 @@ _REASON_WAIT_BELOW = 'BELOW_ENTRY_LINE'
 _REASON_WAIT_GATED = 'GATED_BY_MANDATE'
 _REASON_WAIT_STALE = 'STALE_DATA'
 _REASON_WAIT_NOROOM = 'NO_HEADROOM'
+_REASON_GATED_DRAWDOWN = 'GATED_BY_DRAWDOWN'  # Phase G: BUY suppressed by portfolio protection
 
 _INELIG_WARNING = {
     'EXCLUDED_BY_MANDATE': 'Excluded by your Trading Mandate',
@@ -100,7 +103,7 @@ def build_decisions(pid):
                 'recommendedDeployNowUsd': 0.0, 'totalPlannedDeploymentUsd': 0.0,
                 'tranches': [], 'warnings': [], 'reasons': [], 'engineVersion': ALBERT_ENGINE_VERSION,
                 'reasonCode': None, 'sellReason': None, 'sellPlan': None, 'precedenceRuleApplied': None,
-                'evaluatedAt': pass_ts}
+                'evaluatedAt': pass_ts, '_dataOk': bool(sc.get('ok'))}
 
         if not sc.get('ok'):
             base.update({'action': 'WAIT', 'opportunityScore': 0, 'confidence': 20,
@@ -164,7 +167,48 @@ def build_decisions(pid):
                 'tradeRiskPct': trade_risk_pct, 'dataOk': True})
         decisions.append(base)
 
-    # ---- BUY allocation pass (unchanged from D1) ----
+    # ---- Phase G: portfolio-level drawdown protection (stateful, hysteresis) ----
+    # Evaluate/persist the HWM + protection state on every engine pass. When protection
+    # is active we (1) inject a portfolio-wide risk-reduction SELL into held assets, which
+    # ranks just under EMERGENCY_EXIT, and (2) suppress ALL new BUYs (no averaging down).
+    portfolio_risk = pr_repo.evaluate(pid, total, mandate.get('max_drawdown_pct'))
+    reductions = None
+    if portfolio_risk.get('protectionMode'):
+        scored = {d['symbol']: {'currentPrice': d.get('currentPrice'),
+                                'invalidation': d.get('invalidationPrice')} for d in decisions}
+        reductions = pr_engine.compute_reductions(
+            holdings=summary['holdings'], scored=scored,
+            max_drawdown_pct=portfolio_risk['maxDrawdownPct'],
+            drawdown_pct=portfolio_risk['drawdownPct'])
+        per_asset = reductions['perAsset']
+        # Re-resolve SELLs for held assets WITH the portfolio-drawdown cut injected so
+        # precedence picks the winner (EMERGENCY_EXIT still outranks PORTFOLIO_DRAWDOWN_RISK).
+        for d in decisions:
+            sym = d['symbol']
+            held_h = held.get(sym)
+            if held_h is None:
+                continue
+            _apply_sell(d, {
+                'symbol': sym, 'positionValue': held_h.get('value', 0.0),
+                'positionSize': held_h.get('size'), 'unrealizedPct': held_h.get('unrealized_pct'),
+                'currentPrice': d.get('currentPrice'), 'invalidationPrice': d.get('invalidationPrice'),
+                'currentAllocationPct': d.get('currentAllocationPct'), 'capPct': max_alloc.get(sym, 100.0),
+                'totalValue': total, 'excluded': excluded, 'tradeRiskPct': trade_risk_pct,
+                'dataOk': bool(d.get('_dataOk')),
+                'portfolioDrawdownFraction': per_asset.get(sym, {}).get('fraction')})
+        # Suppress ALL new BUYs while protection is active.
+        for d in decisions:
+            if d.get('action') == 'BUY':
+                owned = held.get(d['symbol']) is not None
+                d['action'] = 'HOLD' if owned else 'WAIT'
+                d['reasonCode'] = _REASON_GATED_DRAWDOWN
+                d['precedenceRuleApplied'] = d['action']
+                d['recommendedDeployNowUsd'] = 0.0
+                d['totalPlannedDeploymentUsd'] = 0.0
+                d['tranches'] = []
+                d['reasons'].insert(0, 'Portfolio drawdown protection is active \u2014 new BUYs are suspended until drawdown recovers.')
+
+    # ---- BUY allocation pass (unchanged from D1; empty while protection active) ----
     buys = [d for d in decisions if d.get('action') == 'BUY']
     remaining = regime_pool
     if buys and remaining > 0:
@@ -201,7 +245,7 @@ def build_decisions(pid):
 
     # ---- D2 FINALIZATION: immutable audit envelope for every decision ----
     for d in decisions:
-        for k in ('_eligible', '_score', '_cur_val', '_cap_val', '_owned'):
+        for k in ('_eligible', '_score', '_cur_val', '_cap_val', '_owned', '_dataOk'):
             d.pop(k, None)
         sym = d['symbol']
         held_h = held.get(sym)
@@ -300,6 +344,11 @@ def build_decisions(pid):
 
     if not complete:
         albert_call = 'Set your Trading Mandate to unlock personalised recommendations.'
+    elif portfolio_risk.get('protectionMode'):
+        albert_call = ('PORTFOLIO PROTECTION ACTIVE \u2014 drawdown %.1f%% vs your %.1f%% limit. New BUYs suspended; reducing portfolio risk.'
+                       % (portfolio_risk.get('drawdownPct') or 0.0, portfolio_risk.get('maxDrawdownPct') or 0.0))
+        if sell_decisions:
+            albert_call += ' ' + ', '.join('%s %s' % (d['symbol'], d['sellPlan']['action']) for d in sell_decisions) + '.'
     elif urgent_sells:
         parts = ['%s %s (%s)' % (d['symbol'], d['sellPlan']['action'], d['reasonCode']) for d in urgent_sells]
         albert_call = 'REDUCE RISK NOW \u2014 ' + '; '.join(parts) + '.'
@@ -317,10 +366,27 @@ def build_decisions(pid):
     else:
         albert_call = 'WAIT \u2014 no high-quality entry justifies deploying capital in a %s market right now.' % regime
 
+    # ---- Phase G: portfolio-risk audit block (top-level, snapshot-auditable) ----
+    portfolio_risk_out = dict(portfolio_risk)
+    portfolio_risk_out['triggeredAt'] = portfolio_risk.get('protectionActivatedAt')
+    if reductions is not None:
+        portfolio_risk_out.update({
+            'severity': reductions['severity'],
+            'targetRiskReductionFraction': reductions['targetRiskReductionFraction'],
+            'totalRiskExposureUsd': reductions['totalRiskExposureUsd'],
+            'riskReductionRequiredUsd': reductions['riskReductionRequiredUsd'],
+            'reductions': reductions['perAsset'],
+        })
+    else:
+        portfolio_risk_out.update({
+            'severity': 0.0, 'targetRiskReductionFraction': 0.0,
+            'totalRiskExposureUsd': None, 'riskReductionRequiredUsd': 0.0, 'reductions': {},
+        })
+
     return {'snapshotId': str(uuid.uuid4()), 'passId': str(uuid.uuid4()), 'marketDataTimestamp': pass_ts,
             'engineVersion': ALBERT_ENGINE_VERSION, 'regime': reg, 'regimeSnapshotId': regime_snapshot_id,
             'mandateVersion': mandate_version, 'portfolioVersion': portfolio_version, 'summary': summary,
             'mandate_complete': complete, 'buyThreshold': buy_thresh, 'regimeDeployCeiling': regime_pool,
             'deployableUsdc': deployable, 'totalDeployNowUsd': total_deploy_now, 'albertCall': albert_call,
             'qualifying': qualifying, 'sellCount': len(sell_decisions), 'precedenceOrder': dict(PRECEDENCE_ORDER),
-            'decisions': decisions}
+            'portfolioRisk': portfolio_risk_out, 'decisions': decisions}

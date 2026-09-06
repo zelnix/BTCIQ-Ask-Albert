@@ -7724,6 +7724,7 @@ from albert.engine import regime as _albert_regime_mod  # noqa: E402
 from albert.engine import scoring as _albert_scoring_mod  # noqa: E402
 from albert.engine import decision as _albert_decision_mod  # noqa: E402
 from albert.repositories import decision_history as _decision_history_repo  # noqa: E402
+from albert.repositories import portfolio_risk as _portfolio_risk_repo  # noqa: E402
 from albert.execution import manager as _order_mgr  # noqa: E402
 from albert.execution import ledger as _paper_ledger  # noqa: E402
 from albert.engine.constants import (  # noqa: E402,F401
@@ -7944,7 +7945,24 @@ def albert_paper_reset(payload: dict = Body(...)):
     if not pid:
         return {'error': 'pid required'}
     _paper_ledger.reset(pid, payload.get('accountId') or 'paper')
+    # Phase G: a paper reset also clears the drawdown high-water mark + protection state.
+    _portfolio_risk_repo.reset(pid)
     return {'status': 'reset'}
+
+
+@app.get('/api/v1/albert/portfolio-risk')
+def albert_portfolio_risk(pid: str = ''):
+    """Phase G: current portfolio drawdown-protection state (HWM, drawdown, protection
+    mode + hysteresis) for the Command Centre banner. Evaluation is deterministic and
+    stateful (persisted). The full per-asset risk-reduction plan is in /decisions."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    summary = _portfolio_summary(pid)
+    mandate = _get_mandate(pid)
+    pr = _portfolio_risk_repo.evaluate(pid, summary.get('total_value'), mandate.get('max_drawdown_pct'))
+    pr['triggeredAt'] = pr.get('protectionActivatedAt')
+    return {'status': 'ready', 'portfolioRisk': pr}
 
 
 EXPLAIN_ORDER_SYSTEM = (

@@ -111,6 +111,15 @@ try:
 except Exception:  # noqa
     pass
 
+# Phase G: Portfolio-Level Risk & Drawdown Protection — stateful per-pid protection
+# record (high-water mark, protection mode + hysteresis, breach anchor). Persisted so
+# a backend restart cannot accidentally clear an active protection state.
+portfolio_risk_col = db['albert_portfolio_risk']
+try:
+    portfolio_risk_col.create_index('pid')
+except Exception:  # noqa
+    pass
+
 # Phase E constants
 ORDER_TTL_SECONDS = 300              # 5-minute TTL from intent createdAt
 DEFAULT_SLIPPAGE_BPS = 50            # 0.50% default price tolerance

@@ -97,17 +97,23 @@ def build_flip_conditions(*, action, reason_code, regime, score, confidence, own
     elif action == 'SELL':
         # A SELL can revert to HOLD if the triggering condition clears BEFORE
         # execution. Higher-precedence triggers can still override a lower one.
+        if reason_code == 'PORTFOLIO_DRAWDOWN_RISK':
+            out.append(_c('HOLD', 'DRAWDOWN_RECOVERS',
+                          'If portfolio drawdown recovers to/under the recovery threshold before execution, the risk-reduction cut is withdrawn and this reverts to HOLD.'))
+            out.append(_c('SELL:EMERGENCY_EXIT', 'HIGHER_PRECEDENCE_FIRES',
+                          'An individual emergency condition (excluded-coin breach or -%.0f%% blow-through) would override this portfolio cut and force a full exit of that position.' % EMERGENCY_LOSS_PCT))
+            return out
         out.append(_c('HOLD', 'RISK_CONDITION_CLEARS',
                       'If the %s condition clears before execution (price reclaims invalidation / allocation back under cap / risk back within budget), revert to HOLD.' % reason_code))
         # Precedence-aware escalation note.
         if reason_code == 'PROFIT_TAKE':
             out.append(_c('SELL:RISK_REDUCTION', 'HIGHER_PRECEDENCE_FIRES',
-                          'A higher-precedence risk trigger (emergency / thesis / risk / rebalance) would override this profit-take.'))
+                          'A higher-precedence risk trigger (emergency / drawdown / thesis / risk / rebalance) would override this profit-take.'))
         elif reason_code in ('REBALANCE', 'RISK_REDUCTION'):
             out.append(_c('SELL:THESIS_INVALIDATION', 'HIGHER_PRECEDENCE_FIRES',
-                          'An emergency or thesis-invalidation trigger would override this %s and force a full exit.' % reason_code))
+                          'An emergency, portfolio-drawdown, or thesis-invalidation trigger would override this %s and force a larger reduction.' % reason_code))
         elif reason_code == 'THESIS_INVALIDATION':
             out.append(_c('SELL:EMERGENCY_EXIT', 'HIGHER_PRECEDENCE_FIRES',
-                          'An emergency condition (excluded-coin breach or -%.0f%% blow-through) would escalate this to an immediate full exit.' % EMERGENCY_LOSS_PCT))
+                          'An emergency condition (excluded-coin breach or -%.0f%% blow-through) or a portfolio-drawdown breach would escalate this to an immediate full exit.' % EMERGENCY_LOSS_PCT))
 
     return out

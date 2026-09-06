@@ -45,6 +45,7 @@ def evaluate_sell(ctx):
     excluded = ctx.get('excluded') or set()
     trade_risk_pct = ctx.get('tradeRiskPct') or 2.0
     data_ok = bool(ctx.get('dataOk'))
+    pdr_fraction = ctx.get('portfolioDrawdownFraction')  # Phase G: portfolio-level cut for this asset
 
     if pos_val <= 0:
         return None
@@ -59,6 +60,13 @@ def evaluate_sell(ctx):
         signals.append(_sig('EMERGENCY_EXIT', 1.0,
                             'Position is down %.0f%%, beyond the %.0f%% emergency stop \u2014 exit fully to protect capital.'
                             % (upnl, EMERGENCY_LOSS_PCT)))
+
+    # 1b. PORTFOLIO_DRAWDOWN_RISK (Phase G) -----------------------------------
+    # Portfolio-wide risk circuit breaker. Ranks just under EMERGENCY_EXIT, so an
+    # individual emergency still wins, but this outranks every position-level trigger.
+    if pdr_fraction and pdr_fraction > 0:
+        signals.append(_sig('PORTFOLIO_DRAWDOWN_RISK', pdr_fraction,
+                            'Portfolio drawdown has breached your mandate limit \u2014 reducing this position to shed portfolio risk.'))
 
     # 2. THESIS_INVALIDATION -------------------------------------------------
     if data_ok and price and invalidation and price <= invalidation:
