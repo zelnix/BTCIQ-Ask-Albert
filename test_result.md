@@ -1461,11 +1461,11 @@ metadata:
 frontend:
   - task: "Albert's Plan Phase D3 — Command Centre UI (decision cards, SELL plan, flip conditions, Ask-Albert explain modal, decision-history timeline)"
     implemented: true
-    working: "NA"
+    working: true
     file: "app/components/AlbertPlan.js"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
@@ -1492,6 +1492,103 @@ frontend:
           NOT yet UI-tested by an agent (frontend testing requires signed-in Google session + a seeded mandate/
           portfolio via backend/seed_test_session.py). AWAITING USER PERMISSION before running the frontend testing
           agent. Advisory/paper only.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Phase D3 Portfolio Command Centre E2E UI test via external URL 
+          (https://quant-features.preview.emergentagent.com). ALL 16 TEST STEPS PASSED (16/16).
+          
+          AUTH BYPASS: ✅ Cookie (albert_session=e2e_test_session_token_albert_0001) + localStorage 
+          (btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320) set successfully. Dashboard unlocked.
+          
+          NAVIGATION: ✅ Navigated to Trading Strategies screen. Portfolio Command Centre card found at top.
+          
+          STAT CARDS (4/4): ✅ All present with correct values:
+          • Total value: $101,645
+          • USDC: $60,000
+          • Protected reserve: $15,000 (25% of USDC)
+          • Deployable USDC: $45,000 (green accent)
+          
+          MARKET REGIME BANNER: ✅ "Market Regime: BULL — 95% confidence" with BUY line ≥ 72, deploy pool $27,900.
+          
+          ALBERT'S CALL BANNER: ✅ "REDUCE RISK NOW — DOGE EXIT_100 (EMERGENCY_EXIT)" (top priority call as expected).
+          
+          DECISION TABLE STRUCTURE: ✅ All 5 column headers present (Asset, Call, Score, Conf, Recommendation). 
+          17 table rows found. All expected assets present:
+          • SOL: BUY (95.4 score, 92% conf, $2,920 now / $7,300 planned) ✅
+          • BTC: SELL + Trim 25% + Profit-take (85.7 score, 91% conf, $996.26 (0.0125 BTC)) ✅
+          • ETH: SELL + Exit 100% + Risk reduction (85.6 score, 96% conf, $37,210.05 (15 ETH)) ✅
+          • DOGE: SELL + Exit 100% + INELIGIBLE + Emergency exit (90 score, 83% conf, $450.00 (5,000 DOGE)) ✅
+          • XRP: WAIT + INELIGIBLE (96.1 score, 96% conf) — amber chip, distinct from ordinary WAIT ✅
+          • LINK, LTC, AVAX, DOT, ADA, BNB, TRX: WAIT + INELIGIBLE (all non-approved coins correctly gated) ✅
+          
+          INELIGIBLE CHIP: ✅ XRP (and other non-approved coins) show amber "INELIGIBLE" chip with AlertTriangle icon. 
+          Visually distinct from ordinary WAIT. No INELIGIBLE row is styled like a BUY.
+          
+          EXPANDED ETH ROW (SELL Exit 100%): ✅ ALL ELEMENTS VERIFIED:
+          • Sell plan block: "Sell plan — Risk reduction (precedence #3)" ✅
+          • Action: EXIT 100% ✅
+          • Sell USD: $37,210.05 (exact to the cent, fmtX formatter working correctly) ✅
+          • Sell qty: 15 ✅
+          • Δ: $-37,210.05 ✅
+          • Position: $37,210.05 (36.61%) → $0.00 (0%) ✅
+          • "Also fired (lower precedence): REBALANCE, PROFIT_TAKE" ✅✅✅ (CRITICAL: lower-precedence signals shown)
+          • Flip conditions panel: "What would change this?" with toCall badges + detail ✅
+          
+          ASK ALBERT MODAL: ✅ ALL ELEMENTS VERIFIED:
+          • Modal opened successfully ✅
+          • DETERMINISTIC FACTS at TOP (DOMINANT): Reason (Risk reduction), Precedence (RISK_REDUCTION), 
+            Opportunity score (85.6), Confidence (96%), Sell (EXIT 100 · $37,210.05 · 15 ETH), 
+            Position ($37,210.05 (36.61%) → $0.00 (0%)), Invalidation ≈ $1,874.21 ✅
+          • ALBERT'S EXPLANATION BELOW (secondary): Label "Albert's explanation (read-only)" ✅
+          • LLM explanation loaded successfully (waited ~60s, explanation text present) ✅
+          • Footer note: "Albert explains the numbers above — he cannot change the call, amount, score, or invalidation." ✅
+          • CRITICAL CONTRACT VERIFICATION: All numbers in modal EXACTLY match table/expanded row values 
+            (call=SELL, score=85.6, sellUsd=$37,210.05, sellQty=15) — NO CLIENT-SIDE RECOMPUTATION ✅✅✅
+          
+          HISTORY MODAL: ✅ ALL ELEMENTS VERIFIED:
+          • Modal opened successfully ✅
+          • Empty history state: "No call changes recorded yet. The advice for ETH has been stable." ✅
+          • Footer note: "Each entry links the previous and new immutable decision snapshots — a full audit trail 
+            of why the advice changed." ✅
+          • Modal closes cleanly ✅
+          
+          BTC ROW (SELL Trim 25%): ✅ SELL pill + "Trim 25%" pill + "Profit-take" reason (85.7 score, 91% conf, 
+          $996.26 (0.0125 BTC)).
+          
+          DOGE ROW (SELL Exit 100% EMERGENCY_EXIT): ✅ SELL pill + "Exit 100%" pill (rose-colored, distinct from Trim) + 
+          INELIGIBLE chip + "Emergency exit" reason (90 score, 83% conf, $450.00 (5,000 DOGE)).
+          
+          SOL ROW (BUY): ✅ BUY pill (emerald-colored) + $2,920 now / $7,300 planned (95.4 score, 92% conf).
+          
+          FOOTER NOTE: ✅ "Deterministic engine albert-decide-v1 · advisory / paper only · Albert explains these calls, 
+          he doesn't change them."
+          
+          VISUAL HIERARCHY VERIFICATION: ✅ CALL pill is the strongest visual element in every row (big, bold, colored). 
+          Score and confidence are present but visually secondary (smaller, muted colors). SELL trim/exit pills are 
+          plain-language and unmistakable. Albert's prose in the modal is explicitly secondary and labelled read-only.
+          
+          CONSOLE ERRORS: ✅ No error messages found on the page. No red error screens. No crashes.
+          
+          SCREENSHOTS CAPTURED (5):
+          • d3_command_centre_overview.png — Full Command Centre with stat cards, regime banner, Albert's call, decision table
+          • d3_eth_expanded_sell_plan.png — Expanded ETH row showing sell plan, flip conditions, Ask Albert button
+          • d3_ask_albert_modal.png — Ask Albert modal with deterministic facts at top, explanation below
+          • d3_history_modal.png — History modal with empty state message
+          • d3_final_state.png — Final state after all interactions
+          
+          KEY VALIDATIONS:
+          • All backend snapshot values survive rendering EXACTLY — no client-side recomputation ✅
+          • SELL plan shows governing reason, precedence #, action, exact amounts, position before→after, 
+            "also fired" signals ✅
+          • INELIGIBLE chip is visually distinct (amber) and never styled like a BUY ✅
+          • Ask Albert modal: deterministic facts DOMINATE at top, Albert's prose is secondary + read-only ✅
+          • History modal: empty state with friendly message (multi-event history exercised by backend lifecycle test) ✅
+          • CALL never gets visually outranked by Albert's prose anywhere ✅
+          • Footer notes advisory/paper + "Albert explains these calls, he doesn't change them" ✅
+          
+          NO MAJOR ISSUES FOUND. Phase D3 Portfolio Command Centre UI is fully functional and production-ready. 
+          Advisory/paper only (no live execution).
 
     implemented: true
     working: true
@@ -1545,8 +1642,7 @@ frontend:
 
 test_plan:
   current_focus:
-    - "Pillar 1 — Real-time WebSocket order-flow pipeline (GET /api/v1/orderflow)"
-    - "Pillar 3 — FAISS Time Machine analogs (GET /api/v1/time-machine/analogs)"
+    - "Albert's Plan Phase D3 — Command Centre UI (decision cards, SELL plan, flip conditions, Ask-Albert explain modal, decision-history timeline)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -8750,4 +8846,76 @@ agent_communication:
       touch protected vars). Main bumped the client-side chat abort from 45s->60s (non-deep) so inline basket builds
       (~30-45s) complete. Earlier in this job main also fixed a real bug: the Next.js API proxy now forwards Cookie/
       Authorization + relays Set-Cookie, so Google sign-in sessions persist across reloads.
+    -agent: "testing"
+    -message: |
+      ✅ PHASE D3 PORTFOLIO COMMAND CENTRE E2E UI TEST COMPLETE — ALL TESTS PASSED (16/16)
+      
+      Tested Albert's Plan Phase D3 UI (decision cards, SELL plan, flip conditions, Ask-Albert explain modal, 
+      decision-history timeline) via external URL (https://quant-features.preview.emergentagent.com) using 
+      seeded session (cookie + localStorage auth bypass). Desktop viewport (1920x1080).
+      
+      CRITICAL ACCEPTANCE CRITERIA — ALL PASSED:
+      
+      1. ✅ DECISION TABLE: CALL pill (BUY/SELL/HOLD/WAIT) is the strongest visual element (big, bold, colored). 
+         Score & confidence present but visually secondary (smaller, muted). SELL rows show plain-language pill 
+         ("Trim 25%" / "Exit 100%") with small supporting reason. Recommendation cell shows exact backend values:
+         • BUY: $2,920 now / $7,300 planned (SOL)
+         • SELL: $37,210.05 (15 ETH) — exact to the cent, no client recomputation
+         • HOLD/WAIT: text
+      
+      2. ✅ INELIGIBLE: XRP (and other non-approved coins: LINK, LTC, AVAX, DOT, ADA, BNB, TRX) show distinct 
+         amber "INELIGIBLE" chip with AlertTriangle icon and action WAIT. Visually different from ordinary WAIT. 
+         No INELIGIBLE row is styled like a BUY.
+      
+      3. ✅ EXPAND SELL ROW (ETH): "Sell plan" block shows:
+         • Governing reason: Risk reduction (precedence #3)
+         • Action: EXIT 100%
+         • Exact Sell USD: $37,210.05 (to the cent)
+         • Exact Sell qty: 15
+         • Δ: $-37,210.05
+         • Position before → after: $37,210.05 (36.61%) → $0.00 (0%)
+         • "Also fired (lower precedence): REBALANCE, PROFIT_TAKE" ✅✅✅
+         All numbers captured from screenshots match backend snapshot exactly.
+      
+      4. ✅ FLIP CONDITIONS: "What would change this?" panel lists conditions with toCall badge (→ HOLD, → SELL/...) 
+         + plain-language detail.
+      
+      5. ✅ ASK ALBERT MODAL: Clicked "Ask Albert about this call". Modal opened. DETERMINISTIC FACTS DOMINATE at top:
+         • Reason: Risk reduction
+         • Precedence: RISK_REDUCTION
+         • Opportunity score: 85.6
+         • Confidence: 96%
+         • Sell: EXIT 100 · $37,210.05 · 15 ETH
+         • Position: $37,210.05 (36.61%) → $0.00 (0%)
+         • Invalidation ≈ $1,874.21
+         Albert's prose appears BELOW under label "Albert's explanation (read-only)" and is visually secondary. 
+         Waited ~60s for LLM explanation — loaded successfully. Footer note: "Albert explains the numbers above — 
+         he cannot change the call, amount, score, or invalidation." CRITICAL: numbers in modal EXACTLY match 
+         table/expanded values (call=SELL, score=85.6, sellUsd=$37,210.05, sellQty=15) — NO RECOMPUTATION.
+      
+      6. ✅ HISTORY MODAL: Clicked "History" on ETH row. Timeline modal opened. Empty-history scenario: 
+         "No call changes recorded yet. The advice for ETH has been stable." (friendly message). Modal opens/closes 
+         cleanly. Multi-event history exercised by backend lifecycle test (14/14 transitions).
+      
+      7. ✅ VISUAL HIERARCHY: CALL never gets visually outranked by Albert's prose anywhere. Footer notes 
+         advisory/paper + "Albert explains these calls, he doesn't change them."
+      
+      SEEDED DATA VERIFICATION (pid u_7693422a-...):
+      • SOL → BUY (95.4 score, 92% conf, $2,920 now / $7,300 planned) ✅
+      • BTC → SELL "Trim 25%" PROFIT_TAKE (85.7 score, 91% conf, $996.26 (0.0125 BTC)) ✅
+      • ETH → SELL "Exit 100%" RISK_REDUCTION (85.6 score, 96% conf, $37,210.05 (15 ETH)), 
+        lower-precedence signals: REBALANCE + PROFIT_TAKE ✅
+      • DOGE → SELL "Exit 100%" EMERGENCY_EXIT (90 score, 83% conf, $450.00 (5,000 DOGE)) + INELIGIBLE chip ✅
+      • XRP → WAIT with INELIGIBLE chip (NOT_IN_APPROVED_UNIVERSE, 96.1 score, 96% conf) ✅
+      • Top banner "Albert's call": "REDUCE RISK NOW — DOGE EXIT_100 (EMERGENCY_EXIT)" ✅
+      
+      SCREENSHOTS CAPTURED (5):
+      • d3_command_centre_overview.png — Full Command Centre with stat cards, regime banner, Albert's call, decision table
+      • d3_eth_expanded_sell_plan.png — Expanded ETH row showing sell plan, flip conditions, Ask Albert button
+      • d3_ask_albert_modal.png — Ask Albert modal with deterministic facts at top, explanation below
+      • d3_history_modal.png — History modal with empty state message
+      • d3_final_state.png — Final state after all interactions
+      
+      NO MAJOR ISSUES. Phase D3 Portfolio Command Centre UI is fully functional and production-ready. 
+      Advisory/paper only (no live execution).
 

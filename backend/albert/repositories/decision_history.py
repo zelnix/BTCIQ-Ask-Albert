@@ -30,6 +30,20 @@ def _identity(d):
             d.get('ineligibilityReason'), sell.get('action'), deploy_tier]
 
 
+def _plain(env):
+    """Human label for a decision, e.g. 'Buy', 'Hold', 'Trim 25%', 'Exit 100%'."""
+    a = (env or {}).get('action')
+    if a == 'SELL':
+        sp = (env or {}).get('sellPlan') or {}
+        act = sp.get('action') or 'SELL'
+        if act == 'EXIT_100':
+            return 'Exit 100%'
+        if act.startswith('TRIM_'):
+            return 'Trim ' + act.split('_')[1] + '%'
+        return 'Sell'
+    return (a or '').title() or 'Wait'
+
+
 def _change_type(prev_id, new_id):
     """Compact machine label for the transition."""
     if prev_id[0] != new_id[0]:
@@ -114,10 +128,14 @@ def reconcile(pid, snap):
             pass
 
         if cur:  # genuine transition (not the very first record)
+            from_label = _plain(cur.get('envelope', {}))
+            to_label = _plain(d)
             ev = {'_id': str(uuid.uuid4()), 'pid': pid, 'asset': asset,
                   'previousDecisionId': cur['decisionId'], 'newDecisionId': new_did,
                   'previousSnapshotId': cur['snapshotId'], 'newSnapshotId': new_sid,
                   'changedAt': pass_ts, 'changeType': _change_type(cur['identity'], ident),
+                  'fromLabel': from_label, 'toLabel': to_label,
+                  'headline': '%s \u2192 %s' % (from_label, to_label),
                   'changeReason': _change_reasons(cur.get('envelope', {}), d)}
             try:
                 decision_history_col.insert_one(ev)

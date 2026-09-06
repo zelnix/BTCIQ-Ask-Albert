@@ -53,7 +53,7 @@ def build_flip_conditions(*, action, reason_code, regime, score, confidence, own
 
     elif action == 'HOLD':
         out.append(_c('BUY', 'SCORE_RECLAIMS_ENTER_WITH_HEADROOM',
-                      'Score reclaims %d with allocation headroom and deployable USDC available \u2014 add.' % enter,
+                      'BUY if the score reaches %d while %s conditions remain valid, with allocation headroom and deployable USDC.' % (enter, regime),
                       threshold=enter))
         tier = _next_profit_tier(unrealized_pct)
         if tier is not None:
@@ -91,7 +91,7 @@ def build_flip_conditions(*, action, reason_code, regime, score, confidence, own
                           'Fresh market data restores a confident read \u2014 Albert re-evaluates.'))
         else:
             out.append(_c('BUY', 'ALL_GATES_PASS',
-                          'Score reaches %d, confidence >= %d, and mandate + allocation headroom + deployable USDC all clear.' % (enter, CONFIDENCE_MIN),
+                          'BUY if the score reaches %d (confidence >= %d) while %s conditions hold and mandate + allocation headroom + deployable USDC all clear.' % (enter, CONFIDENCE_MIN, regime),
                           threshold=enter))
 
     elif action == 'SELL':

@@ -21,16 +21,18 @@ const INELIG_LABEL = {
   MANDATE_INCOMPLETE: 'Mandate incomplete', STALE_DATA: 'Stale market data',
 };
 
-function ActionPill({ a }) {
+function ActionPill({ a, big }) {
   const map = { BUY: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40', HOLD: 'bg-sky-500/15 text-sky-300 border-sky-500/40', SELL: 'bg-rose-500/15 text-rose-300 border-rose-500/40', WAIT: 'bg-slate-700/40 text-slate-300 border-slate-600' };
-  return <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${map[a] || map.WAIT}`}>{a}</span>;
+  const size = big ? 'px-2.5 py-1 text-[12px] font-extrabold tracking-wide' : 'px-2 py-0.5 text-[10px] font-bold';
+  return <span className={`rounded-full border ${size} ${map[a] || map.WAIT}`}>{a}</span>;
 }
 
-// SELL trim vs full-exit must be unmistakable.
+// SELL trim vs full-exit must be unmistakable — plain language first.
 function SellActionPill({ p }) {
   if (!p) return null;
   const exit = p.action === 'EXIT_100';
-  return <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-bold ${exit ? 'bg-rose-600/25 text-rose-200 border-rose-500/60' : 'bg-amber-500/15 text-amber-300 border-amber-500/40'}`}>{exit ? 'EXIT 100%' : p.action.replace('TRIM_', 'TRIM ') + '%'}</span>;
+  const label = exit ? 'Exit 100%' : 'Trim ' + p.action.replace('TRIM_', '') + '%';
+  return <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-bold ${exit ? 'bg-rose-600/25 text-rose-200 border-rose-500/60' : 'bg-amber-500/15 text-amber-300 border-amber-500/40'}`}>{label}</span>;
 }
 
 function EligibilityChip({ d }) {
@@ -114,7 +116,7 @@ function ExplainModal({ decision, onClose }) {
         </div>
         {/* ALBERT'S PROSE — explicitly secondary + read-only */}
         <div className="mt-3">
-          <p className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-violet-300"><MessageCircle className="h-3 w-3" />Albert explains (read-only)</p>
+          <p className="mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wide text-violet-300"><MessageCircle className="h-3 w-3" />Albert&apos;s explanation (read-only)</p>
           {loading ? <div className="flex items-center gap-2 text-[12px] text-slate-400"><Loader2 className="h-3.5 w-3.5 animate-spin" />Albert is reading the snapshot…</div>
             : err ? <p className="text-[12px] text-slate-500">{err}</p>
             : <p className="whitespace-pre-wrap text-[12px] leading-relaxed text-slate-300">{text}</p>}
@@ -147,7 +149,7 @@ function HistoryDrawer({ asset, onClose }) {
               {rows.map((ev, i) => (
                 <li key={i} className="relative">
                   <span className="absolute -left-[21px] top-1 h-2.5 w-2.5 rounded-full bg-sky-500" />
-                  <p className="text-[12px] font-semibold text-slate-200">{ev.changeType}</p>
+                  <p className="text-[12px] font-semibold text-slate-200">{ev.headline || ev.changeType}</p>
                   <p className="text-[10px] text-slate-500">{new Date(ev.changedAt).toLocaleString()}</p>
                   <ul className="mt-0.5 space-y-0.5">{(ev.changeReason || []).map((r, j) => <li key={j} className="text-[11px] text-slate-400">• {r}</li>)}</ul>
                   <p className="mt-0.5 text-[9px] text-slate-600" title={`prev ${ev.previousSnapshotId} → new ${ev.newSnapshotId}`}>snapshot {String(ev.previousSnapshotId || '').slice(0, 8)} → {String(ev.newSnapshotId || '').slice(0, 8)}</p>
@@ -280,9 +282,9 @@ export default function AlbertPlan() {
                   <React.Fragment key={d.symbol}>
                     <tr className="border-t border-slate-800/60 hover:bg-slate-900/40">
                       <td className="py-1.5 pl-3 pr-2 font-semibold text-slate-200">{d.symbol}</td>
-                      <td className="pr-2"><div className="flex flex-wrap items-center gap-1"><ActionPill a={d.action} />{d.action === 'SELL' && <SellActionPill p={d.sellPlan} />}<EligibilityChip d={d} /></div></td>
-                      <td className="pr-2 text-slate-300">{d.opportunityScore}</td>
-                      <td className="pr-2 text-slate-400">{d.confidence}%</td>
+                      <td className="pr-2"><div className="flex flex-col gap-0.5"><div className="flex flex-wrap items-center gap-1"><ActionPill a={d.action} big />{d.action === 'SELL' && <SellActionPill p={d.sellPlan} />}<EligibilityChip d={d} /></div>{d.action === 'SELL' && <span className="text-[9px] text-slate-500">{REASON_LABEL[d.reasonCode] || d.reasonCode}</span>}</div></td>
+                      <td className="pr-2 text-[11px] text-slate-400">{d.opportunityScore}</td>
+                      <td className="pr-2 text-[11px] text-slate-500">{d.confidence}%</td>
                       <td className="pr-2"><CallCell d={d} /></td>
                       <td className="pr-3 text-right"><button onClick={() => setExpanded(expanded === d.symbol ? null : d.symbol)} className="text-slate-500 hover:text-slate-200"><ChevronDown className={`h-4 w-4 transition-transform ${expanded === d.symbol ? 'rotate-180' : ''}`} /></button></td>
                     </tr>
