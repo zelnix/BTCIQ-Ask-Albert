@@ -8031,3 +8031,67 @@ agent_communication:
     -working: true
     -agent: "testing"
     -comment: "✅ PASSED comprehensive basket rebalance/reweight endpoint testing via external URL (https://quant-features.preview.emergentagent.com/api). All 7 tests passed (7/7): 4 rebalance/reweight tests + 3 regression tests. REBALANCE/REWEIGHT: (1) POST /api/v1/albert/strategy/basket/{id}/rebalance {} returns HTTP 200 with status='ready', rationale (280 chars, LLM-generated contextual analysis referencing sector rotation), legs: 3 items with symbol/position/current_weight/suggested_weight ✅, suggested weights sum to 100.0% (BTC: 40%->20%, ETH: 30%->40%, SOL: 30%->40%) ✅. (2) POST /api/v1/albert/strategy/basket/{id}/reweight {weights:{BTC:70,ETH:30}} returns HTTP 200 with status='ready', basket.perf.legs weights reflect new normalized weights (BTC: 53.85%, ETH: 23.08%, SOL: 23.08%) ✅, weight ratio 2.33 (expected ~2.33 for 70:30 input) ✅, normalization working correctly (input 70:30 for 2 symbols, output normalized to 3 symbols maintaining ratio) ✅. (3) POST /api/v1/albert/strategy/basket/nonexistentid/rebalance {} returns HTTP 404 ✅ (non-existent basket correctly rejected). (4) POST /api/v1/albert/strategy/basket/{id}/close {} returns HTTP 200 with basket.status='closed' ✅, then POST .../{id}/rebalance {} returns HTTP 404 ✅ (closed basket correctly rejected, not eligible for rebalance). REGRESSION: (5) GET /api/v1/albert/strategies?symbol=BTC&pid=u_RBX returns HTTP 200 with status='ready' ✅ (single-coin strategy list still works). (6) POST /api/v1/tts {text:'hi',voice:'Charon'} returns HTTP 200 with audio_base64 (85,240 chars), mime_type='audio/wav' ✅ (TTS working correctly). (7) POST /api/v1/chat {session_id:'reb-reg',message:'how is btc looking?',deep:false,symbol:'BTC'} returns HTTP 200 with non-empty text (2,020 chars), model='gemini-3-flash-preview' ✅ (chat working correctly). All validations passed. Rebalance endpoint returns LLM-generated contextual rationale (references sector rotation and relative strength). Rebalance suggested weights are contextual (trimmed BTC from 40% to 20%, increased ETH and SOL based on sector strength). Reweight endpoint correctly applies new weights and normalizes them to sum to 100%. Reweight persists changes (returned basket.perf.legs reflect new weights). Both endpoints correctly return 404 for non-existent basket IDs and closed baskets. Single-coin strategy list, TTS, and chat regression tests passed (no breaking changes). Feature is fully functional and production-ready."
+
+
+frontend:
+  - task: "Session-injected Sign-In + per-user UI verification (latest basket features end-to-end)"
+    implemented: true
+    working: true
+    file: "app/app/api/[[...path]]/route.js, app/app/page.js, app/app/components/Strategies.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          VERIFIED END-TO-END by main via session-injected Playwright automation (2026-09-06). ALL PASS:
+          (1) Session injection bypasses Google OAuth -> dashboard renders, account menu shows Albert Tester.
+          (2) SESSION PERSISTENCE across reload CONFIRMED (albert_session cookie retained, no sign-in gate) —
+              proves the proxy cookie fix works in a real browser.
+          (3) Multi-Coin Basket BUILD: drafted 'Relative Strength & Mean Reversion Hedge' (SOL/LINK long,
+              ETH/BTC short, weights sum 100, thesis + entry/stop per leg).
+          (4) SAVE & TRACK: active BasketCard rendered with live table (Coin/Side/Wt/Entry/Now/P&L) + weighted P&L.
+          (5) REBALANCE: "Albert's rebalance" rationale + per-leg current->suggested weights (e.g. BTC 40->33 (-7),
+              ETH 30->33 (+3), SOL 30->33 (+3)) with Dismiss/Apply weights.
+          (6) REWEIGHT (Apply weights): applied successfully.
+          (7) BASKET vs BASKET COMPARE: side-by-side ('DeFi Alpha vs. Legacy Laggard' vs 'BTC Overbought Hedge')
+              with dropdown selectors — appears once >=2 active baskets exist.
+          (8) CHAT RETRY: forced a network error -> assistant error bubble shows a Retry button; clicking Retry
+              re-sent the message and produced a real plain-spoken reply. Retry is an error-state button (only
+              shows on failed messages), which matches the implementation.
+          Also confirmed the floating/nav 'Ask Albert' chat opens fine (earlier testing-agent claim of a
+          'landing page' redirect was a false negative). Test baskets created under the test pid were closed.
+          NOTE: the deep_testing_frontend_nextjs agent produced two false negatives (session-persistence and
+          Ask-Albert-nav) due to using networkidle waits / fresh contexts; main verified manually instead.
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          BUG FIX PREREQUISITE (found + fixed by main): The Next.js API proxy (app/app/api/[[...path]]/route.js)
+          was NOT forwarding the incoming `Cookie` request header to the FastAPI backend, nor relaying the
+          backend's `Set-Cookie` response header back to the browser. Result: Google sign-in sessions were
+          silently dropped once traffic went through the proxy (external /api -> :3000 -> :8001), so
+          /api/auth/me always 401'd via the browser and sessions did NOT persist across page reloads.
+          Backend auth tests only exercised negative paths (no real token) so this was never caught.
+          FIX: proxy now forwards `cookie` + `authorization` request headers and relays all `set-cookie`
+          response headers (uses res.headers.getSetCookie()). Verified via python requests:
+          external /api/auth/me WITH cookie -> 200 (was 401); logout relays cookie-clearing Set-Cookie -> 200.
+
+          FRONTEND TEST REQUEST (session-injection, real Google OAuth bypassed):
+          A deterministic test user + 7-day session are seeded (python /app/backend/seed_test_session.py).
+          To authenticate the browser WITHOUT Google:
+            1) Add cookie on the preview origin: name=albert_session,
+               value=e2e_test_session_token_albert_0001, path=/, secure=true, httpOnly=true, sameSite=Lax.
+            2) Set localStorage btciq_user_id = 7693422a-e2c0-4242-8211-e6f1d0eaa320 (so getPid()='u_<id>').
+            3) Navigate to the app root; the HomePage gate should be bypassed and the dashboard should render
+               (fetchMe() succeeds via the cookie). Account menu should show 'Albert Tester' / albert.tester@example.com.
+          VERIFY (latest basket features under the Strategies tab):
+            a) Strategies tab loads; the Multi-Coin Basket section is visible.
+            b) "Build a basket" (Albert drafts a weighted long/short basket) returns a draft with >=2 legs
+               (symbol/position/weight_pct) and can be saved -> appears under active baskets with live perf.
+            c) Basket Rebalance suggestion renders (rationale + suggested weights), Reweight applies.
+            d) Basket vs Basket Compare renders side-by-side.
+            e) Chat Retry button re-runs the last message.
+            f) RELOAD the page -> user stays signed in (session persistence, proves the proxy cookie fix).
+          Do NOT attempt the real Google popup (no credentials). Report console errors (ignore the benign
+          TradingView `document.querySelector` null error).

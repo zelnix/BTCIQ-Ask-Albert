@@ -66,6 +66,14 @@ async function proxy(request, context) {
   else if (realIp) init.headers['x-forwarded-for'] = realIp;
   if (realIp) init.headers['x-real-ip'] = realIp;
 
+  // Forward auth so cookie-based sessions (Google sign-in) survive the proxy hop.
+  // Without this the backend never sees the `albert_session` cookie (or a Bearer
+  // token) and every authenticated request 401s once it goes through Next.js.
+  const cookie = request.headers.get('cookie');
+  const authz = request.headers.get('authorization');
+  if (cookie) init.headers['cookie'] = cookie;
+  if (authz) init.headers['authorization'] = authz;
+
   if (!['GET', 'HEAD'].includes(request.method)) {
     init.body = await request.text();
   }
@@ -73,10 +81,17 @@ async function proxy(request, context) {
   try {
     const res = await fetch(target, init);
     const text = await res.text();
-    return new NextResponse(text, {
-      status: res.status,
-      headers: { 'content-type': res.headers.get('content-type') || 'application/json' },
-    });
+    const headers = { 'content-type': res.headers.get('content-type') || 'application/json' };
+    const out = new NextResponse(text, { status: res.status, headers });
+    // Relay any Set-Cookie header(s) from the backend so the browser stores the
+    // httpOnly session cookie issued by /api/auth/google (and clears it on logout).
+    try {
+      const setCookies = typeof res.headers.getSetCookie === 'function'
+        ? res.headers.getSetCookie()
+        : (res.headers.get('set-cookie') ? [res.headers.get('set-cookie')] : []);
+      for (const sc of setCookies) out.headers.append('set-cookie', sc);
+    } catch (e) { /* noop */ }
+    return out;
   } catch (e) {
     const { status, code, message } = classify(e);
     console.error('[api-proxy] ' + request.method + ' ' + target + ' -> ' + code + ': ' + message);
