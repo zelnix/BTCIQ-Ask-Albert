@@ -4348,11 +4348,12 @@ def _score_band(s):
 EMAIL_ALERTS_ENABLED = False
 
 
-def push_alert(category, severity, title, message, sig, symbol='BTC', owner=None):
+def push_alert(category, severity, title, message, sig, symbol='BTC', owner=None, extra=None):
     """Create an in-app notification (surfaced by the bell + browser push) for
     events that used to be emailed (drift breaker, model decay, live cascade).
     Idempotent per (day, category, sig). `owner` (optional) tags the alert with the
-    user pid it belongs to (basket nudges/digests) for future per-user scoping."""
+    user pid it belongs to (basket nudges/digests) for future per-user scoping.
+    `extra` (optional) merges extra fields (e.g. an actionable 'action'/'basket_id')."""
     try:
         day = datetime.datetime.utcnow().strftime('%Y-%m-%d-%H')
         key = f"notif_{day}_{category}_{sig}"
@@ -4363,6 +4364,10 @@ def push_alert(category, severity, title, message, sig, symbol='BTC', owner=None
         }
         if owner:
             doc['owner'] = str(owner)[:80]
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                if k not in doc:
+                    doc[k] = v
         res = smart_alerts_col.update_one({'_id': key}, {'$setOnInsert': doc}, upsert=True)
         return res.upserted_id is not None
     except Exception:  # noqa
@@ -7403,6 +7408,30 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
     # inline and return a save-able card (the chat UI renders a "Save & track" button).
     # Status questions ("how are my baskets doing?") fall through to normal chat.
     try:
+        if _is_basket_close_request(message):
+            bk, all_bks = _find_basket_for_message(pid, message)
+            if not all_bks:
+                return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
+                        'text': "You don't have any active baskets to close right now."}
+            if not bk:
+                names = ', '.join(f"'{b.get('title')}'" for b in all_bks)
+                return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
+                        'text': f"Which basket should I close? You have: {names}."}
+            try:
+                perf = _basket_perf(bk) or {}
+            except Exception:  # noqa
+                perf = {}
+            pnl = perf.get('total_pnl_pct')
+            txt = (f"Want me to close **{bk.get('title')}**? It's currently at "
+                   f"{pnl if pnl is not None else 'n/a'}% P&L. Tap **Close basket** below to confirm — "
+                   f"this stops tracking it and moves it to your past baskets.")
+            return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
+                    'text': txt,
+                    'basket_close': {'basket_id': bk['id'], 'title': bk.get('title'),
+                                     'total_pnl_pct': pnl}}
+    except Exception:  # noqa
+        traceback.print_exc()
+    try:
         if _is_basket_rebalance_request(message):
             bk, all_bks = _find_basket_for_message(pid, message)
             if not all_bks:
@@ -9346,6 +9375,15 @@ def _find_basket_for_message(pid, msg):
     return (best if best_score > 0 else None), baskets
 
 
+def _is_basket_close_request(msg):
+    """Detect 'close/exit/delete my <name> basket' in chat."""
+    m = (msg or '').lower()
+    if 'basket' not in m:
+        return False
+    return any(v in m for v in ('close', 'exit', 'delete', 'remove', 'stop tracking',
+                                'get rid of', 'shut down', 'wind down', 'unwind'))
+
+
 
 def _basket_perf(strat):
     legs_out, weighted_pct = [], 0.0
@@ -9545,6 +9583,21 @@ def albert_basket_reweight(bid: str, payload: dict = Body(...)):
     return {'status': 'ready', 'basket': _basket_public(strat)}
 
 
+@app.post('/api/v1/albert/strategy/basket/{bid}/rebalance-apply')
+def albert_basket_rebalance_apply(bid: str, payload: dict = Body(default={})):
+    """One-tap: compute Albert's rebalance suggestion for this basket AND apply it in a
+    single call (used by the weekly rebalance-nudge alert's 'Apply Albert's rebalance')."""
+    sug = albert_basket_rebalance(bid)
+    if not (isinstance(sug, dict) and sug.get('status') == 'ready'):
+        return sug  # propagate the 404/error JSONResponse
+    weights = {l['symbol']: l['suggested_weight'] for l in (sug.get('legs') or [])}
+    applied = albert_basket_reweight(bid, {'weights': weights})
+    if isinstance(applied, dict) and applied.get('status') == 'ready':
+        applied['rationale'] = sug.get('rationale')
+        applied['applied_weights'] = weights
+    return applied
+
+
 def _iso_after(iso, cutoff):
     """True if an ISO timestamp is on/after `cutoff` (a naive UTC datetime)."""
     try:
@@ -9680,7 +9733,9 @@ def _basket_rebalance_nudge_job():
                        (f"Sector rotation shifted this week (now leading: {hot_now}; rotating in: {came_in}; "
                         f"cooling: {cooled}). Open Trading Strategies → Rebalance to realign "
                         f"'{bk.get('title', 'your basket')}'."),
-                       f"basket-rebalnudge-{bk['id']}-{today}", sym0, owner=bk.get('owner'))
+                       f"basket-rebalnudge-{bk['id']}-{today}", sym0, owner=bk.get('owner'),
+                       extra={'action': 'basket_rebalance', 'basket_id': bk['id'],
+                              'basket_title': bk.get('title')})
             strategies_col.update_one({'id': bk['id']}, {'$set': {'last_rebalance_nudge': now_iso}})
         except Exception:  # noqa
             traceback.print_exc()

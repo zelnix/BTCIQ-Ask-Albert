@@ -30,6 +30,7 @@ import { hydrateVoicePrefFromServer } from './lib/albertVoice';
 import AlbertReplyMeta from './components/AlbertReplyMeta';
 import BasketChatCard from './components/BasketChatCard';
 import BasketRebalanceCard from './components/BasketRebalanceCard';
+import BasketCloseCard from './components/BasketCloseCard';
 import PortfolioPanel from './components/PortfolioPanel';
 import AlbertTrackRecord from './components/AlbertTrackRecord';
 import AlertManager from './components/AlertManager';
@@ -568,6 +569,34 @@ function playBriefChime() {
 const NOTIFIED_KEY = 'btciq_notified_ids';
 const SOUND_KEY = 'btciq_notif_sound';
 
+function NudgeApplyButton({ alert, onApplied }) {
+  const [state, setState] = React.useState('idle'); // idle | applying | done | error
+  const apply = async (e) => {
+    e.stopPropagation();
+    if (state === 'applying' || state === 'done') return;
+    setState('applying');
+    try {
+      const r = await fetch(`${API_BASE}/v1/albert/strategy/basket/${alert.basket_id}/rebalance-apply`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      });
+      const j = await r.json();
+      if (j && j.status === 'ready') { setState('done'); if (onApplied) onApplied(); }
+      else setState('error');
+    } catch (err) { setState('error'); }
+  };
+  return (
+    <button onClick={apply} disabled={state === 'applying' || state === 'done'}
+      className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold transition-colors disabled:opacity-70 ${
+        state === 'done' ? 'border border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'bg-violet-600 text-white hover:bg-violet-500'
+      }`}>
+      {state === 'done' ? (<><Check className="h-3 w-3" />Rebalance applied</>)
+        : state === 'applying' ? (<><Loader2 className="h-3 w-3 animate-spin" />Applying…</>)
+        : state === 'error' ? (<><Scale className="h-3 w-3" />Retry apply</>)
+        : (<><Scale className="h-3 w-3" />Apply Albert's rebalance</>)}
+    </button>
+  );
+}
+
 function NotificationBell({ alertsData, onAck, onViewAll, onOpenBrief }) {
   const [open, setOpen] = React.useState(false);
   const [perm, setPerm] = React.useState(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
@@ -670,21 +699,35 @@ function NotificationBell({ alertsData, onAck, onViewAll, onOpenBrief }) {
                 <p className="px-3 py-6 text-center text-xs text-slate-500">No notifications yet.</p>
               ) : alerts.slice(0, 10).map((a) => {
                 const isBrief = a.category === 'daily_brief';
+                const isRebalNudge = a.action === 'basket_rebalance' && a.basket_id;
                 const onClickItem = () => {
                   setOpen(false);
                   if (a.id) onAck([a.id]);
                   if (isBrief && onOpenBrief) onOpenBrief(a.symbol || 'BTC');
                   else onViewAll();
                 };
-                return (
-                  <button key={a.id} onClick={onClickItem}
-                    className={`flex w-full gap-2 border-b border-slate-800/60 px-3 py-2 text-left transition-colors hover:bg-slate-800/50 ${a.seen ? 'opacity-60' : ''}`}>
+                const inner = (
+                  <>
                     <span className="mt-1 h-2 w-2 shrink-0 rounded-full" style={{ background: sevColor(a.severity) }} />
                     <div className="min-w-0 flex-1">
                       <p className="flex items-center justify-between gap-2 text-[12px] font-semibold text-slate-200"><span className="truncate">{a.title}</span><span className="shrink-0 text-[10px] font-normal text-slate-500">{rel(a.ts)}</span></p>
                       <p className="line-clamp-2 text-[11px] text-slate-400">{a.message}</p>
                       {isBrief && <span className="mt-0.5 inline-block text-[10px] font-semibold text-sky-400">Open {a.symbol || 'BTC'} brief →</span>}
                     </div>
+                  </>
+                );
+                if (isRebalNudge) {
+                  return (
+                    <div key={a.id} className={`border-b border-slate-800/60 ${a.seen ? 'opacity-60' : ''}`}>
+                      <button onClick={onClickItem} className="flex w-full gap-2 px-3 pt-2 text-left transition-colors hover:bg-slate-800/50">{inner}</button>
+                      <div className="px-3 pb-2 pl-7"><NudgeApplyButton alert={a} onApplied={() => { if (a.id) onAck([a.id]); }} /></div>
+                    </div>
+                  );
+                }
+                return (
+                  <button key={a.id} onClick={onClickItem}
+                    className={`flex w-full gap-2 border-b border-slate-800/60 px-3 py-2 text-left transition-colors hover:bg-slate-800/50 ${a.seen ? 'opacity-60' : ''}`}>
+                    {inner}
                   </button>
                 );
               })}
@@ -2263,7 +2306,7 @@ function AskQuantSection({ d }) {
         return;
       }
       setRateUntil(0);
-      setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.', sources: j.sources || [], basket_draft: j.basket_draft || null, basket_rebalance: j.basket_rebalance || null }]);
+      setMessages((m) => [...m, { role: 'assistant', text: j.text || 'Sorry, I could not answer that just now.', sources: j.sources || [], basket_draft: j.basket_draft || null, basket_rebalance: j.basket_rebalance || null, basket_close: j.basket_close || null }]);
     } catch (e) {
       const aborted = e && e.name === 'AbortError';
       setMessages((m) => [...m, { role: 'assistant', error: true, retry: msg, text: aborted ? 'That took longer than expected — please try again (or turn off Deep dive for a faster answer).' : 'Network error — please try again.' }]);
@@ -2307,7 +2350,7 @@ function AskQuantSection({ d }) {
             <div key={i} className={`flex items-end gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" />}
               <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>
-                {m.role === 'assistant' ? <><AlbertText text={m.text} />{m.error && m.retry ? <button onClick={() => send(m.retry)} disabled={loading} className="mt-2 flex items-center gap-1.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-50"><RefreshCw className="h-3 w-3" />Retry</button> : m.basket_draft ? <BasketChatCard draft={m.basket_draft} pid={pid} /> : m.basket_rebalance ? <BasketRebalanceCard rebalance={m.basket_rebalance} /> : <AlbertReplyMeta text={m.text} sources={m.sources} symbol={symbol} pid={pid} />}</> : m.text}
+                {m.role === 'assistant' ? <><AlbertText text={m.text} />{m.error && m.retry ? <button onClick={() => send(m.retry)} disabled={loading} className="mt-2 flex items-center gap-1.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-50"><RefreshCw className="h-3 w-3" />Retry</button> : m.basket_draft ? <BasketChatCard draft={m.basket_draft} pid={pid} /> : m.basket_rebalance ? <BasketRebalanceCard rebalance={m.basket_rebalance} /> : m.basket_close ? <BasketCloseCard close={m.basket_close} /> : <AlbertReplyMeta text={m.text} sources={m.sources} symbol={symbol} pid={pid} />}</> : m.text}
               </div>
             </div>
           ))}

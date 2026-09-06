@@ -114,6 +114,44 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Chat Basket Close — 'close my <name> basket' in chat returns an inline confirm card that closes the basket"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/components/BasketCloseCard.js, app/page.js, app/components/FloatingAlbert.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          POST /api/v1/chat detects a close request (_is_basket_close_request: 'basket' + close/exit/delete/remove/
+          stop tracking/unwind). Resolves the basket via _find_basket_for_message (single/name-match/ambiguous) and
+          returns {text, basket_close:{basket_id, title, total_pnl_pct}} WITHOUT closing. The chat UI (BasketCloseCard)
+          shows a confirm card with a red 'Close basket' button that POSTs to the existing close endpoint.
+          VERIFIED by main end-to-end in the UI: 'close my basket' -> confirm card ('...-0.01% P&L') -> tap Close ->
+          'Closed — moved to past baskets'; basket moved to history. Checked before rebalance/build so intents don't
+          collide. Edge cases (no baskets / ambiguous -> asks which) implemented like Chat Rebalance.
+  - task: "One-Tap Nudge Apply — 'Apply Albert's rebalance' button inside the weekly rebalance-nudge alert"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          push_alert() now accepts an optional `extra` dict; _basket_rebalance_nudge_job tags its alert with
+          action='basket_rebalance', basket_id, basket_title (these flow through get_smart_alerts full-doc feed).
+          NotificationBell renders a purple 'Apply Albert's rebalance' button on such alerts. New endpoint
+          POST /api/v1/albert/strategy/basket/{bid}/rebalance-apply computes Albert's suggestion (albert_basket_rebalance)
+          AND applies it (albert_basket_reweight) in one call, returning {status, rationale, applied_weights, basket}.
+          VERIFIED by main end-to-end in the UI: seeded a rebalance-nudge alert, opened the bell, tapped the button ->
+          it changed to 'Rebalance applied' and the basket weights went 50/25/25 -> 33.33/33.33/33.33.
+          Direct endpoint test also confirmed apply persists.
+
   - task: "Chat Rebalance — 'rebalance my <name> basket' in chat returns an inline apply-able reweight suggestion"
     implemented: true
     working: true
