@@ -308,15 +308,75 @@ function GuardrailsCard() {
   );
 }
 
+function BasketCompareCol({ b }) {
+  const perf = (b && b.perf) || {};
+  const up = (perf.total_pnl_pct || 0) >= 0;
+  return (
+    <div className="flex-1 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+      <h4 className="truncate text-sm font-bold text-white">{b.title}</h4>
+      <div className={`my-1 text-xl font-black ${up ? 'text-emerald-400' : 'text-red-400'}`}>{up ? '+' : ''}{(perf.total_pnl_pct || 0).toFixed(2)}%</div>
+      <div className="text-[10px] text-slate-500">{(perf.legs || []).length} legs · {b.horizon_days}d</div>
+      <div className="mt-2 space-y-1">
+        {(perf.legs || []).map((l) => (
+          <div key={l.symbol} className="flex items-center justify-between text-[11px]">
+            <span className="text-slate-300">{l.symbol} <span className={l.position === 'long' ? 'text-emerald-500' : 'text-red-500'}>{l.position === 'long' ? 'L' : 'S'}</span> <span className="text-slate-600">{Math.round(l.weight_pct)}%</span></span>
+            <span className={(l.pnl_pct || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}>{(l.pnl_pct || 0) >= 0 ? '+' : ''}{(l.pnl_pct || 0).toFixed(1)}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BasketCompare({ baskets }) {
+  const [aId, setAId] = React.useState(baskets[0]?.id);
+  const [bId, setBId] = React.useState(baskets[1]?.id);
+  const a = baskets.find((x) => x.id === aId) || baskets[0];
+  const b = baskets.find((x) => x.id === bId) || baskets[1];
+  const sel = 'rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-xs text-slate-200 focus:border-violet-500/50 focus:outline-none';
+  return (
+    <div className="mt-4 rounded-xl border border-slate-800 bg-slate-900/40 p-3">
+      <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-slate-300"><Scale className="h-3.5 w-3.5 text-violet-300" />Compare baskets</div>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <select value={aId} onChange={(e) => setAId(e.target.value)} className={sel}>{baskets.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</select>
+        <span className="text-slate-600">vs</span>
+        <select value={bId} onChange={(e) => setBId(e.target.value)} className={sel}>{baskets.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</select>
+      </div>
+      <div className="flex gap-3">{a && <BasketCompareCol b={a} />}{b && a?.id !== b?.id && <BasketCompareCol b={b} />}</div>
+    </div>
+  );
+}
+
 // ---- Multi-coin BASKET strategies (Albert-drafted, weighted, long/short) ----
 function BasketLegPnl({ pct }) {
   const up = (pct || 0) >= 0;
   return <span className={up ? 'text-emerald-400' : 'text-red-400'}>{up ? '+' : ''}{(pct || 0).toFixed(2)}%</span>;
 }
 
-function BasketCard({ b, onClose, closing }) {
+function BasketCard({ b, onClose, closing, onReload }) {
   const perf = b.perf || {};
   const up = (perf.total_pnl_pct || 0) >= 0;
+  const [sug, setSug] = React.useState(null);
+  const [rebBusy, setRebBusy] = React.useState(false);
+  const [applying, setApplying] = React.useState(false);
+  const rebalance = async () => {
+    setRebBusy(true); setSug(null);
+    try {
+      const r = await fetch(`${API_BASE}/v1/albert/strategy/basket/${b.id}/rebalance`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      const d = await r.json();
+      if (d.status === 'ready') setSug(d);
+    } catch (e) { /* noop */ } finally { setRebBusy(false); }
+  };
+  const applyReweight = async () => {
+    if (!sug) return;
+    setApplying(true);
+    try {
+      const weights = {};
+      (sug.legs || []).forEach((l) => { weights[l.symbol] = l.suggested_weight; });
+      await fetch(`${API_BASE}/v1/albert/strategy/basket/${b.id}/reweight`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weights }) });
+      setSug(null); onReload && onReload();
+    } catch (e) { /* noop */ } finally { setApplying(false); }
+  };
   return (
     <Card className="border-0 bg-slate-900/60 p-4 ring-1 ring-slate-800">
       <div className="mb-2 flex items-start justify-between gap-2">
@@ -348,8 +408,32 @@ function BasketCard({ b, onClose, closing }) {
           </tbody>
         </table>
       </div>
+      {sug && (
+        <div className="mt-3 rounded-lg border border-violet-500/30 bg-violet-500/[0.06] p-3">
+          <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-violet-300"><Scale className="h-3.5 w-3.5" />Albert's rebalance</div>
+          <p className="mb-2 text-xs text-slate-300">{sug.rationale}</p>
+          <div className="space-y-1">
+            {(sug.legs || []).map((l) => {
+              const diff = (l.suggested_weight || 0) - (l.current_weight || 0);
+              return (
+                <div key={l.symbol} className="flex items-center justify-between text-[11px]">
+                  <span className="font-semibold text-slate-200">{l.symbol}</span>
+                  <span className="text-slate-400">{Math.round(l.current_weight)}% <ArrowRight className="inline h-3 w-3 text-slate-600" /> <span className="font-semibold text-slate-100">{Math.round(l.suggested_weight)}%</span> <span className={diff >= 0 ? 'text-emerald-400' : 'text-red-400'}>({diff >= 0 ? '+' : ''}{Math.round(diff)})</span></span>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-2 flex justify-end gap-2">
+            <Button onClick={() => setSug(null)} variant="outline" className="h-7 border-slate-700 bg-transparent text-[11px] text-slate-400 hover:bg-slate-800">Dismiss</Button>
+            <Button onClick={applyReweight} disabled={applying} className="h-7 bg-violet-600 text-[11px] text-white hover:bg-violet-500">{applying ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Check className="mr-1 h-3 w-3" />}Apply weights</Button>
+          </div>
+        </div>
+      )}
       {b.status === 'active' && (
-        <div className="mt-3 flex justify-end">
+        <div className="mt-3 flex justify-end gap-2">
+          <Button onClick={rebalance} disabled={rebBusy} variant="outline" className="h-8 border-violet-500/40 bg-transparent text-xs text-violet-300 hover:bg-violet-500/10">
+            {rebBusy ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Scale className="mr-1 h-3 w-3" />}Rebalance
+          </Button>
           <Button onClick={() => onClose(b.id)} disabled={closing} variant="outline" className="h-8 border-slate-700 bg-transparent text-xs text-slate-300 hover:bg-slate-800">
             {closing ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <X className="mr-1 h-3 w-3" />}Close basket
           </Button>
@@ -440,7 +524,8 @@ function BasketSection() {
           </div>
         </div>
       )}
-      {active.length > 0 && <div className="mt-4 space-y-3">{active.map((b) => <BasketCard key={b.id} b={b} onClose={closeBasket} closing={closing === b.id} />)}</div>}
+      {active.length >= 2 && <BasketCompare baskets={active} />}
+      {active.length > 0 && <div className="mt-4 space-y-3">{active.map((b) => <BasketCard key={b.id} b={b} onClose={closeBasket} closing={closing === b.id} onReload={load} />)}</div>}
       {history.length > 0 && (
         <details className="mt-4"><summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">Past baskets ({history.length})</summary>
           <div className="mt-2 space-y-3">{history.map((b) => <BasketCard key={b.id} b={b} onClose={closeBasket} closing={false} />)}</div>

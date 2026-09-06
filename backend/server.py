@@ -3464,10 +3464,15 @@ CHAT_SYSTEM = (
     "- ALBERT'S ENGINES: when the section 'ALBERT'S ENGINES' is present below, it holds YOUR Alert-Engine edge "
     "board (highest backtest-edge setups), live sector rotation, recently fired signals, and the user's ACTIVE "
     "tracked strategies. Use it directly when asked things like 'what's my best edge setup right now?', 'which "
-    "sectors are rotating?', or 'how are my strategies doing?' — name the specific coin, detector, edge score, "
-    "win-rate and levels. If that section is absent or empty, say the engine hasn't produced a read yet rather "
-    "than inventing setups.\n\n"
+    "sectors are rotating?', or 'how are my strategies doing?' — but TRANSLATE it into plain English: name the "
+    "coin and what it means in everyday words; mention a number (edge, win-rate, level) only when it genuinely "
+    "helps, not as a data dump. If that section is absent or empty, say the engine hasn't produced a read yet "
+    "rather than inventing setups.\n\n"
     "### STYLE\n"
+    "- LAYMAN BY DEFAULT: explain like you're talking to a smart friend who is NOT a trader. Use everyday language, "
+    "translate any jargon in 3-4 words, and prefer plain phrasing ('it's overheated and due a breather') over raw "
+    "indicators ('RSI 72'). Go into technical detail (specific indicators, structure, exact levels) ONLY when the "
+    "user explicitly asks for it (e.g. says 'technical', 'deep', 'the numbers', or turns on Deep dive).\n"
     "- Speak plainly and with conviction. Lead with the answer, then the reasoning. Use short **bold** labels and "
     "simple bullet lists for readability. Talk in odds, levels and risk-reward, not vague hedging. Keep it tight — "
     "usually 120-280 words, up to ~350 when the user wants depth. Do NOT open with a greeting. Do NOT add legal "
@@ -9028,6 +9033,46 @@ def _strategy_eval_job():
                 push_alert('strategy', sev, title, message, f"{strat['id']}-{len(strat.get('events', []))}", strat.get('symbol', 'BTC'))
         except Exception:  # noqa
             traceback.print_exc()
+    # --- Multi-coin baskets: nudge when a leg hits a target or its stop ---
+    try:
+        baskets = list(strategies_col.find({'status': 'active', 'kind': 'basket'}, {'_id': 0}))
+    except Exception:  # noqa
+        baskets = []
+    now_iso = datetime.datetime.utcnow().isoformat()
+    for bk in baskets:
+        changed = False
+        for leg in bk.get('legs', []):
+            sym = leg.get('symbol')
+            if not sym:
+                continue
+            if sym not in price_cache:
+                price_cache[sym] = _spot_price(sym)
+            cur = price_cache[sym]
+            if not cur:
+                continue
+            long = leg.get('position', 'long') == 'long'
+            side = 'long' if long else 'short'
+            for t in (leg.get('targets') or []):
+                if (not t.get('hit')) and ((long and cur >= t['price']) or ((not long) and cur <= t['price'])):
+                    t['hit'] = True
+                    t['hit_at'] = now_iso
+                    changed = True
+                    push_alert('strategy', 'info', f"{bk.get('title', 'Basket')}: {sym} hit {t.get('label', 'target')}",
+                               f"Your {side} {sym} leg reached {t.get('label', 'its target')} at ${t['price']:,.2f} — consider trimming this leg.",
+                               f"basket-{bk['id']}-{sym}-{t.get('label')}", sym)
+            stop = leg.get('stop')
+            if stop and (not stop.get('hit')) and ((long and cur <= stop['price']) or ((not long) and cur >= stop['price'])):
+                stop['hit'] = True
+                stop['hit_at'] = now_iso
+                changed = True
+                push_alert('strategy', 'warning', f"{bk.get('title', 'Basket')}: {sym} stop hit",
+                           f"Your {side} {sym} leg hit its stop at ${stop['price']:,.2f} — time to cut this leg to protect the basket.",
+                           f"basket-{bk['id']}-{sym}-stop", sym)
+        if changed:
+            try:
+                strategies_col.update_one({'id': bk['id']}, {'$set': {'legs': bk['legs']}})
+            except Exception:  # noqa
+                traceback.print_exc()
 
 
 @app.post('/api/v1/albert/strategy/build')
@@ -9267,6 +9312,94 @@ def albert_basket_close(bid: str, payload: dict = Body(default={})):
     strat['status'] = 'closed'
     strat['closed_at'] = now.isoformat()
     return {'status': 'ready', 'basket': _basket_public(strat)}
+
+
+@app.post('/api/v1/albert/strategy/basket/{bid}/rebalance')
+def albert_basket_rebalance(bid: str, payload: dict = Body(default={})):
+    """Albert reviews an active basket vs the live market and suggests new weights
+    (plain-English rationale). Does NOT apply — the user reviews then applies."""
+    strat = strategies_col.find_one({'id': bid, 'kind': 'basket', 'status': 'active'}, {'_id': 0})
+    if not strat:
+        return JSONResponse({'status': 'error', 'message': 'Active basket not found.'}, status_code=404)
+    legs = strat.get('legs') or []
+    syms = [l['symbol'] for l in legs]
+    perf = _basket_perf(strat)
+    leg_perf = {l['symbol']: l for l in perf.get('legs', [])}
+
+    def _equal():
+        eq = round(100.0 / max(1, len(legs)), 2)
+        return {'rationale': 'Reset to equal weight to reduce single-name concentration.',
+                'weights': {s: eq for s in syms}}
+
+    result = None
+    if LLM_READY_KEY and _HAS_LLM:
+        lines = [f"- {l['symbol']} {l['position']}: current weight {l['weight_pct']}%, P&L {leg_perf.get(l['symbol'], {}).get('pnl_pct', 0)}%" for l in legs]
+        try:
+            sectors = _sector_strength()
+        except Exception:  # noqa
+            sectors = {}
+        umsg = ("Rebalance this multi-coin basket. Keep the SAME coins; only propose new weight_pct that sum to 100. "
+                "Lean into relative strength / rotation and trim laggards or overweights.\n"
+                f"Basket: {strat.get('title')}\nLegs:\n" + "\n".join(lines)
+                + f"\nSector 7d strength vs BTC: {sectors}\n\n"
+                "Return STRICT JSON only: {\"rationale\":\"<=280 chars plain English\",\"weights\":{\"SYM\":<int>}}")
+
+        def _call():
+            async def _go():
+                chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'rebal-{uuid.uuid4().hex[:8]}',
+                                system_message="You are Albert, a crypto quant. Output only the requested JSON.")
+                        .with_model('gemini', _model_for('strategy')).with_params(temperature=0.4, max_tokens=1200))
+                return await chat.send_message(UserMessage(text=umsg))
+            return asyncio.run(_go())
+        try:
+            reply = _LLM_POOL.submit(_call).result(timeout=40)
+            text = (reply if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '')).strip()
+            s, e = text.find('{'), text.rfind('}')
+            raw = json.loads(text[s:e + 1])
+            w = {}
+            for sym in syms:
+                try:
+                    w[sym] = max(0.0, float((raw.get('weights') or {}).get(sym, 0)))
+                except Exception:  # noqa
+                    w[sym] = 0.0
+            tot = sum(w.values())
+            if tot > 0:
+                w = {k: round(v / tot * 100, 2) for k, v in w.items()}
+                result = {'rationale': (raw.get('rationale') or 'Suggested reweighting based on current momentum.')[:280], 'weights': w}
+        except Exception:  # noqa
+            traceback.print_exc()
+    if not result:
+        result = _equal()
+    suggestion = [{'symbol': l['symbol'], 'position': l['position'],
+                   'current_weight': l['weight_pct'],
+                   'suggested_weight': result['weights'].get(l['symbol'], l['weight_pct'])} for l in legs]
+    return {'status': 'ready', 'rationale': result['rationale'], 'legs': suggestion}
+
+
+@app.post('/api/v1/albert/strategy/basket/{bid}/reweight')
+def albert_basket_reweight(bid: str, payload: dict = Body(...)):
+    """Apply new weights to an active basket's legs (normalised to 100)."""
+    strat = strategies_col.find_one({'id': bid, 'kind': 'basket', 'status': 'active'}, {'_id': 0})
+    if not strat:
+        return JSONResponse({'status': 'error', 'message': 'Active basket not found.'}, status_code=404)
+    weights = payload.get('weights') or {}
+    legs = strat.get('legs') or []
+    for leg in legs:
+        v = weights.get(leg['symbol'])
+        if v is not None:
+            try:
+                leg['weight_pct'] = max(0.0, float(v))
+            except Exception:  # noqa
+                pass
+    tot = sum(l['weight_pct'] for l in legs)
+    if tot > 0 and abs(tot - 100) > 0.5:
+        for leg in legs:
+            leg['weight_pct'] = round(leg['weight_pct'] / tot * 100, 2)
+    strategies_col.update_one({'id': bid}, {'$set': {'legs': legs}})
+    strat['legs'] = legs
+    return {'status': 'ready', 'basket': _basket_public(strat)}
+
+
 
 
 
