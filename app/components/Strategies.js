@@ -408,6 +408,25 @@ function BasketCard({ b, onClose, closing, onReload }) {
           </tbody>
         </table>
       </div>
+      {(b.rotation && b.rotation.length > 0) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Rotation</span>
+          {b.rotation.map((r) => {
+            const has = r.strength !== null && r.strength !== undefined;
+            const cls = r.hot
+              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+              : has ? 'border-red-500/40 bg-red-500/10 text-red-300'
+                : 'border-slate-700 bg-slate-800/60 text-slate-400';
+            return (
+              <span key={r.sector} title={`${(r.symbols || []).join(', ')} · ${r.sector} 7d strength vs BTC`}
+                className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${cls}`}>
+                {r.hot ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                {r.sector}{has ? ` ${r.strength > 0 ? '+' : ''}${r.strength}%` : ''}
+              </span>
+            );
+          })}
+        </div>
+      )}
       {sug && (
         <div className="mt-3 rounded-lg border border-violet-500/30 bg-violet-500/[0.06] p-3">
           <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-violet-300"><Scale className="h-3.5 w-3.5" />Albert's rebalance</div>
@@ -440,6 +459,42 @@ function BasketCard({ b, onClose, closing, onReload }) {
         </div>
       )}
     </Card>
+  );
+}
+
+function BasketDigestPanel({ refreshKey }) {
+  const [dig, setDig] = React.useState(null);
+  React.useEffect(() => {
+    fetch(`${API_BASE}/v1/albert/basket-digest?pid=${encodeURIComponent(getPid())}&hours=24`, { cache: 'no-store' })
+      .then((r) => r.json()).then(setDig).catch(() => {});
+  }, [refreshKey]);
+  if (!dig || dig.status !== 'ready') return null;
+  const n = dig.total_hits || 0;
+  return (
+    <div className="mt-4 rounded-xl border border-sky-500/25 bg-sky-500/[0.05] p-3">
+      <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-sky-300">
+        <Bell className="h-3.5 w-3.5" />Basket digest · last 24h
+        {n > 0 && <span className="rounded-full bg-sky-500/15 px-1.5 py-0.5 text-[10px] text-sky-300">{n}</span>}
+      </div>
+      {n === 0 ? (
+        <p className="text-[11px] text-slate-400">No basket legs hit a target or stop in the last 24 hours.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {(dig.baskets || []).map((b) => (
+            <div key={b.id} className="text-[11px]">
+              <span className="font-semibold text-slate-200">{b.title}</span>
+              <div className="mt-0.5 flex flex-wrap gap-1">
+                {b.hits.map((h, i) => (
+                  <span key={i} className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 ${h.kind === 'target' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-red-500/40 bg-red-500/10 text-red-300'}`}>
+                    {h.symbol} {h.side} · {h.kind === 'target' ? (h.label || 'target') : 'stop'} {fmtUsd(h.price)}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -524,6 +579,7 @@ function BasketSection() {
           </div>
         </div>
       )}
+      <BasketDigestPanel refreshKey={active.length} />
       {active.length >= 2 && <BasketCompare baskets={active} />}
       {active.length > 0 && <div className="mt-4 space-y-3">{active.map((b) => <BasketCard key={b.id} b={b} onClose={closeBasket} closing={closing === b.id} onReload={load} />)}</div>}
       {history.length > 0 && (

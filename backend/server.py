@@ -7403,6 +7403,27 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
     # inline and return a save-able card (the chat UI renders a "Save & track" button).
     # Status questions ("how are my baskets doing?") fall through to normal chat.
     try:
+        if _is_basket_rebalance_request(message):
+            bk, all_bks = _find_basket_for_message(pid, message)
+            if not all_bks:
+                return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
+                        'text': ("You don't have any active baskets to rebalance yet. Ask me to build one — "
+                                 "e.g. 'build a basket long the majors, short a laggard'.")}
+            if not bk:
+                names = ', '.join(f"'{b.get('title')}'" for b in all_bks)
+                return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
+                        'text': f"Which basket should I rebalance? You have: {names}."}
+            sug = albert_basket_rebalance(bk['id'])
+            if isinstance(sug, dict) and sug.get('status') == 'ready':
+                txt = (f"Here's how I'd rebalance **{bk.get('title')}** — {sug.get('rationale')}\n\n"
+                       f"Review the new weights below and tap **Apply weights** to update it.")
+                return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
+                        'text': txt,
+                        'basket_rebalance': {'basket_id': bk['id'], 'title': bk.get('title'),
+                                             'rationale': sug.get('rationale'), 'legs': sug.get('legs')}}
+    except Exception:  # noqa
+        traceback.print_exc()
+    try:
         if _is_basket_build_request(message):
             draft = _build_basket_draft(message)
             if draft and draft.get('legs'):
@@ -9282,6 +9303,49 @@ def _is_basket_build_request(msg):
     return ('long' in m) or ('short' in m)
 
 
+def _is_basket_rebalance_request(msg):
+    """Detect 'rebalance my <name> basket' in chat."""
+    m = (msg or '').lower()
+    return 'rebalance' in m or ('reweight' in m and 'basket' in m)
+
+
+_BASKET_STOPWORDS = {'the', 'and', 'vs', 'with', 'for', 'basket', 'long', 'short',
+                     'my', 'a', 'an', 'of', 'to', 'into', 'hedge', 'strategy'}
+
+
+def _find_basket_for_message(pid, msg):
+    """Return (best_matching_active_basket, all_active_baskets) for a chat rebalance
+    request. If exactly one basket exists, use it; otherwise match on title tokens /
+    leg symbols/names mentioned in the message. Returns (None, list) if ambiguous."""
+    q = {'status': 'active', 'kind': 'basket'}
+    if pid:
+        q['owner'] = str(pid)[:80]
+    baskets = list(strategies_col.find(q, {'_id': 0}).sort('created_at', -1).limit(20))
+    if not baskets:
+        return None, []
+    if len(baskets) == 1:
+        return baskets[0], baskets
+    m = (msg or '').lower()
+    best, best_score = None, 0
+    for b in baskets:
+        score = 0
+        for tok in set(re.findall(r'[a-z]{3,}', (b.get('title') or '').lower())):
+            if tok in _BASKET_STOPWORDS:
+                continue
+            if tok in m:
+                score += 2
+        for leg in (b.get('legs') or []):
+            sym = (leg.get('symbol') or '').lower()
+            name = (leg.get('coin_name') or '').lower()
+            if sym and re.search(r'\b' + re.escape(sym) + r'\b', m):
+                score += 1
+            if name and len(name) >= 3 and name in m:
+                score += 1
+        if score > best_score:
+            best, best_score = b, score
+    return (best if best_score > 0 else None), baskets
+
+
 
 def _basket_perf(strat):
     legs_out, weighted_pct = [], 0.0
@@ -9317,11 +9381,25 @@ def _basket_perf(strat):
 
 
 def _basket_public(strat):
+    # Live sector-rotation strip for this basket's legs (shows why a rebalance nudge fires).
+    rotation = []
+    try:
+        strengths = _sector_strength() or {}
+        seen = {}
+        for leg in (strat.get('legs') or []):
+            sec = _coin_sector(leg.get('symbol'))
+            seen.setdefault(sec, []).append(leg.get('symbol'))
+        for sec, syms in seen.items():
+            st = strengths.get(sec)
+            rotation.append({'sector': sec, 'strength': st, 'hot': (st or 0) > 0, 'symbols': syms})
+        rotation.sort(key=lambda r: (r['strength'] if r['strength'] is not None else -999), reverse=True)
+    except Exception:  # noqa
+        rotation = []
     return {'id': strat.get('id'), 'kind': 'basket', 'title': strat.get('title'),
             'thesis': strat.get('thesis'), 'horizon_days': strat.get('horizon_days'),
             'status': strat.get('status'), 'created_at': strat.get('created_at'),
             'closed_at': strat.get('closed_at'), 'size_usd': strat.get('size_usd'),
-            'perf': _basket_perf(strat)}
+            'rotation': rotation, 'perf': _basket_perf(strat)}
 
 
 @app.post('/api/v1/albert/strategy/basket/build')

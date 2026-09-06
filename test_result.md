@@ -114,6 +114,84 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Chat Rebalance — 'rebalance my <name> basket' in chat returns an inline apply-able reweight suggestion"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/components/BasketRebalanceCard.js, app/page.js, app/components/FloatingAlbert.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          POST /api/v1/chat now detects a rebalance request (_is_basket_rebalance_request: 'rebalance' in message,
+          or 'reweight'+'basket'). It resolves which active basket via _find_basket_for_message(pid, msg) — single
+          basket -> that one; multiple -> best match on title tokens / leg symbols/names; ambiguous -> asks which.
+          It then calls the existing albert_basket_rebalance(bid) and returns {text, basket_rebalance:{basket_id,
+          title, rationale, legs:[{symbol,position,current_weight,suggested_weight}]}}. The chat UI (BasketRebalanceCard)
+          renders current->suggested weights + an "Apply weights" button that POSTs to the existing reweight endpoint.
+          VERIFIED by main end-to-end: chat 'rebalance my basket' -> card rendered (BTC 35->25(-10), SOL 25->25,
+          ETH 30->25(-5), ADA 10->25(+15)); tapping Apply weights persisted equal weights (all 25%).
+          TEST (edge cases): (A) With ZERO active baskets for the pid, POST /api/v1/chat {message:'rebalance my basket',
+          pid:'u_NOBASK'} -> 200, text says no active baskets, NO basket_rebalance. (B) Build+save TWO baskets for a
+          pid, then 'rebalance my <distinct-word-from-one-title> basket' -> basket_rebalance targets THAT basket
+          (title matches). (C) 'rebalance my basket' when 2 exist and message is ambiguous -> text asks 'Which basket'
+          and NO basket_rebalance. (D) Single basket + 'rebalance it' -> basket_rebalance for that basket.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Chat Rebalance testing via external URL (https://quant-features.preview.emergentagent.com/api). All 5 tests passed (5/5): Tests A-E as specified in review request.
+          TEST A (No baskets): POST /api/v1/chat {session_id:'cr-a', message:'rebalance my basket', pid:'u_CR_NONE'} -> HTTP 200 ✅, NO basket_rebalance field (null/absent) ✅, text says "You don't have any active baskets to rebalance yet" ✅
+          TEST B (Single basket, direct intent): Built+saved ONE basket for pid 'u_CR_ONE' (goal: 'long the majors') -> basket created with title 'Major Caps Momentum & Mean Reversion Basket' (4 legs: BTC 40%, ETH 30%, SOL 20%, BNB 10%) ✅. POST /api/v1/chat {session_id:'cr-b', message:'rebalance my basket', pid:'u_CR_ONE'} -> HTTP 200 ✅, basket_rebalance present with all required fields: basket_id ✅, title='Major Caps Momentum & Mean Reversion Basket' ✅, rationale='Reset to equal weight to reduce single-name concentration' ✅, legs array with 4 items ✅. Each leg has symbol, position, current_weight, suggested_weight ✅. Suggested weights: BTC 40%->25%, ETH 30%->25%, SOL 20%->25%, BNB 10%->25% (sum=100.0%) ✅. POST /api/v1/chat {session_id:'cr-b2', message:'reweight my basket please', pid:'u_CR_ONE'} -> HTTP 200 ✅, basket_rebalance present ✅ (both 'rebalance' and 'reweight' trigger correctly).
+          TEST C (Multiple baskets, name match): Built+saved TWO baskets for pid 'u_CR_TWO': (1) 'DeFi Blue-Chip Alpha Rotation' (3 legs: UNI, AAVE, LINK) ✅, (2) 'Large-Cap Beta: BTC/ETH Trend Following' (2 legs: BTC, ETH) ✅. POST /api/v1/chat {session_id:'cr-c1', message:'rebalance my defi basket', pid:'u_CR_TWO'} -> HTTP 200 ✅, basket_rebalance.title='DeFi Blue-Chip Alpha Rotation' ✅ (correctly matched DeFi basket by title token 'defi'). POST /api/v1/chat {session_id:'cr-c2', message:'rebalance my basket', pid:'u_CR_TWO'} (ambiguous, 2 baskets) -> HTTP 200 ✅, NO basket_rebalance ✅, text asks "Which basket should I rebalance? You have: 'Large-Cap Beta: BTC/ETH Trend Following', 'DeFi Blue-Chip Alpha Rotation'." ✅ (correctly lists both basket titles).
+          TEST E (Intent isolation): POST /api/v1/chat {session_id:'cr-e1', message:'how are my baskets doing?', pid:'u_CR_ONE'} -> HTTP 200 ✅, NO basket_rebalance ✅, NO basket_draft ✅ (status query correctly isolated). POST /api/v1/chat {session_id:'cr-e2', message:"what's your read on BTC right now?", pid:'u_CR_ONE'} -> HTTP 200 ✅, NO basket_rebalance ✅, NO basket_draft ✅ (normal chat correctly isolated).
+          CLEANUP: All 3 created baskets closed successfully ✅. All validations passed. Chat rebalance intent detection working correctly (_is_basket_rebalance_request correctly identifies 'rebalance' and 'reweight'+'basket'). Basket matching working correctly (_find_basket_for_message: single basket -> that one; multiple -> best match on title tokens; ambiguous -> asks which). basket_rebalance response structure correct with all required fields. Weights sum to 100%. Intent isolation working correctly (status queries and normal chat do NOT trigger rebalance/build). Feature is fully functional and production-ready.
+  - task: "Rotation Heat Strip — each basket returns live sector-rotation strength for its legs"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/components/Strategies.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          _basket_public now includes rotation:[{sector, strength(7d vs BTC, may be null), hot:bool, symbols:[...]}]
+          computed from _coin_sector + cached _sector_strength(), sorted strongest-first. Frontend BasketCard renders
+          a colored chip strip (green=hot/rotating in, red=cooling, gray=n/a). VERIFIED by main: baskets list returns
+          rotation and the UI shows e.g. 'Smart-Contract L1 +4.45%' (green) / 'Store of Value' (gray).
+          TEST: GET /api/v1/albert/strategy/baskets?pid=<pid with an active basket> -> each active basket has a
+          'rotation' array where entries have sector/strength/hot/symbols. (No regression to perf fields.)
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED Rotation field testing via external URL (https://quant-features.preview.emergentagent.com/api). TEST D from review request.
+          GET /api/v1/albert/strategy/baskets?pid=u_CR_ONE -> HTTP 200 ✅, status='ready' ✅, active array with 1 basket ✅. Basket: 'Major Caps Momentum & Mean Reversion Basket' ✅.
+          ROTATION FIELD VALIDATION: 'rotation' field present ✅, rotation is array with 3 entries ✅. Each entry validated:
+          Entry 0: sector='Smart-Contract L1' ✅, strength=4.45 (number) ✅, hot=True (bool) ✅, symbols=['ETH', 'SOL'] (array) ✅
+          Entry 1: sector='Store of Value' ✅, strength=None (null, acceptable) ✅, hot=False (bool) ✅, symbols=['BTC'] (array) ✅
+          Entry 2: sector='Other' ✅, strength=None (null, acceptable) ✅, hot=False (bool) ✅, symbols=['BNB'] (array) ✅
+          All rotation entries have required keys: sector (string), strength (number or null), hot (bool), symbols (array) ✅.
+          REGRESSION CHECK: 'perf' field present ✅, perf.total_pnl_pct present ✅, perf.legs present (array) ✅ (no regression to perf fields).
+          All validations passed. Rotation array correctly computed from _coin_sector + _sector_strength(). Sector strength values are real (7d vs BTC). Hot flag correctly set (hot=True when strength>0). Symbols correctly grouped by sector. Feature is fully functional and production-ready.
+  - task: "Basket Digest Panel (frontend) — daily digest shown as a card on Trading Strategies (uses existing basket-digest endpoint)"
+    implemented: true
+    working: true
+    file: "app/components/Strategies.js"
+    stuck_count: 0
+    priority: "low"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          BasketDigestPanel fetches GET /api/v1/albert/basket-digest?pid=&hours=24 and renders a card in the
+          Multi-Coin Baskets section (shows per-basket target/stop hit chips, or 'No basket legs hit a target or stop
+          in the last 24 hours.' when total_hits=0). VERIFIED by main in the UI. Backend endpoint already covered by
+          the earlier 'Basket Alerts Digest' task — no new backend testing required here.
+
   - task: "Basket in Chat — Albert answers 'how are my baskets doing?' from the user's saved active baskets (context injection)"
     implemented: true
     working: true
@@ -2093,6 +2171,27 @@ agent_communication:
       NO CRITICAL ISSUES FOUND. All Stage 3 backend features working as expected with REAL data.
       Data is REAL (Yahoo Finance for scenarios, RSS feeds + Gemini 2.5 Flash for news).
       WebSockets NOT tested (as instructed).
+    -agent: "testing"
+    -message: |
+      ✅ CHAT REBALANCE & BASKET ROTATION TESTING COMPLETE - ALL TESTS PASSED (5/5)
+      
+      Comprehensive backend testing of NEW "Chat Rebalance" intent and basket "rotation" field for Ask Albert crypto app via external URL (https://quant-features.preview.emergentagent.com/api). Tests A-E as specified in review request.
+      
+      TEST RESULTS:
+      ✅ TEST A (No baskets): Chat correctly returns NO basket_rebalance when user has no active baskets, with appropriate message.
+      ✅ TEST B (Single basket, direct intent): Both "rebalance my basket" and "reweight my basket please" correctly trigger basket_rebalance with all required fields (basket_id, title, rationale, legs[] with symbol/position/current_weight/suggested_weight). Weights sum to 100%.
+      ✅ TEST C (Multiple baskets, name match): "rebalance my defi basket" correctly matches DeFi-themed basket by title token. Ambiguous "rebalance my basket" correctly asks "Which basket?" and lists both basket titles.
+      ✅ TEST D (Rotation field): GET /api/v1/albert/strategy/baskets returns rotation array with sector/strength/hot/symbols for each basket. Perf field intact (no regression).
+      ✅ TEST E (Intent isolation): Status queries ("how are my baskets doing?") and normal chat ("what's your read on BTC?") do NOT trigger basket_rebalance or basket_draft.
+      
+      CONCRETE FIELDS OBSERVED:
+      - TEST B: basket_rebalance.title='Major Caps Momentum & Mean Reversion Basket', legs: BTC 40%->25%, ETH 30%->25%, SOL 20%->25%, BNB 10%->25% (sum=100.0%)
+      - TEST C: Two baskets created: 'DeFi Blue-Chip Alpha Rotation' (UNI, AAVE, LINK) and 'Large-Cap Beta: BTC/ETH Trend Following' (BTC, ETH). "rebalance my defi basket" matched DeFi basket correctly.
+      - TEST D: Rotation array example: {sector:'Smart-Contract L1', strength:4.45, hot:True, symbols:['ETH','SOL']}, {sector:'Store of Value', strength:None, hot:False, symbols:['BTC']}, {sector:'Other', strength:None, hot:False, symbols:['BNB']}
+      
+      ALL VALIDATIONS PASSED. Chat rebalance intent detection working correctly. Basket matching working correctly (single->that one, multiple->best match, ambiguous->asks which). basket_rebalance response structure correct. Rotation field correctly computed with sector strength (7d vs BTC). Intent isolation working correctly. Feature is fully functional and production-ready.
+      
+      CLEANUP: All 3 created baskets closed successfully.
 
 #====================================================================================================
 # GLOBAL COIN SWITCH FEATURE (new) - added by main agent
