@@ -77,6 +77,7 @@ whale_hist_col = db['whale_history']
 whale_tx_col = db['whale_tx_feed']
 regime_col = db['regime_state']  # Dynamic Regime-Switching HMM: persisted model + latest analysis
 portfolio_col = db['user_portfolios']  # server-side per-client portfolio (holdings + avg entry)
+mandate_col = db['user_mandates']  # per-user Trading Mandate (goals, risk limits, USDC reserve, universe)
 price_watch_col = db['price_watches']  # "alert me at $X" watches created from Albert chat
 albert_calls_col = db['albert_calls']  # Albert's self-logged buy/sell calls + graded outcomes (track record)
 recap_col = db['albert_recap']  # cached weekly recap note

@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { API_BASE, getPid } from '../lib/api';
 import { fmtUsd } from '../lib/format';
 import { SymbolContext } from '../lib/context';
+import AlbertPlan from './AlbertPlan';
 import { SectionHead } from './shared';
 
 const pnlColor = (v) => (v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-slate-300');
@@ -656,6 +657,8 @@ export default function StrategiesSection() {
         blurb={`Crypto strategies Albert builds and babysits — single-coin plays or multi-coin (portfolio-style) strategies, all in one place. Each has entries, profit targets, a stop and if-this-then-that rules on price, time and signals. Albert nudges you when it's time to act, paper-tracks the P&L, and keeps a history of how past plays performed.`} />
 
       <GuardrailsCard />
+
+      <AlbertPlan />
 
       <BasketSection />
 

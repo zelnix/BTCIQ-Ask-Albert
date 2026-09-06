@@ -59,7 +59,7 @@ from config import (
     RESEND_API_KEY, RESEND_FROM, DIGEST_TZ, DIGEST_HOUR, DIGEST_MINUTE,
     email_recipients_col, email_log_col, email_settings_col,
     PUBLIC_BASE_URL, UNSUB_SECRET, WEEKLY_HOUR, WEEKLY_MINUTE, regime_col,
-    portfolio_col, price_watch_col, albert_calls_col, recap_col,
+    portfolio_col, price_watch_col, albert_calls_col, recap_col, mandate_col,
     users_col, auth_sessions_col, GOOGLE_CLIENT_ID,
 )
 from email_service import send_email, resend_configured
@@ -7579,7 +7579,7 @@ def get_portfolio(pid: str = ''):
     if not pid:
         return {'positions': []}
     doc = portfolio_col.find_one({'_id': pid}, {'_id': 0})
-    return {'positions': (doc or {}).get('positions', [])}
+    return {'positions': (doc or {}).get('positions', []), 'usdc': (doc or {}).get('usdc')}
 
 
 @app.post('/api/v1/portfolio')
@@ -7597,9 +7597,119 @@ def save_portfolio(payload: dict = Body(...)):
         except Exception:  # noqa
             continue
     portfolio_col.update_one({'_id': pid},
-                             {'$set': {'positions': clean, 'updated_at': datetime.datetime.utcnow().isoformat()}},
+                             {'$set': {'positions': clean, 'usdc': _num(payload.get('usdc')),
+                                       'updated_at': datetime.datetime.utcnow().isoformat()}},
                              upsert=True)
-    return {'ok': True, 'positions': clean}
+    return {'ok': True, 'positions': clean, 'usdc': _num(payload.get('usdc'))}
+
+
+# ============================================================
+# Albert's Plan — Milestone 1-3 (Trading Mandate + Portfolio/USDC engine).
+# The decision layer is deterministic; the LLM only explains it.
+# ============================================================
+_DEFAULT_MANDATE = {
+    'goal': '', 'risk_tolerance': '', 'time_horizon': '',
+    'max_drawdown_pct': None, 'reserve_pct': 25.0,
+    'approved_coins': [], 'excluded_coins': [],
+    'max_alloc_pct': {}, 'max_trade_risk_pct': 2.0,
+    'leverage_enabled': False, 'preferred_strategies': [],
+}
+
+
+def _get_mandate(pid):
+    try:
+        doc = mandate_col.find_one({'_id': pid}, {'_id': 0})
+    except Exception:  # noqa
+        doc = None
+    m = dict(_DEFAULT_MANDATE)
+    if doc:
+        m.update({k: v for k, v in doc.items() if k in _DEFAULT_MANDATE})
+    return m
+
+
+def _mandate_complete(m):
+    return bool(m and m.get('risk_tolerance') and (m.get('reserve_pct') is not None))
+
+
+@app.get('/api/v1/albert/mandate')
+def albert_get_mandate(pid: str = ''):
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'mandate': _DEFAULT_MANDATE, 'complete': False}
+    m = _get_mandate(pid)
+    return {'mandate': m, 'complete': _mandate_complete(m)}
+
+
+@app.post('/api/v1/albert/mandate')
+def albert_save_mandate(payload: dict = Body(...)):
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    src = payload.get('mandate') or payload
+
+    def _pct(v, lo=0.0, hi=100.0, d=None):
+        try:
+            return max(lo, min(hi, float(v)))
+        except Exception:  # noqa
+            return d
+    m = dict(_DEFAULT_MANDATE)
+    m['goal'] = str(src.get('goal') or '')[:200]
+    m['risk_tolerance'] = str(src.get('risk_tolerance') or '')[:20]
+    m['time_horizon'] = str(src.get('time_horizon') or '')[:30]
+    m['max_drawdown_pct'] = _pct(src.get('max_drawdown_pct'), 1, 90, None)
+    m['reserve_pct'] = _pct(src.get('reserve_pct'), 0, 100, 25.0)
+    m['approved_coins'] = [str(c).upper()[:8] for c in (src.get('approved_coins') or []) if c][:100]
+    m['excluded_coins'] = [str(c).upper()[:8] for c in (src.get('excluded_coins') or []) if c][:100]
+    mac = {}
+    for k, v in (src.get('max_alloc_pct') or {}).items():
+        p = _pct(v, 0, 100, None)
+        if p is not None:
+            mac[str(k).upper()[:8]] = p
+    m['max_alloc_pct'] = mac
+    m['max_trade_risk_pct'] = _pct(src.get('max_trade_risk_pct'), 0.1, 100, 2.0)
+    m['leverage_enabled'] = bool(src.get('leverage_enabled'))
+    m['preferred_strategies'] = [str(s)[:30] for s in (src.get('preferred_strategies') or []) if s][:12]
+    mandate_col.update_one({'_id': pid},
+                           {'$set': {**m, 'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+    return {'mandate': m, 'complete': _mandate_complete(m)}
+
+
+def _portfolio_summary(pid):
+    doc = portfolio_col.find_one({'_id': pid}) or {}
+    positions = doc.get('positions') or []
+    usdc = _num(doc.get('usdc')) or 0.0
+    m = _get_mandate(pid)
+    reserve_pct = m.get('reserve_pct') or 0
+    holdings, holdings_value = [], 0.0
+    for p in positions:
+        asset = str(p.get('asset', '')).upper()[:8]
+        if not asset or asset in ('USDC', 'USDT', 'USD'):
+            continue
+        size = _num(p.get('size')) or 0
+        entry = _num(p.get('avg_entry'))
+        spot = _spot_price(asset) or 0
+        val = size * spot
+        holdings_value += val
+        upnl = ((spot - entry) / entry * 100) if (spot and entry) else None
+        holdings.append({'asset': asset, 'size': size, 'avg_entry': entry, 'spot': spot,
+                         'value': round(val, 2), 'unrealized_pct': round(upnl, 2) if upnl is not None else None})
+    total = holdings_value + usdc
+    for h in holdings:
+        h['portfolio_pct'] = round((h['value'] / total * 100), 2) if total else 0
+    protected = round(usdc * reserve_pct / 100.0, 2)
+    deployable = round(max(0.0, usdc - protected), 2)
+    return {'total_value': round(total, 2), 'usdc': round(usdc, 2), 'protected_reserve': protected,
+            'deployable_usdc': deployable, 'reserve_pct': reserve_pct,
+            'holdings_value': round(holdings_value, 2), 'holdings': holdings,
+            'mandate_complete': _mandate_complete(m)}
+
+
+@app.get('/api/v1/albert/portfolio-summary')
+def albert_portfolio_summary(pid: str = ''):
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    return _portfolio_summary(pid)
 
 
 @app.post('/api/v1/price-alert')

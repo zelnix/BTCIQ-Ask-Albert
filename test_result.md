@@ -114,6 +114,33 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Albert's Plan Phase A+B — Trading Mandate + Portfolio/USDC engine (Milestone 1-3)"
+    implemented: true
+    working: true
+    file: "backend/server.py, backend/config.py, app/components/AlbertPlan.js, app/components/Strategies.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          PHASE A (Trading Mandate): new mandate_col + GET/POST /api/v1/albert/mandate?pid=. Fields: goal,
+          risk_tolerance, time_horizon, max_drawdown_pct, reserve_pct (protected USDC %), approved_coins,
+          excluded_coins, max_alloc_pct{}, max_trade_risk_pct, leverage_enabled(false default), preferred_strategies.
+          _mandate_complete requires risk_tolerance + reserve_pct -> gates personalised recommendations.
+          PHASE B (Portfolio/USDC): extended GET/POST /api/v1/portfolio to store a usdc balance. New
+          GET /api/v1/albert/portfolio-summary?pid= -> {total_value, usdc, protected_reserve, deployable_usdc
+          (=usdc - reserve), reserve_pct, holdings_value, holdings[{asset,value,portfolio_pct,unrealized_pct,...}],
+          mandate_complete}. Deployable USDC = USDC - protected reserve.
+          UI: AlbertPlan.js 'Portfolio Command Centre' folded into the TOP of the Trading Strategies screen —
+          stat cards (Total/USDC/Protected/Deployable), holdings table, a gate banner when mandate incomplete,
+          and inline editors for the mandate and holdings/USDC.
+          VERIFIED by main: API returns correct math (USDC $50k, 25% reserve -> protected $12.5k, deployable $37.5k;
+          BTC +33%/ETH -16.9% unrealised, %s of portfolio). UI renders populated Command Centre end-to-end
+          (screenshot) and shows the gate when no mandate. NOTE: Phase C (deterministic BUY/HOLD/SELL/WAIT +
+          deployment planner over a top-100 universe, LLM explains) is the NEXT phase — not built yet.
+
   - task: "Chat Basket Close — 'close my <name> basket' in chat returns an inline confirm card that closes the basket"
     implemented: true
     working: true
