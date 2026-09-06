@@ -7712,6 +7712,284 @@ def albert_portfolio_summary(pid: str = ''):
     return _portfolio_summary(pid)
 
 
+# ---- Phase C: deterministic decision engine (LLM only explains this output) ----
+ALBERT_ENGINE_VERSION = 'albert-decide-v1'
+_REGIME_BUY_THRESHOLD = {'BULL': 72, 'RANGE': 78, 'BEAR': 85}
+_REGIME_DEPLOY_CEILING = {'BULL': 0.60, 'RANGE': 0.35, 'BEAR': 0.15}
+_ALBERT_UNIVERSE = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOGE', 'LINK', 'DOT', 'LTC', 'TRX']  # liquid v1 universe
+_STABLES = {'USDC', 'USDT', 'DAI', 'USD', 'TUSD', 'FDUSD', 'BUSD'}
+
+
+def _rsi(series, n=14):
+    d = series.diff()
+    up = d.clip(lower=0).rolling(n).mean()
+    dn = (-d.clip(upper=0)).rolling(n).mean()
+    rs = up / dn.replace(0, np.nan)
+    return (100 - 100 / (1 + rs))
+
+
+def _albert_regime():
+    """Deterministic BULL/RANGE/BEAR from BTC vs its 200d trend + 50d slope + breadth."""
+    try:
+        df = _daily_ohlcv('BTC', 260)
+        close = df['close'].astype(float)
+        price = float(close.iloc[-1])
+        sma200 = float(close.rolling(200).mean().iloc[-1])
+        sma50 = float(close.rolling(50).mean().iloc[-1])
+        slope = float(close.iloc[-1] - close.iloc[-30]) / max(1e-9, float(close.iloc[-30]))
+    except Exception:  # noqa
+        return {'regime': 'RANGE', 'confidence': 30, 'reasons': ['Insufficient BTC data — defaulting to RANGE.'],
+                'btc_price': None, 'sma200': None}
+    try:
+        strengths = _sector_strength() or {}
+        vals = list(strengths.values())
+        breadth = (sum(1 for v in vals if (v or 0) > 0) / len(vals) * 100) if vals else 50
+    except Exception:  # noqa
+        breadth = 50
+    above = price > sma200
+    reasons = []
+    if above and slope > 0.02 and breadth >= 55:
+        regime = 'BULL'
+        reasons = [f'BTC ${price:,.0f} is above its 200-day (${sma200:,.0f})',
+                   f'30-day trend rising ({slope * 100:+.1f}%)', f'breadth healthy ({breadth:.0f}% sectors positive)']
+    elif (not above) and slope < -0.02 and breadth <= 45:
+        regime = 'BEAR'
+        reasons = [f'BTC ${price:,.0f} is below its 200-day (${sma200:,.0f})',
+                   f'30-day trend falling ({slope * 100:+.1f}%)', f'breadth weak ({breadth:.0f}% sectors positive)']
+    else:
+        regime = 'RANGE'
+        reasons = [f'BTC {"above" if above else "below"} its 200-day but momentum/breadth mixed',
+                   f'30-day trend {slope * 100:+.1f}%, breadth {breadth:.0f}%']
+    # hysteresis: keep prior regime unless the new one has been seen twice
+    conf = int(min(95, 45 + abs(slope) * 400 + abs(breadth - 50)))
+    try:
+        prev = regime_col.find_one({'_id': 'albert_regime'}) or {}
+        if prev.get('pending') == regime:
+            regime_col.update_one({'_id': 'albert_regime'}, {'$set': {'regime': regime, 'pending': regime}}, upsert=True)
+        elif prev.get('regime') and prev.get('regime') != regime:
+            regime_col.update_one({'_id': 'albert_regime'}, {'$set': {'pending': regime}}, upsert=True)
+            regime = prev.get('regime')  # hold until confirmed twice
+            reasons.append('(regime change pending confirmation — holding prior regime)')
+        else:
+            regime_col.update_one({'_id': 'albert_regime'}, {'$set': {'regime': regime, 'pending': regime}}, upsert=True)
+    except Exception:  # noqa
+        pass
+    return {'regime': regime, 'confidence': conf, 'reasons': reasons, 'btc_price': price, 'sma200': sma200}
+
+
+def _score_asset(symbol, regime):
+    """Transparent 0-100 opportunity score with retained components. Returns None-ish
+    on stale/insufficient data so the caller can force WAIT."""
+    df = _daily_ohlcv(symbol, 400)
+    if df is None or len(df) < 60:
+        return {'ok': False, 'reason': 'stale_or_insufficient_data', 'currentPrice': _spot_price(symbol) or None}
+    close = df['close'].astype(float)
+    vol = df['volume'].astype(float)
+    price = float(close.iloc[-1])
+    sma50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else price
+    sma200 = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else sma50
+    rsi = float(_rsi(close).iloc[-1]) if len(close) > 20 else 50.0
+    roc30 = (price - float(close.iloc[-30])) / float(close.iloc[-30]) * 100 if len(close) > 30 else 0.0
+    hi1y = float(close.tail(365).max())
+    dd = (price - hi1y) / hi1y * 100 if hi1y else 0.0  # negative = below high
+    ret = close.pct_change().dropna()
+    realized_vol = float(ret.tail(30).std() * (365 ** 0.5) * 100) if len(ret) > 30 else 60.0
+    avg_usd_vol = float((vol.tail(30) * close.tail(30)).mean()) if len(vol) > 30 else 0.0
+
+    # Components (each capped to its weight)
+    trend = 0.0
+    if price > sma50:
+        trend += 13
+    if price > sma200:
+        trend += 12
+    trend = min(25.0, trend)
+    momentum = max(0.0, min(15.0, 7.5 + roc30 / 4.0))
+    if rsi > 78:
+        momentum = min(momentum, 8.0)  # overextended penalty
+    valuation = max(0.0, min(15.0, (-dd) / 4.0))  # deeper below high => more attractive
+    volatility = max(0.0, min(10.0, 10.0 - abs(realized_vol - 60.0) / 12.0))
+    liquidity = min(10.0, (avg_usd_vol / 5e7) * 10.0) if avg_usd_vol else (10.0 if symbol in ('BTC', 'ETH') else 3.0)
+    if regime == 'BULL':
+        regime_fit = 15.0 if price > sma200 else 7.0
+    elif regime == 'BEAR':
+        regime_fit = 4.0 if price < sma200 else 8.0
+    else:
+        regime_fit = 9.0
+    comps = {'trend': round(trend, 1), 'momentum': round(momentum, 1), 'valuation': round(valuation, 1),
+             'volatility': round(volatility, 1), 'liquidity': round(liquidity, 1),
+             'regimeFit': round(regime_fit, 1), 'portfolioFit': 10.0}  # portfolioFit finalised later
+    score = sum(comps.values())
+    # confidence from data completeness + liquidity + signal agreement
+    completeness = min(1.0, len(close) / 365.0)
+    agree = 1.0 if (trend >= 13 and momentum >= 7.5) or (trend < 13 and momentum < 7.5) else 0.6
+    confidence = int(min(96, 40 + completeness * 30 + (liquidity / 10) * 20 + agree * 10))
+    invalidation = round(min(float(close.tail(20).min()), sma50) * 0.98, 6)  # long invalidation
+    reasons = []
+    if price > sma200:
+        reasons.append('above the 200-day trend')
+    else:
+        reasons.append('below the 200-day trend')
+    reasons.append(f'RSI {rsi:.0f}' + (' (overbought)' if rsi > 70 else ' (oversold)' if rsi < 30 else ''))
+    reasons.append(f'{dd:.0f}% from 1y high')
+    return {'ok': True, 'symbol': symbol, 'currentPrice': price, 'score': round(score, 1), 'components': comps,
+            'confidence': confidence, 'invalidation': invalidation, 'realized_vol': round(realized_vol, 1),
+            'rsi': round(rsi, 1), 'reasons': reasons}
+
+
+def _albert_decisions(pid):
+    """Full deterministic snapshot: regime + per-asset DecisionResult + deployment plan."""
+    reg = _albert_regime()
+    regime = reg['regime']
+    summary = _portfolio_summary(pid)
+    mandate = _get_mandate(pid)
+    total = summary['total_value'] or 0.0
+    deployable = summary['deployable_usdc'] or 0.0
+    approved = set(mandate.get('approved_coins') or [])
+    excluded = set(mandate.get('excluded_coins') or [])
+    max_alloc = mandate.get('max_alloc_pct') or {}
+    trade_risk_pct = mandate.get('max_trade_risk_pct') or 2.0
+    held = {h['asset']: h for h in summary['holdings']}
+    complete = summary['mandate_complete']
+    buy_thresh = _REGIME_BUY_THRESHOLD[regime]
+    regime_pool = round(deployable * _REGIME_DEPLOY_CEILING[regime], 2)
+
+    universe = list(dict.fromkeys(list(_ALBERT_UNIVERSE) + list(held.keys())))
+    scored, decisions = [], []
+    for sym in universe:
+        if sym in _STABLES:
+            continue
+        sc = _score_asset(sym, regime)
+        held_h = held.get(sym)
+        cur_val = (held_h or {}).get('value', 0.0)
+        cur_pct = (held_h or {}).get('portfolio_pct', 0.0)
+        cap_pct = max_alloc.get(sym, 100.0)
+        target_pct = cap_pct
+        base = {'symbol': sym, 'regime': regime, 'currentPrice': (sc or {}).get('currentPrice'),
+                'currentAllocationPct': cur_pct, 'targetAllocationPct': target_pct,
+                'recommendedDeployNowUsd': 0.0, 'totalPlannedDeploymentUsd': 0.0,
+                'tranches': [], 'warnings': [], 'reasons': [], 'engineVersion': ALBERT_ENGINE_VERSION,
+                'evaluatedAt': datetime.datetime.utcnow().isoformat()}
+        if not sc.get('ok'):
+            base.update({'action': 'WAIT', 'opportunityScore': 0, 'confidence': 20,
+                         'scoreComponents': {}, 'reasons': ['Market data is stale or insufficient — Albert waits rather than guesses.']})
+            decisions.append(base)
+            continue
+        # portfolioFit: penalise if already near the cap
+        headroom_pct = max(0.0, cap_pct - cur_pct)
+        comps = dict(sc['components'])
+        comps['portfolioFit'] = round(min(10.0, headroom_pct / max(1.0, cap_pct) * 10.0), 1)
+        score = round(sum(comps.values()), 1)
+        base.update({'opportunityScore': score, 'confidence': sc['confidence'], 'scoreComponents': comps,
+                     'invalidationPrice': sc['invalidation'], 'reasons': list(sc['reasons'])})
+        # Mandate hard gates for BUY eligibility
+        gate_block = None
+        if excluded and sym in excluded:
+            gate_block = 'Excluded by your Trading Mandate'
+        elif approved and sym not in approved:
+            gate_block = 'Not in your approved-coins whitelist'
+        elif not complete:
+            gate_block = 'Set your mandate to unlock BUY recommendations'
+        base['_eligible'] = gate_block is None
+        base['_score'] = score
+        base['_cur_val'] = cur_val
+        base['_cap_val'] = total * cap_pct / 100.0
+        base['_owned'] = held_h is not None
+        if gate_block:
+            base['warnings'].append(gate_block)
+        # Default action pre-sizing
+        if score >= buy_thresh and gate_block is None:
+            base['action'] = 'BUY'  # amount decided in allocation pass
+        elif held_h is not None:
+            base['action'] = 'HOLD'
+            base['reasons'].insert(0, 'You own this and its thesis still holds — keep it, no add right now.')
+        else:
+            base['action'] = 'WAIT'
+            if gate_block is None and score < buy_thresh:
+                base['reasons'].insert(0, f'Score {score:.0f} is below the {regime} BUY line ({buy_thresh}).')
+        decisions.append(base)
+
+    # Allocation pass across BUY candidates (score-weighted), respecting all ceilings
+    buys = [d for d in decisions if d.get('action') == 'BUY']
+    remaining = regime_pool
+    if buys and remaining > 0:
+        weights = []
+        for d in buys:
+            excess = max(0.0, d['_score'] - buy_thresh)
+            weights.append((excess ** 2) * (d['confidence'] / 100.0))
+        wsum = sum(weights) or 1.0
+        for d, w in zip(buys, weights):
+            opp_alloc = remaining * (w / wsum)
+            alloc_headroom = max(0.0, d['_cap_val'] - d['_cur_val'])
+            price = d['currentPrice'] or 0.0
+            inv = d.get('invalidationPrice') or 0.0
+            stop_dist = abs(price - inv) / price if price else 0.15
+            risk_sized = (total * trade_risk_pct / 100.0) / stop_dist if stop_dist > 0 else opp_alloc
+            planned = max(0.0, min(opp_alloc, alloc_headroom, risk_sized, remaining))
+            planned = round(planned, 2)
+            if planned < 50:  # too small to matter -> HOLD/WAIT instead
+                d['action'] = 'HOLD' if d['_owned'] else 'WAIT'
+                d['reasons'].insert(0, 'Qualifies, but allocation/risk ceilings leave no meaningful room to add now.')
+                continue
+            deploy_now = round(planned * 0.40, 2)
+            d['totalPlannedDeploymentUsd'] = planned
+            d['recommendedDeployNowUsd'] = deploy_now
+            d['tranches'] = [
+                {'number': 1, 'pct': 40, 'amountUsd': deploy_now, 'trigger': 'ENTRY_CONDITIONS_VALID'},
+                {'number': 2, 'pct': 35, 'amountUsd': round(planned * 0.35, 2), 'trigger': 'CONTROLLED_PULLBACK'},
+                {'number': 3, 'pct': 25, 'amountUsd': round(planned - deploy_now - round(planned * 0.35, 2), 2), 'trigger': 'TREND_RECONFIRMATION'},
+            ]
+            if alloc_headroom < opp_alloc:
+                d['reasons'].insert(0, f"Your {d['targetAllocationPct']:.0f}% cap limits this to ${planned:,.0f}.")
+            remaining = round(remaining - deploy_now, 2)
+
+    total_deploy_now = round(sum(d['recommendedDeployNowUsd'] for d in decisions), 2)
+    for d in decisions:
+        for k in ('_eligible', '_score', '_cur_val', '_cap_val', '_owned'):
+            d.pop(k, None)
+    decisions.sort(key=lambda d: d.get('opportunityScore', 0), reverse=True)
+    qualifying = sum(1 for d in decisions if d['action'] == 'BUY')
+    if not complete:
+        albert_call = 'Set your Trading Mandate to unlock personalised recommendations.'
+    elif total_deploy_now > 0:
+        albert_call = (f"DEPLOY ${total_deploy_now:,.0f} — {qualifying} opportunit"
+                       f"{'y' if qualifying == 1 else 'ies'} qualify; retaining "
+                       f"${deployable - total_deploy_now:,.0f} of deployable USDC as dry powder.")
+    else:
+        albert_call = f"WAIT — no high-quality entry justifies deploying capital in a {regime} market right now."
+    return {'snapshotId': str(uuid.uuid4()), 'marketDataTimestamp': datetime.datetime.utcnow().isoformat(),
+            'engineVersion': ALBERT_ENGINE_VERSION, 'regime': reg, 'summary': summary,
+            'mandate_complete': complete, 'buyThreshold': buy_thresh, 'regimeDeployCeiling': regime_pool,
+            'deployableUsdc': deployable, 'totalDeployNowUsd': total_deploy_now, 'albertCall': albert_call,
+            'qualifying': qualifying, 'decisions': decisions}
+
+
+@app.get('/api/v1/albert/regime')
+def albert_regime_endpoint():
+    return _albert_regime()
+
+
+@app.get('/api/v1/albert/decisions')
+def albert_decisions_endpoint(pid: str = ''):
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    return _albert_decisions(pid)
+
+
+@app.get('/api/v1/albert/deployment-plan')
+def albert_deployment_plan(pid: str = ''):
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    snap = _albert_decisions(pid)
+    return {'regime': snap['regime'], 'deployableUsdc': snap['deployableUsdc'],
+            'regimeDeployCeiling': snap['regimeDeployCeiling'], 'totalDeployNowUsd': snap['totalDeployNowUsd'],
+            'albertCall': snap['albertCall'],
+            'plan': [{'symbol': d['symbol'], 'action': d['action'], 'deployNow': d['recommendedDeployNowUsd'],
+                      'totalPlanned': d['totalPlannedDeploymentUsd'], 'tranches': d['tranches']}
+                     for d in snap['decisions'] if d['action'] == 'BUY']}
+
+
 @app.post('/api/v1/price-alert')
 def create_price_alert(payload: dict = Body(...)):
     try:

@@ -7,6 +7,24 @@ import { ShieldCheck, Wallet, Target, Plus, Trash2, Loader2, Check, ChevronDown 
 
 const fmt = (n) => (n == null || isNaN(n)) ? '—' : '$' + Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
 
+function ActionPill({ a }) {
+  const map = { BUY: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40', HOLD: 'bg-sky-500/15 text-sky-300 border-sky-500/40', SELL: 'bg-rose-500/15 text-rose-300 border-rose-500/40', WAIT: 'bg-slate-700/40 text-slate-300 border-slate-600' };
+  return <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${map[a] || map.WAIT}`}>{a}</span>;
+}
+
+function RegimeBanner({ reg, buyThresh, pool }) {
+  const color = reg.regime === 'BULL' ? 'text-emerald-400' : reg.regime === 'BEAR' ? 'text-rose-400' : 'text-amber-400';
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm font-bold"><span className="text-slate-400">Market Regime: </span><span className={color}>{reg.regime}</span> <span className="text-[11px] font-normal text-slate-500">— {reg.confidence}% confidence</span></p>
+        <p className="text-[11px] text-slate-500">BUY line ≥ {buyThresh} · deploy pool {fmt(pool)}</p>
+      </div>
+      <p className="mt-0.5 text-[11px] text-slate-400">{(reg.reasons || []).join('; ')}.</p>
+    </div>
+  );
+}
+
 function Stat({ label, value, sub, accent }) {
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
@@ -21,6 +39,8 @@ export default function AlbertPlan() {
   const [summary, setSummary] = React.useState(null);
   const [mandate, setMandate] = React.useState(null);
   const [complete, setComplete] = React.useState(false);
+  const [decisions, setDecisions] = React.useState(null);
+  const [expanded, setExpanded] = React.useState(null);
   const [openMandate, setOpenMandate] = React.useState(false);
   const [openPortfolio, setOpenPortfolio] = React.useState(false);
   const [savingM, setSavingM] = React.useState(false);
@@ -39,6 +59,7 @@ export default function AlbertPlan() {
       setMandate(mr.mandate); setComplete(mr.complete); setSummary(sr);
       setUsdc(pr.usdc != null ? String(pr.usdc) : '');
       setPositions((pr.positions || []).map((p) => ({ asset: p.asset || '', size: p.size ?? '', avg_entry: p.avg_entry ?? '' })));
+      fetch(`${API_BASE}/v1/albert/decisions?pid=${encodeURIComponent(pid)}`, { cache: 'no-store' }).then((r) => r.json()).then(setDecisions).catch(() => {});
     } catch (e) { /* noop */ }
   }, []);
   React.useEffect(() => { load(); }, [load]);
@@ -90,6 +111,56 @@ export default function AlbertPlan() {
         <Stat label="Protected reserve" value={fmt(s.protected_reserve)} sub={`${s.reserve_pct ?? 0}% of USDC`} accent="text-slate-300" />
         <Stat label="Deployable USDC" value={fmt(s.deployable_usdc)} accent="text-emerald-400" />
       </div>
+
+      {complete && decisions && decisions.regime && (
+        <div className="mt-3">
+          <RegimeBanner reg={decisions.regime} buyThresh={decisions.buyThreshold} pool={decisions.regimeDeployCeiling} />
+          <div className="mt-2 rounded-xl border border-violet-500/25 bg-violet-500/[0.06] p-3">
+            <p className="text-[10px] uppercase tracking-wide text-violet-300">Albert&apos;s call</p>
+            <p className="mt-0.5 text-sm font-semibold text-white">{decisions.albertCall}</p>
+          </div>
+          <div className="mt-2 overflow-x-auto rounded-xl border border-slate-800">
+            <table className="w-full text-left text-[12px]">
+              <thead><tr className="bg-slate-900/60 text-[10px] uppercase text-slate-500">
+                <th className="py-1.5 pl-3 pr-2">Asset</th><th className="pr-2">Call</th><th className="pr-2">Score</th>
+                <th className="pr-2">Conf</th><th className="pr-2">Deploy now</th><th className="pr-2">Planned</th><th className="pr-3"></th></tr></thead>
+              <tbody>
+                {decisions.decisions.map((d) => (
+                  <React.Fragment key={d.symbol}>
+                    <tr className="border-t border-slate-800/60 hover:bg-slate-900/40">
+                      <td className="py-1.5 pl-3 pr-2 font-semibold text-slate-200">{d.symbol}</td>
+                      <td className="pr-2"><ActionPill a={d.action} /></td>
+                      <td className="pr-2 text-slate-300">{d.opportunityScore}</td>
+                      <td className="pr-2 text-slate-400">{d.confidence}%</td>
+                      <td className="pr-2 text-emerald-400">{d.recommendedDeployNowUsd ? fmt(d.recommendedDeployNowUsd) : '—'}</td>
+                      <td className="pr-2 text-slate-400">{d.totalPlannedDeploymentUsd ? fmt(d.totalPlannedDeploymentUsd) : '—'}</td>
+                      <td className="pr-3 text-right"><button onClick={() => setExpanded(expanded === d.symbol ? null : d.symbol)} className="text-slate-500 hover:text-slate-200"><ChevronDown className={`h-4 w-4 transition-transform ${expanded === d.symbol ? 'rotate-180' : ''}`} /></button></td>
+                    </tr>
+                    {expanded === d.symbol && (
+                      <tr className="border-t border-slate-800/40 bg-slate-950/40"><td colSpan={7} className="px-3 py-2">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <div>
+                            <p className="mb-1 text-[10px] uppercase text-slate-500">Why</p>
+                            <ul className="space-y-0.5 text-[11px] text-slate-300">{(d.reasons || []).map((r, i) => <li key={i}>• {r}</li>)}</ul>
+                            {(d.warnings || []).map((w, i) => <p key={i} className="mt-1 text-[11px] text-amber-400">⚠ {w}</p>)}
+                            {d.invalidationPrice ? <p className="mt-1 text-[11px] text-rose-400">Invalidation ≈ {fmt(d.invalidationPrice)}</p> : null}
+                          </div>
+                          <div>
+                            <p className="mb-1 text-[10px] uppercase text-slate-500">Score breakdown</p>
+                            <div className="flex flex-wrap gap-1">{Object.entries(d.scoreComponents || {}).map(([k, v]) => <span key={k} className="rounded-full border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400">{k} {v}</span>)}</div>
+                            {(d.tranches && d.tranches.length > 0) && (<div className="mt-2"><p className="mb-1 text-[10px] uppercase text-slate-500">Tranche plan</p>{d.tranches.map((t) => <div key={t.number} className="flex justify-between text-[11px] text-slate-300"><span>T{t.number} · {t.pct}% · {t.trigger.replace(/_/g, ' ').toLowerCase()}</span><span className="text-slate-400">{fmt(t.amountUsd)}</span></div>)}</div>)}
+                          </div>
+                        </div>
+                      </td></tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-1.5 text-[10px] text-slate-600">Deterministic engine {decisions.engineVersion} · advisory / paper only · Albert explains these calls, he doesn&apos;t change them.</p>
+        </div>
+      )}
 
       {(s.holdings && s.holdings.length > 0) && (
         <div className="mt-3 overflow-x-auto">

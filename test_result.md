@@ -114,6 +114,36 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Albert's Plan Phase C — deterministic BUY/HOLD/SELL/WAIT decision engine + deployment planner"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/components/AlbertPlan.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Deterministic engine (ALBERT_ENGINE_VERSION 'albert-decide-v1'); the LLM only explains, never alters it.
+          ENDPOINTS: GET /api/v1/albert/regime, /api/v1/albert/decisions?pid= (full snapshot), /api/v1/albert/deployment-plan?pid=.
+          REGIME (_albert_regime): BULL/RANGE/BEAR from BTC vs 200d + 30d slope + sector breadth, with hysteresis
+          (change must confirm twice) and confidence. SCORING (_score_asset): transparent 0-100 = trend25 + momentum15
+          + valuation15 + volatility10 + liquidity10 + regimeFit15 + portfolioFit10, plus a separate confidence
+          (data completeness + liquidity + signal agreement). Stale/insufficient data -> WAIT (never guesses).
+          DECISIONS (_albert_decisions): BUY thresholds by regime (BULL 72/RANGE 78/BEAR 85); regime deploy ceiling
+          (BULL 60%/RANGE 35%/BEAR 15% of deployable). Mandate HARD GATES before allocation: excluded coin / not in
+          approved whitelist / mandate incomplete => cannot BUY. Allocation across BUY candidates is score-weighted
+          (excess^2 * confidence), each capped by MIN(opportunity, allocation headroom vs max_alloc_pct, risk-sized
+          (max_trade_risk_pct / stop distance), remaining regime pool). deploy_now = 40% (Tranche 1); 3 tranches sum
+          to planned. HOLD = owned + no add; WAIT = not owned / below line / gated / stale.
+          VERIFIED by main via API + UI: regime BULL 95%; pool $22.5k (60% of $37.5k deployable); ETH BUY $3,350 now
+          / $8,376 planned; BTC BUY $1,218/$3,046; XRP/SOL score 96/95 correctly WAIT (whitelist=BTC,ETH); tranche
+          sums exact; totalDeployNow <= deployable; protected reserve never touched. UI: regime banner + Albert's Call
+          + decisions table with expandable why / score breakdown / invalidation / tranches. Advisory/paper only.
+          KNOWN GAP (next slice): SELL triggers (profit-take/risk/thesis-invalidation/rebalance/emergency) not yet
+          emitted — engine currently returns BUY/HOLD/WAIT; sellReason enum + SELL logic is the next phase.
+
   - task: "Albert's Plan Phase A+B — Trading Mandate + Portfolio/USDC engine (Milestone 1-3)"
     implemented: true
     working: true
