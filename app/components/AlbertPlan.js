@@ -3,7 +3,11 @@
 import React from 'react';
 import { API_BASE, getPid } from '../lib/api';
 import { Button } from '@/components/ui/button';
-import { ShieldCheck, Wallet, Target, Plus, Trash2, Loader2, Check, ChevronDown, Info, History, MessageCircle, ArrowRight, X, Layers, AlertTriangle } from 'lucide-react';
+import { ShieldCheck, Wallet, Target, Plus, Trash2, Loader2, Check, ChevronDown, Info, History, MessageCircle, ArrowRight, X, Layers, AlertTriangle, Activity } from 'lucide-react';
+
+const fmtTs = (t) => { try { return t ? new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'; } catch { return t || '—'; } };
+const sellActionLabel = (a) => a === 'EXIT_100' ? 'Exit 100%' : (a && a.startsWith('TRIM_')) ? ('Trim ' + a.split('_')[1] + '%') : (a || '');
+const fracLabel = (f) => (f == null) ? '' : (f >= 1 ? 'Exit 100%' : ('Trim ' + Math.round(f * 100) + '%'));
 
 const fmt = (n) => (n == null || isNaN(n)) ? '—' : '$' + Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
 // Exact (2dp) formatter — SELL amounts must be shown to the cent, never recomputed on the client.
@@ -177,7 +181,7 @@ function RegimeBanner({ reg, buyThresh, pool }) {
   );
 }
 
-function ProtectionBanner({ pr }) {
+function ProtectionBanner({ pr, decisions }) {
   // Phase G: portfolio-level drawdown circuit breaker. When active this visually
   // outranks regime/opportunity info. Values are read straight from the engine
   // snapshot — never recomputed on the client.
@@ -186,6 +190,7 @@ function ProtectionBanner({ pr }) {
   const max = pr.maxDrawdownPct != null ? Number(pr.maxDrawdownPct).toFixed(1) : '—';
   const rec = pr.recoveryThresholdPct != null ? Number(pr.recoveryThresholdPct).toFixed(1) : '—';
   const cuts = Object.entries(pr.reductions || {});
+  const decFor = (sym) => (decisions || []).find((x) => x.symbol === sym);
   return (
     <div className="mb-2 overflow-hidden rounded-xl border-2 border-rose-500/60 bg-gradient-to-b from-rose-500/[0.14] to-rose-950/30">
       <div className="flex items-start gap-2.5 p-3">
@@ -208,15 +213,153 @@ function ProtectionBanner({ pr }) {
           </div>
           {cuts.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1.5">
-              {cuts.map(([sym, c]) => (
-                <span key={sym} className="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-950/40 px-2 py-0.5 text-[10px] text-rose-100" title={`basis: ${c.reductionBasis}`}>
-                  <span className="font-bold">{sym}</span>
-                  <span className="text-rose-300">reduce {Math.round((c.fraction || 0) * 100)}%</span>
-                </span>
-              ))}
+              {cuts.map(([sym, c]) => {
+                const dec = decFor(sym);
+                const applied = dec && dec.action === 'SELL' && dec.sellPlan ? { label: sellActionLabel(dec.sellPlan.action), reason: dec.reasonCode } : null;
+                const proposal = fracLabel(c.fraction);
+                if (applied && applied.reason && applied.reason !== 'PORTFOLIO_DRAWDOWN_RISK') {
+                  return (
+                    <span key={sym} className="inline-flex items-center gap-1 rounded-full border border-amber-500/50 bg-amber-950/30 px-2 py-0.5 text-[10px] text-amber-100" title={`basis: ${c.reductionBasis}`}>
+                      <span className="font-bold">{sym}</span>
+                      <span className="text-slate-400 line-through">{proposal}</span>
+                      <ArrowRight className="h-3 w-3 text-amber-300" />
+                      <span className="font-semibold text-amber-200">{applied.label}</span>
+                      <span className="text-amber-300/80">({REASON_LABEL[applied.reason] || applied.reason} overrides)</span>
+                    </span>
+                  );
+                }
+                return (
+                  <span key={sym} className="inline-flex items-center gap-1 rounded-full border border-rose-500/40 bg-rose-950/40 px-2 py-0.5 text-[10px] text-rose-100" title={`basis: ${c.reductionBasis}`}>
+                    <span className="font-bold">{sym}</span>
+                    <span className="text-rose-300">{applied ? applied.label : proposal}</span>
+                  </span>
+                );
+              })}
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function RecoveryLedgerStrip({ led }) {
+  // Phase H: compact drawdown recovery journey (bundled with lifecycle/audit). Shows
+  // while a protection episode exists (active OR recently lifted). Values from engine.
+  if (!led) return null;
+  const lifted = led.lifted;
+  return (
+    <div className="mb-2 rounded-xl border border-slate-800 bg-slate-950/50 p-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-400"><Activity className="h-3 w-3" />Drawdown recovery journey</p>
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${lifted ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'}`}>{lifted ? 'PROTECTION LIFTED' : `${led.ppUntilLift} pp until lift`}</span>
+      </div>
+      <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] sm:grid-cols-4">
+        <div><span className="text-slate-500">High-water</span><div className="font-semibold text-white">{fmt(led.highWaterMarkUsd)}</div></div>
+        <div><span className="text-slate-500">Breach</span><div className="font-semibold text-rose-300">{fmt(led.breachValueUsd)}{led.breachDrawdownPct != null ? ` (-${led.breachDrawdownPct}%)` : ''}</div></div>
+        <div><span className="text-slate-500">Current</span><div className="font-semibold text-white">{fmt(led.currentValueUsd)}{led.currentDrawdownPct != null ? ` (-${led.currentDrawdownPct}%)` : ''}</div></div>
+        <div><span className="text-slate-500">Recovery line</span><div className="font-semibold text-emerald-300">{fmt(led.recoveryLineUsd)}{led.recoveryThresholdPct != null ? ` (-${led.recoveryThresholdPct}%)` : ''}</div></div>
+      </div>
+    </div>
+  );
+}
+
+const STAGE_COLOR = {
+  WAIT: 'bg-slate-700/40 text-slate-300 border-slate-600',
+  BUY: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+  ADD: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+  HOLD: 'bg-sky-500/15 text-sky-300 border-sky-500/40',
+  TRIM: 'bg-amber-500/15 text-amber-300 border-amber-500/40',
+  SELL: 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+};
+
+function JourneyNode({ ev, isLast }) {
+  const [open, setOpen] = React.useState(false);
+  const orders = ev.orders || [];
+  return (
+    <div className="relative pl-6">
+      {!isLast && <div className="absolute left-[9px] top-7 h-[calc(100%-1rem)] w-px bg-slate-700" />}
+      <div className={`absolute left-1 top-2 h-3.5 w-3.5 rounded-full border-2 ${ev.portfolioRiskIntervention ? 'border-rose-500 bg-rose-900' : 'border-slate-600 bg-slate-900'}`} />
+      <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between gap-2 py-1.5 text-left">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${STAGE_COLOR[ev.stage] || STAGE_COLOR.WAIT}`}>{ev.stage}</span>
+          <span className="text-[12px] font-semibold text-white">{ev.label}</span>
+          {ev.portfolioRiskIntervention && <span className="rounded-full border border-rose-500/40 px-1.5 py-0.5 text-[9px] text-rose-300">drawdown</span>}
+          {ev.hasExecution ? <span className="rounded-full border border-emerald-500/40 px-1.5 py-0.5 text-[9px] text-emerald-300">filled</span> : null}
+        </div>
+        <span className="shrink-0 text-[10px] text-slate-500">{fmtTs(ev.timestamp)}</span>
+      </button>
+      {open && (
+        <div className="mb-2 space-y-2 rounded-lg border border-slate-800 bg-slate-950/50 p-2.5 text-[11px]">
+          <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-slate-400">
+            <span>Regime <b className="text-slate-200">{ev.regime || '—'}</b></span>
+            <span>Score <b className="text-slate-200">{ev.score ?? '—'}</b></span>
+            <span>Conf <b className="text-slate-200">{ev.confidence != null ? ev.confidence + '%' : '—'}</b></span>
+            {ev.previousCall && <span>{ev.previousCall} <ArrowRight className="inline h-3 w-3" /> <b className="text-slate-200">{ev.call}</b></span>}
+          </div>
+          {ev.reasonCode && <p className="text-slate-300">Reason: <span className="text-slate-200">{REASON_LABEL[ev.reasonCode] || ev.reasonCode}</span></p>}
+          {(ev.changeReason && ev.changeReason.length > 0) && <p className="text-slate-500">Changed because: {ev.changeReason.join('; ')}.</p>}
+          {ev.portfolioRiskNote && <p className="text-rose-300">⚠ {ev.portfolioRiskNote}</p>}
+          <div className="rounded border border-slate-800 bg-slate-900/40 p-2">
+            <p className="mb-0.5 text-[9px] uppercase tracking-wide text-violet-300">Decision (recommended)</p>
+            <p className="text-slate-300">Δ {ev.recommendedDeltaUsd != null ? fmtX(ev.recommendedDeltaUsd) : '—'}
+              {ev.positionBefore && ev.positionAfter && <span className="text-slate-500"> · position {fmtX(ev.positionBefore.valueUsd)} ({ev.positionBefore.pct}%) <ArrowRight className="inline h-3 w-3" /> {fmtX(ev.positionAfter.valueUsd)} ({ev.positionAfter.pct}%)</span>}</p>
+          </div>
+          <div className="rounded border border-slate-800 bg-slate-900/40 p-2">
+            <p className="mb-0.5 text-[9px] uppercase tracking-wide text-sky-300">Execution (paper order)</p>
+            {orders.length === 0 ? <p className="text-slate-500">No paper order created for this decision.</p> : orders.map((o) => (
+              <div key={o.orderIntentId} className="text-slate-300">
+                <span className={`font-semibold ${OSTATE_COLOR[o.state] || 'text-slate-300'}`}>{o.state}</span> · {o.side} {fmtX(o.amountUsd)}
+                {o.fills && o.fills.length > 0 ? <span className="text-emerald-300"> · {o.fills.length} fill{o.fills.length > 1 ? 's' : ''} ({o.fills.map((f) => qty(f.quantity) + '@' + fmtX(f.price)).join(', ')})</span> : <span className="text-slate-500"> · no fill</span>}
+              </div>
+            ))}
+          </div>
+          <div className="rounded border border-slate-800 bg-slate-900/40 p-2">
+            <p className="mb-0.5 text-[9px] uppercase tracking-wide text-emerald-300">Portfolio effect (paper exposure)</p>
+            <p className="text-slate-300">Paper position at this point: <b className="text-white">{qty(ev.paperPositionSizeAtDecision)}</b> units</p>
+          </div>
+          {(ev.flipConditions && ev.flipConditions.length > 0) && (
+            <div><p className="mb-0.5 flex items-center gap-1 text-[9px] uppercase text-slate-500"><Info className="h-3 w-3" />What would change this</p><FlipConditions items={ev.flipConditions} /></div>
+          )}
+          <p className="text-[9px] text-slate-600">snapshot {String(ev.snapshotId || '').slice(0, 8)} · engine {ev.engineVersion} · hash {String(ev.decisionInputsHash || '').slice(0, 10)}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function JourneyModal({ asset, onClose }) {
+  const [lc, setLc] = React.useState(null);
+  const [err, setErr] = React.useState('');
+  React.useEffect(() => {
+    const pid = getPid();
+    fetch(`${API_BASE}/v1/albert/lifecycle/${encodeURIComponent(asset)}?pid=${encodeURIComponent(pid)}`, { cache: 'no-store' })
+      .then((r) => r.json()).then(setLc).catch(() => setErr('Could not load journey'));
+  }, [asset]);
+  const events = lc?.events || [];
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-slate-700 bg-slate-900 p-4" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-2 flex items-center justify-between">
+          <h4 className="flex items-center gap-2 text-sm font-bold text-white"><Activity className="h-4 w-4 text-sky-300" />{asset} — Decision Journey</h4>
+          <button onClick={onClose} className="text-slate-400 hover:text-white"><X className="h-4 w-4" /></button>
+        </div>
+        {!lc && !err && <div className="flex items-center gap-2 py-6 text-[12px] text-slate-400"><Loader2 className="h-3.5 w-3.5 animate-spin" />Loading journey…</div>}
+        {err && <p className="py-6 text-center text-[12px] text-rose-400">{err}</p>}
+        {lc && lc.status === 'empty' && <p className="py-6 text-center text-[12px] text-slate-500">No decision history yet for {asset}. The journey builds as Albert&apos;s calls change over time.</p>}
+        {lc && lc.status === 'ready' && (
+          <>
+            <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-slate-800 bg-slate-950/50 p-2.5 text-[11px]">
+              <span className="text-slate-500">Current paper exposure</span>
+              <b className={lc.currentPaperPositionSize > 0 ? 'text-emerald-300' : 'text-slate-400'}>{qty(lc.currentPaperPositionSize)} units</b>
+              <span className="text-slate-600">· {lc.eventCount} decision{lc.eventCount === 1 ? '' : 's'} · engine {lc.currentEngineVersion}</span>
+            </div>
+            <div className="space-y-0">
+              {events.map((ev, i) => <JourneyNode key={ev.eventId || i} ev={ev} isLast={i === events.length - 1} />)}
+            </div>
+            <p className="mt-3 text-[10px] text-slate-600">Read-only replay of frozen snapshots — each node shows its original engine version. History is never recomputed. Decision / Execution / Portfolio effect are shown separately.</p>
+          </>
+        )}
       </div>
     </div>
   );
@@ -410,6 +553,8 @@ export default function AlbertPlan() {
   const [explainFor, setExplainFor] = React.useState(null);
   const [historyFor, setHistoryFor] = React.useState(null);
   const [orderFor, setOrderFor] = React.useState(null);
+  const [journeyFor, setJourneyFor] = React.useState(null);
+  const [tradedAssets, setTradedAssets] = React.useState([]);
   const [openMandate, setOpenMandate] = React.useState(false);
   const [openPortfolio, setOpenPortfolio] = React.useState(false);
   const [savingM, setSavingM] = React.useState(false);
@@ -429,6 +574,7 @@ export default function AlbertPlan() {
       setUsdc(pr.usdc != null ? String(pr.usdc) : '');
       setPositions((pr.positions || []).map((p) => ({ asset: p.asset || '', size: p.size ?? '', avg_entry: p.avg_entry ?? '' })));
       fetch(`${API_BASE}/v1/albert/decisions?pid=${encodeURIComponent(pid)}`, { cache: 'no-store' }).then((r) => r.json()).then(setDecisions).catch(() => {});
+      fetch(`${API_BASE}/v1/albert/lifecycle-assets?pid=${encodeURIComponent(pid)}`, { cache: 'no-store' }).then((r) => r.json()).then((j) => setTradedAssets(j.assets || [])).catch(() => {});
     } catch (e) { /* noop */ }
   }, []);
   React.useEffect(() => { load(); }, [load]);
@@ -483,7 +629,8 @@ export default function AlbertPlan() {
 
       {complete && decisions && decisions.regime && (
         <div className="mt-3">
-          <ProtectionBanner pr={decisions.portfolioRisk} />
+          <ProtectionBanner pr={decisions.portfolioRisk} decisions={decisions.decisions} />
+          <RecoveryLedgerStrip led={decisions.portfolioRisk?.recoveryLedger} />
           <RegimeBanner reg={decisions.regime} buyThresh={decisions.buyThreshold} pool={decisions.regimeDeployCeiling} />
           <div className="mt-2 rounded-xl border border-violet-500/25 bg-violet-500/[0.06] p-3">
             <p className="text-[10px] uppercase tracking-wide text-violet-300">Albert&apos;s call</p>
@@ -545,6 +692,7 @@ export default function AlbertPlan() {
                           )}
                           <button onClick={() => setExplainFor(d)} className="inline-flex items-center gap-1 rounded-full border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-[11px] font-semibold text-violet-200 hover:bg-violet-500/20"><MessageCircle className="h-3 w-3" />Ask Albert about this call</button>
                           <button onClick={() => setHistoryFor(d.symbol)} className="inline-flex items-center gap-1 rounded-full border border-slate-700 px-2.5 py-1 text-[11px] text-slate-300 hover:bg-slate-800"><History className="h-3 w-3" />History</button>
+                          <button onClick={() => setJourneyFor(d.symbol)} className="inline-flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/20"><Activity className="h-3 w-3" />View journey</button>
                         </div>
                       </td></tr>
                     )}
@@ -554,6 +702,19 @@ export default function AlbertPlan() {
             </table>
           </div>
           <p className="mt-1.5 text-[10px] text-slate-600">Deterministic engine {decisions.engineVersion} · advisory / paper only · Albert explains these calls, he doesn&apos;t change them.</p>
+          {(() => {
+            const shown = new Set((decisions.decisions || []).map((d) => d.symbol));
+            const extra = (tradedAssets || []).filter((a) => !shown.has(a));
+            if (extra.length === 0) return null;
+            return (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <span className="text-[10px] uppercase tracking-wide text-slate-500">Past journeys:</span>
+                {extra.map((a) => (
+                  <button key={a} onClick={() => setJourneyFor(a)} className="inline-flex items-center gap-1 rounded-full border border-slate-700 px-2 py-0.5 text-[10px] text-slate-300 hover:bg-slate-800"><Activity className="h-3 w-3" />{a}</button>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       )}
 
@@ -623,6 +784,7 @@ export default function AlbertPlan() {
       {explainFor && <ExplainModal decision={explainFor} onClose={() => setExplainFor(null)} />}
       {historyFor && <HistoryDrawer asset={historyFor} onClose={() => setHistoryFor(null)} />}
       {orderFor && <PaperOrderModal decision={orderFor} onClose={() => setOrderFor(null)} onChanged={load} />}
+      {journeyFor && <JourneyModal asset={journeyFor} onClose={() => setJourneyFor(null)} />}
     </div>
   );
 }

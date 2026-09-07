@@ -49,6 +49,9 @@ def evaluate(pid, current_value, max_drawdown_pct):
     protection = bool(state.get('protectionMode') or False)
     activated_at = state.get('protectionActivatedAt')
     breach_hwm = state.get('breachHwmUsd')
+    breach_value = state.get('breachValueUsd')
+    breach_dd = state.get('breachDrawdownPct')
+    last_episode = state.get('lastEpisode')
 
     cv = float(current_value or 0.0)
     # Flow-adjusted value: subtract net external inflows so deposits don't mint a
@@ -73,16 +76,26 @@ def evaluate(pid, current_value, max_drawdown_pct):
                 protection = True
                 activated_at = _now()
                 breach_hwm = round(hwm, 2)
+                breach_value = round(effective_cv, 2)   # value at the moment protection engaged
+                breach_dd = drawdown_pct
         else:
             # Remain protected until drawdown recovers to/under the recovery threshold.
             if drawdown_pct <= recovery_threshold:
+                # Protection lifts: retain the episode so a "recently lifted" ledger can render.
+                last_episode = {'highWaterMarkUsd': breach_hwm, 'breachValueUsd': breach_value,
+                                'breachDrawdownPct': breach_dd, 'activatedAt': activated_at,
+                                'liftedAt': _now(), 'liftedDrawdownPct': drawdown_pct}
                 protection = False
                 activated_at = None
                 breach_hwm = None
+                breach_value = None
+                breach_dd = None
     else:
         protection = False
         activated_at = None
         breach_hwm = None
+        breach_value = None
+        breach_dd = None
 
     doc = {'_id': pid, 'pid': pid,
            'highWaterMarkUsd': round(hwm, 2),
@@ -90,10 +103,19 @@ def evaluate(pid, current_value, max_drawdown_pct):
            'protectionMode': protection,
            'protectionActivatedAt': activated_at,
            'breachHwmUsd': breach_hwm,
+           'breachValueUsd': breach_value,
+           'breachDrawdownPct': breach_dd,
+           'lastEpisode': last_episode,
            'recoveryThresholdPct': recovery_threshold,
            'maxDrawdownPct': max_dd,
            'updatedAt': _now()}
     portfolio_risk_col.update_one({'_id': pid}, {'$set': doc}, upsert=True)
+
+    recovery_ledger = _build_recovery_ledger(
+        hwm=round(hwm, 2), current_value=round(cv, 2), current_dd=drawdown_pct,
+        recovery_threshold=recovery_threshold, protection=protection,
+        breach_value=breach_value, breach_dd=breach_dd, activated_at=activated_at,
+        last_episode=last_episode)
 
     return {
         'highWaterMarkUsd': round(hwm, 2),
@@ -107,4 +129,45 @@ def evaluate(pid, current_value, max_drawdown_pct):
         'protectionMode': bool(protection),
         'protectionActivatedAt': activated_at,
         'breachHwmUsd': breach_hwm,
+        'breachValueUsd': breach_value,
+        'breachDrawdownPct': breach_dd,
+        'recoveryLedger': recovery_ledger,
     }
+
+
+def _build_recovery_ledger(*, hwm, current_value, current_dd, recovery_threshold,
+                           protection, breach_value, breach_dd, activated_at, last_episode):
+    """Compact drawdown journey for the UI. Returns None when there has never been a
+    protection episode. recoveryLineUsd is the value at which protection would lift."""
+    if recovery_threshold is None:
+        return None
+    if not protection and not last_episode:
+        return None
+    recovery_line = round(hwm * (1.0 - recovery_threshold / 100.0), 2) if hwm else None
+    led = {
+        'highWaterMarkUsd': hwm,
+        'currentValueUsd': current_value,
+        'currentDrawdownPct': current_dd,
+        'recoveryThresholdPct': recovery_threshold,
+        'recoveryLineUsd': recovery_line,
+        'protectionMode': bool(protection),
+    }
+    if protection:
+        led.update({
+            'lifted': False,
+            'breachValueUsd': breach_value,
+            'breachDrawdownPct': breach_dd,
+            'breachAt': activated_at,
+            'ppUntilLift': round(max(0.0, current_dd - recovery_threshold), 2),
+        })
+    else:
+        ep = last_episode or {}
+        led.update({
+            'lifted': True,
+            'breachValueUsd': ep.get('breachValueUsd'),
+            'breachDrawdownPct': ep.get('breachDrawdownPct'),
+            'breachAt': ep.get('activatedAt'),
+            'liftedAt': ep.get('liftedAt'),
+            'ppUntilLift': 0.0,
+        })
+    return led

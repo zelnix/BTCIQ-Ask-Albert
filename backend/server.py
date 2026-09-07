@@ -7725,6 +7725,7 @@ from albert.engine import scoring as _albert_scoring_mod  # noqa: E402
 from albert.engine import decision as _albert_decision_mod  # noqa: E402
 from albert.repositories import decision_history as _decision_history_repo  # noqa: E402
 from albert.repositories import portfolio_risk as _portfolio_risk_repo  # noqa: E402
+from albert.repositories import lifecycle as _lifecycle_repo  # noqa: E402
 from albert.execution import manager as _order_mgr  # noqa: E402
 from albert.execution import ledger as _paper_ledger  # noqa: E402
 from albert.engine.constants import (  # noqa: E402,F401
@@ -7963,6 +7964,33 @@ def albert_portfolio_risk(pid: str = ''):
     pr = _portfolio_risk_repo.evaluate(pid, summary.get('total_value'), mandate.get('max_drawdown_pct'))
     pr['triggeredAt'] = pr.get('protectionActivatedAt')
     return {'status': 'ready', 'portfolioRisk': pr}
+
+
+@app.get('/api/v1/albert/lifecycle-assets')
+def albert_lifecycle_assets(pid: str = ''):
+    """Phase H: assets that have a stored decision journey (snapshots/history/fills),
+    whether currently held or only historically traded. Powers the 'View Journey' entry."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    from config import decision_snapshots_col as _dsc, order_ledger_col as _olc
+    assets = set()
+    try:
+        assets |= set(_dsc.distinct('asset', {'pid': pid}))
+        assets |= set(_olc.distinct('asset', {'pid': pid}))
+    except Exception:  # noqa
+        pass
+    return {'status': 'ready', 'assets': sorted(a for a in assets if a)}
+
+
+@app.get('/api/v1/albert/lifecycle/{asset}')
+def albert_lifecycle(asset: str, pid: str = ''):
+    """Phase H: read-only per-asset lifecycle replay assembled from frozen snapshots,
+    history, paper orders and fills. Never recomputes historical decisions."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    return _lifecycle_repo.build_lifecycle(pid, asset)
 
 
 EXPLAIN_ORDER_SYSTEM = (
