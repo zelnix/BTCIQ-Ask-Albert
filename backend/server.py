@@ -10236,6 +10236,69 @@ def albert_basket_list(pid: str = ''):
             'history': [b for b in baskets if b['status'] != 'active']}
 
 
+@app.get('/api/v1/albert/strategy/briefing')
+def albert_strategy_briefing(pid: str = ''):
+    """Deterministic 'how are my strategies playing out' summary for the Morning Brief:
+    each active basket's live P&L + best/worst leg, plus rule-based ACTIONS / WATCH-OUTS
+    (stops/targets hit, concentration, big draw-down/run-up, past horizon, sector cooling)."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'status': 'ready', 'hasStrategies': False, 'activeCount': 0, 'strategies': [], 'actions': []}
+    try:
+        rows = list(strategies_col.find({'kind': 'basket', 'owner': pid, 'status': 'active'}, {'_id': 0}).sort('created_at', -1).limit(20))
+    except Exception:  # noqa
+        rows = []
+    strategies, actions = [], []
+    total_usd, pnl_pcts = 0.0, []
+    for r in rows:
+        pub = _basket_public(r)
+        perf = pub.get('perf') or {}
+        legs = perf.get('legs') or []
+        title = pub.get('title') or 'Untitled strategy'
+        sid = pub.get('id')
+        pnl_pct = perf.get('total_pnl_pct') or 0.0
+        pnl_usd = perf.get('total_pnl_usd') or 0.0
+        days = perf.get('days_active') or 0
+        horizon = pub.get('horizon_days')
+        total_usd += pnl_usd
+        pnl_pcts.append(pnl_pct)
+        best = max(legs, key=lambda l: l.get('pnl_pct', 0)) if legs else None
+        worst = min(legs, key=lambda l: l.get('pnl_pct', 0)) if legs else None
+        strategies.append({'id': sid, 'title': title, 'pnlPct': pnl_pct, 'pnlUsd': pnl_usd,
+                           'daysActive': days, 'horizonDays': horizon, 'legCount': len(legs),
+                           'best': ({'symbol': best['symbol'], 'pnlPct': best['pnl_pct']} if best else None),
+                           'worst': ({'symbol': worst['symbol'], 'pnlPct': worst['pnl_pct']} if worst else None)})
+        for l in legs:
+            sym = l.get('symbol')
+            if l.get('stop') and l['stop'].get('hit'):
+                actions.append({'level': 'action', 'strategyId': sid, 'symbol': sym,
+                                'text': f'Stop level hit on {sym} in "{title}" — review the exit.'})
+            if any(t.get('hit') for t in (l.get('targets') or [])):
+                actions.append({'level': 'action', 'strategyId': sid, 'symbol': sym,
+                                'text': f'{sym} hit a target in "{title}" — consider taking some profit.'})
+            if (l.get('weight_pct') or 0) >= 50 and len(legs) > 1:
+                actions.append({'level': 'watch', 'strategyId': sid, 'symbol': sym,
+                                'text': f'{sym} is {round(l["weight_pct"])}% of "{title}" — concentration risk.'})
+        if pnl_pct <= -10:
+            actions.append({'level': 'watch', 'strategyId': sid,
+                            'text': f'"{title}" is down {abs(round(pnl_pct, 1))}% — review the thesis or rebalance.'})
+        elif pnl_pct >= 15:
+            actions.append({'level': 'watch', 'strategyId': sid,
+                            'text': f'"{title}" is up {round(pnl_pct, 1)}% — consider locking in some gains.'})
+        if horizon and days and days > horizon:
+            actions.append({'level': 'watch', 'strategyId': sid,
+                            'text': f'"{title}" is past its {horizon}-day horizon — time to decide.'})
+        rot = pub.get('rotation') or []
+        if rot and rot[0].get('strength') is not None and rot[0]['strength'] < 0:
+            actions.append({'level': 'watch', 'strategyId': sid,
+                            'text': f'Momentum is cooling across {rot[0]["sector"]} — watch "{title}".'})
+    actions.sort(key=lambda a: 0 if a['level'] == 'action' else 1)
+    avg_pct = round(sum(pnl_pcts) / len(pnl_pcts), 2) if pnl_pcts else 0.0
+    return {'status': 'ready', 'hasStrategies': bool(strategies), 'activeCount': len(strategies),
+            'totalPnlUsd': round(total_usd, 2), 'avgPnlPct': avg_pct,
+            'strategies': strategies[:6], 'actions': actions[:6]}
+
+
 @app.post('/api/v1/albert/strategy/basket/{bid}/close')
 def albert_basket_close(bid: str, payload: dict = Body(default={})):
     strat = strategies_col.find_one({'id': bid, 'kind': 'basket'}, {'_id': 0})

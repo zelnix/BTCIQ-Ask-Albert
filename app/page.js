@@ -25,6 +25,7 @@ import { useFetch } from './lib/useFetch';
 import FloatingAlbert from './components/FloatingAlbert';
 import WelcomeBrief from './components/WelcomeBrief';
 import PublishStamp from './components/PublishStamp';
+import StrategiesBriefing from './components/StrategiesBriefing';
 import AlbertText from './components/AlbertText';
 import HomePage from './components/HomePage';
 import { fetchMe, logout as authLogout, rememberUser } from './lib/auth';
@@ -2015,26 +2016,31 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
             </div>
           </div>
           <div>
-            <div className="overflow-hidden rounded-xl border border-slate-800">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-950/60 text-[11px] uppercase tracking-wider text-slate-500">
-                  <tr><th className="px-3 py-2 text-left font-medium">Focus area</th><th className="px-3 py-2 text-right font-medium">Score</th></tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/70">
-                  {comps.map((c) => (
-                    <tr key={c.name} className="cursor-pointer hover:bg-slate-800/30" onClick={() => onNav(c.name === 'News Flow' ? 'news' : c.name === 'Macro / Policy' ? 'macro' : 'market-intel')}>
-                      <td className="px-3 py-2"><p className="font-medium text-slate-200">{c.name}</p><p className="text-[11px] text-slate-500">{compAssess[c.name] || ''}</p></td>
-                      <td className="px-3 py-2 text-right font-mono font-bold" style={{ color: scoreColor(c.score) }}>{c.score}<span className="text-[10px] text-slate-600"> · {c.weight}%</span></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <StrategiesBriefing onNav={onNav} />
             <div className="mt-3 grid grid-cols-3 gap-2 text-center">
               <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.06] p-2"><p className="text-[10px] uppercase text-slate-500">Support</p><p className="text-sm font-bold text-emerald-300">{bear ? `$${bear.trigger_level.toLocaleString()}` : '—'}</p></div>
               <div className="rounded-lg border border-red-500/25 bg-red-500/[0.06] p-2"><p className="text-[10px] uppercase text-slate-500">Resistance</p><p className="text-sm font-bold text-red-300">{bull ? `$${bull.trigger_level.toLocaleString()}` : '—'}</p></div>
               <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] p-2"><p className="text-[10px] uppercase text-slate-500">Invalidation</p><p className="text-sm font-bold text-amber-300">{bear ? `$${bear.target_level.toLocaleString()}` : '—'}</p></div>
             </div>
+          </div>
+        </div>
+        {/* Focus area — moved below to make way for the strategies briefing */}
+        <div className="mt-5">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Focus area</p>
+          <div className="overflow-hidden rounded-xl border border-slate-800">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-950/60 text-[11px] uppercase tracking-wider text-slate-500">
+                <tr><th className="px-3 py-2 text-left font-medium">Focus area</th><th className="px-3 py-2 text-right font-medium">Score</th></tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/70">
+                {comps.map((c) => (
+                  <tr key={c.name} className="cursor-pointer hover:bg-slate-800/30" onClick={() => onNav(c.name === 'News Flow' ? 'news' : c.name === 'Macro / Policy' ? 'macro' : 'market-intel')}>
+                    <td className="px-3 py-2"><p className="font-medium text-slate-200">{c.name}</p><p className="text-[11px] text-slate-500">{compAssess[c.name] || ''}</p></td>
+                    <td className="px-3 py-2 text-right font-mono font-bold" style={{ color: scoreColor(c.score) }}>{c.score}<span className="text-[10px] text-slate-600"> · {c.weight}%</span></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </Card>
@@ -2819,7 +2825,7 @@ function SettingsSection({ onManualRun }) {
         <h3 className="mb-2 font-semibold text-white">About & compliance</h3>
         <p className="text-xs leading-relaxed text-slate-400">Ask Albert — Bitcoin Market Analysis, powered by CryptoCentAI, our Bitcoin-Centred Intelligence Engine. CryptoMarkAI measures the market and produces probability-based forecasts. Albert is Ask Albert’s HuCentAI Quant Analyst.</p>
         <p className="mt-3 text-[11px] leading-relaxed text-slate-500">Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes. Albert is an original fictional Ask Albert HuCentAI Quant character and does not represent any real or other fictional person or character.</p>
-        <a href="https://btciq.app" target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300"><Globe className="h-3 w-3" />btciq.app</a>
+        <a href="https://askalbert.app" target="_blank" rel="noopener noreferrer" className="mt-3 inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300"><Globe className="h-3 w-3" />askalbert.app</a>
       </Card>
     </div>
   );
@@ -3584,8 +3590,8 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between"><span className="text-[10px] uppercase text-slate-500">Quant Score</span><span className="text-[10px] text-slate-500">{d.data_source}</span></div>
             <div className="mt-1 flex items-center gap-2"><span className="text-2xl font-black" style={{ color: scoreColor(d.quant_score) }}>{d.quant_score}</span><span className="text-xs text-slate-400">{d.quant_label}</span></div>
           </div>
-          <a href="https://btciq.app" target="_blank" rel="noopener noreferrer" className="mt-3 flex items-center justify-center gap-1 text-[11px] font-semibold text-slate-500 transition-colors hover:text-sky-300">
-            <Globe className="h-3 w-3" />btciq.app
+          <a href="https://askalbert.app" target="_blank" rel="noopener noreferrer" className="mt-3 flex items-center justify-center gap-1 text-[11px] font-semibold text-slate-500 transition-colors hover:text-sky-300">
+            <Globe className="h-3 w-3" />askalbert.app
           </a>
         </aside>
 
