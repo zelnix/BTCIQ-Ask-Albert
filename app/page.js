@@ -3732,7 +3732,9 @@ function EnvBadge() {
   const [env, setEnv] = useState(null); // null on first render (avoid SSR mismatch)
   useEffect(() => {
     const host = (typeof window !== 'undefined' && window.location.hostname) || '';
-    const isProd = /(^|\.)btciq\.app$/i.test(host);
+    // Production = the live custom domain(s). Everything else (emergent preview URLs,
+    // localhost) is treated as preview.
+    const isProd = /(^|\.)(askalbert|btciq)\.app$/i.test(host);
     setEnv(isProd ? 'production' : 'preview');
   }, []);
   if (!env) return null;
