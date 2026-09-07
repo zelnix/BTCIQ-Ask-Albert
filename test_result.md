@@ -10799,6 +10799,14 @@ frontend:
           retry / reload. Re-verified with a fresh authenticated session: the modal now renders the full brief immediately
           (greeting + character line + portfolio snapshot + 1 BUY / 3 SELL calls + CTAs). Feature complete.
         -working: true
+        -agent: "main"
+        -comment: |
+          ENHANCEMENT: added a small "Brief" button (Sparkles icon) to the top header next to Report/Retrain that re-opens
+          today's Welcome Brief on demand (setWelcomeOpen(true)), independent of the once-per-session auto-show guard. The
+          re-opened modal serves from the ~5min per-pid server cache (instant when warm; shows the loading state then
+          populates if the cache expired). VERIFIED by main via authenticated Playwright — the header Brief button re-opens
+          the modal correctly.
+        -working: true
         -agent: "testing"
         -comment: |
           ✅ PASSED comprehensive Welcome Brief UI testing via external URL (https://quant-features.preview.emergentagent.com).

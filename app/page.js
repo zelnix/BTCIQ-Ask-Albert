@@ -3609,6 +3609,10 @@ export default function DashboardPage() {
               <span className={`text-sm font-semibold ${(ticker?.change24h ?? d.day_change_pct) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ticker?.change24h ?? d.day_change_pct}%</span>
             </div>
             <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => setActive('alerts')} onOpenBrief={(sym) => { const s = (sym || 'BTC').toUpperCase(); if (s !== symbol) setSymbol(s); setActive('briefing'); }} />
+            <Button onClick={() => setWelcomeOpen(true)} size="sm" variant="outline" title="Re-open today's Welcome Brief"
+              className="gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800">
+              <Sparkles className="h-4 w-4 text-sky-300" /><span className="hidden sm:inline">Brief</span>
+            </Button>
             <Button onClick={() => setShowReport(true)} size="sm" variant="outline" title="Shareable daily report"
               className="gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800">
               <ClipboardList className="h-4 w-4" /><span className="hidden sm:inline">Report</span>
