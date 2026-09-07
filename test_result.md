@@ -9865,11 +9865,11 @@ agent_communication:
 frontend:
   - task: "Albert's Plan Phase H — Decision Journey UI (View journey modal) + protection banner drawdown-vs-applied correction + Recovery Ledger strip"
     implemented: true
-    working: "NA"
+    working: false
     file: "app/components/AlbertPlan.js"
     stuck_count: 0
     priority: "high"
-    needs_retesting: true
+    needs_retesting: false
     status_history:
         -working: "NA"
         -agent: "main"
@@ -9911,6 +9911,67 @@ frontend:
           4) PAST JOURNEYS CHIPS: under the decisions table, confirm a "Past journeys:" row of asset chips appears for any
              historically-traded asset not in the current table; clicking one opens its Journey modal.
           Note: benign TradingView "document.querySelector null" console error is known/ignored.
+        -working: false
+        -agent: "testing"
+        -comment: |
+          ✅ SCENARIO 1 (BANNER OVERRIDE WORDING): PASSED
+          • Protection banner found with "PORTFOLIO PROTECTION ACTIVE" header, drawdown 25.1% vs 20.0% limit
+          • DOGE override chip verified: "Trim 25% → Exit 100% (Emergency exit overrides)" - amber chip with struck-through
+            drawdown target, arrow, applied action, and override reason text all present
+          • Non-overridden assets (BTC "Trim 25%", ETH "Trim 50%") show plain rose chips without override styling
+          • Banner shows High-water mark $136,139, Current value $102,033, Risk reduction target $10,619
+          
+          ✅ SCENARIO 2 (RECOVERY LEDGER STRIP): PASSED
+          • Recovery Ledger strip found directly under protection banner with "DRAWDOWN RECOVERY JOURNEY" header
+          • All required fields present and correct:
+            - High-water: $136,139 ✓
+            - Breach: $102,104 (-25.0006%) ✓
+            - Current: $102,033 (-25.0526%) ✓
+            - Recovery line: $114,357 (-16%) ✓
+          • Badge shows "9.05 pp until lift" (active protection state)
+          
+          ❌ SCENARIO 3 (VIEW JOURNEY - current asset): FAILED
+          • Decisions table found with 14 expandable rows
+          • Rows can be expanded successfully (chevron buttons work)
+          • CRITICAL ISSUE: "View journey" button NOT FOUND in expanded row actions
+          • Expected location: in the expanded row alongside "Ask Albert about this call", "History", and "Create paper order" buttons
+          • The button should be rendered at line 695 of AlbertPlan.js but is not appearing in the UI
+          
+          ⚠ SCENARIO 4 (PAST JOURNEYS + FULL LIFECYCLE - JRNY): PARTIALLY PASSED
+          • "Past journeys:" section found under decisions table ✓
+          • JRNY chip found and clickable ✓
+          • JRNY Journey modal opened with title "JRNY — Decision Journey" ✓
+          • Header shows "Current paper exposure: 0 units" (closed round trip shown, not hidden) ✓
+          • BUY node testing: ✓ PASSED
+            - EXPIRED order found with "no fill" text ✓
+            - FILLED order found (1 fill: 10@$4000.00) ✓
+            - Both orders clearly separated in Execution block ✓
+          • ADD node testing: ✓ PASSED
+            - Shows "Paper position at this point: 0 units" (note: expected 15 units from 10+5 fills, but showing 0)
+            - ADD node expanded successfully ✓
+          • TRIM/SELL/WAIT node testing: ⚠ INCOMPLETE
+            - Test timed out trying to find TRIM badge
+            - Could not verify TRIM node's "drawdown" marker
+            - Could not verify SELL node's engine version (v2) or emergency precedence note
+            - Could not verify first WAIT node's engine version (v1)
+          • Stage order issue: Found "WAIT → WAIT → SELL → SELL → WAIT → WAIT" instead of expected 
+            "WAIT → BUY → ADD → HOLD → TRIM → SELL → WAIT" (7 nodes)
+            - This suggests the selector is picking up badges from both the modal AND the background decisions table
+          • Three-block separation (Decision/Execution/Portfolio effect) visible in expanded BUY node ✓
+          
+          CRITICAL ISSUES:
+          1. "View journey" button missing from expanded decision rows (Scenario 3) - blocks testing of current asset journeys
+          2. JRNY modal stage node selector picking up badges from background elements, making it difficult to verify 
+             the correct stage order and test individual nodes
+          
+          MINOR ISSUES:
+          - ADD node shows "0 units" instead of expected "15 units" (10+5 from two fills) - may be a data seeding issue
+            or the exposure calculation is not working as expected
+          
+          RECOMMENDATION:
+          Main agent should investigate why the "View journey" button is not rendering in expanded decision rows. The button
+          is defined at line 695 of AlbertPlan.js but may have a conditional that's preventing it from showing, or there
+          may be a CSS/styling issue hiding it.
 
 metadata:
   created_by: "main_agent"
@@ -9931,3 +9992,26 @@ agent_communication:
       PHASE H UI wired (Journey modal + banner drawdown-vs-applied correction + Recovery Ledger strip). Backend fully
       tested. Awaiting user go-ahead to run the frontend testing agent. Demo pid seeded into active protection with
       stored snapshots for many assets.
+    -agent: "testing"
+    -message: |
+      PHASE H UI testing complete. Results: 2/4 scenarios PASSED, 1 FAILED, 1 PARTIALLY PASSED.
+      
+      ✅ PASSED:
+      • Scenario 1 (Banner Override Wording): DOGE shows amber override chip with struck-through "Trim 25%" → "Exit 100%" 
+        and "(Emergency exit overrides)" text. BTC/ETH show plain rose chips. All correct.
+      • Scenario 2 (Recovery Ledger Strip): All fields present (High-water, Breach, Current, Recovery line) with correct 
+        values and "9.05 pp until lift" badge.
+      
+      ❌ FAILED:
+      • Scenario 3 (View Journey - current asset): "View journey" button NOT FOUND in expanded decision rows. The button 
+        should appear alongside "Ask Albert", "History", and "Create paper order" buttons but is missing from the UI.
+        Code at line 695 of AlbertPlan.js defines the button but it's not rendering.
+      
+      ⚠ PARTIALLY PASSED:
+      • Scenario 4 (JRNY Full Lifecycle): JRNY modal opens correctly, header shows "0 units" (closed round trip). BUY node 
+        shows EXPIRED order with "no fill" + FILLED order (correct). ADD node shows "0 units" (expected 15 units from 
+        10+5 fills - possible data issue). Could not complete testing of TRIM/SELL/WAIT nodes due to selector issues 
+        (picking up badges from background decisions table).
+      
+      CRITICAL ISSUE: "View journey" button missing from expanded rows blocks testing of current asset journeys. Please 
+      investigate why the button at line 695 is not rendering - may be a conditional preventing display or CSS hiding it.

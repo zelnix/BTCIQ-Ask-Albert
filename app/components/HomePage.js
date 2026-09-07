@@ -14,7 +14,7 @@ const FEATURES = [
   { icon: TrendingUp, title: 'Targeted Morning Briefs', desc: 'Albert reads the market each morning and tells you what actually matters today — not yesterday’s noise.' },
   { icon: Radar, title: 'Alert Engine & Edge Board', desc: 'Multi-detector scans across the top coins, ranked by real backtest edge, filtered for correlation and BTC strength.' },
   { icon: LineChart, title: 'Trading Strategies', desc: 'Build strategies from a chat, track simulated performance, and compare them side-by-side.' },
-  { icon: Brain, title: 'Ask Albert (Gemini)', desc: 'A character-driven AI quant that knows your engines, sectors and positions — ask him anything.' },
+  { icon: Brain, title: 'Ask Albert (Gemini)', desc: 'A character-driven hucentai quant that knows your engines, sectors and positions — ask him anything.' },
   { icon: Mic, title: 'Albert’s Voice', desc: 'Pick from a dozen voices and let Albert read the market aloud, highlighting each word as he speaks.' },
   { icon: Bell, title: 'Smart Nudges', desc: 'Perishable, deduped signals and discipline guardrails that keep you on your plan.' },
 ];
@@ -99,7 +99,7 @@ export default function HomePage({ onAuthed }) {
             Meet <span className="bg-gradient-to-r from-sky-400 to-violet-400 bg-clip-text text-transparent">Albert</span> — the market, read for you every morning
           </h1>
           <p className="mt-5 max-w-2xl text-base text-slate-300 sm:text-lg">
-            Targeted briefs, a multi-detector alert engine, backtested edge, and a character-driven AI quant
+            Targeted briefs, a multi-detector alert engine, backtested edge, and a character-driven hucentai quant
             that talks you through it — in a voice you choose.
           </p>
           <div className="mt-8 flex flex-col items-center gap-3">
