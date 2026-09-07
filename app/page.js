@@ -3687,6 +3687,7 @@ export default function DashboardPage() {
               Ask Albert provides Bitcoin market analysis, probability-based forecasts and educational information. It does not provide personalised financial advice or guarantee future outcomes.
             </p>
             <p className="text-xs text-slate-600">Ask Albert — Bitcoin Market Analysis · powered by CryptoCentAI · CryptoMarkAI forecast engine · real data via {d.data_source}</p>
+            <div className="flex justify-center"><PublishStamp /></div>
           </footer>
         </div>
       </div>
