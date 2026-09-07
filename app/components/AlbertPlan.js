@@ -243,23 +243,50 @@ function ProtectionBanner({ pr, decisions }) {
   );
 }
 
-function RecoveryLedgerStrip({ led }) {
+function RecoveryLedgerStrip({ led, timeline }) {
   // Phase H: compact drawdown recovery journey (bundled with lifecycle/audit). Shows
   // while a protection episode exists (active OR recently lifted). Values from engine.
-  if (!led) return null;
-  const lifted = led.lifted;
+  const [showPast, setShowPast] = React.useState(false);
+  const past = timeline || [];
+  if (!led && past.length === 0) return null;
+  const lifted = led && led.lifted;
   return (
     <div className="mb-2 rounded-xl border border-slate-800 bg-slate-950/50 p-2.5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-400"><Activity className="h-3 w-3" />Drawdown recovery journey</p>
-        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${lifted ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'}`}>{lifted ? 'PROTECTION LIFTED' : `${led.ppUntilLift} pp until lift`}</span>
-      </div>
-      <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] sm:grid-cols-4">
-        <div><span className="text-slate-500">High-water</span><div className="font-semibold text-white">{fmt(led.highWaterMarkUsd)}</div></div>
-        <div><span className="text-slate-500">Breach</span><div className="font-semibold text-rose-300">{fmt(led.breachValueUsd)}{led.breachDrawdownPct != null ? ` (-${led.breachDrawdownPct}%)` : ''}</div></div>
-        <div><span className="text-slate-500">Current</span><div className="font-semibold text-white">{fmt(led.currentValueUsd)}{led.currentDrawdownPct != null ? ` (-${led.currentDrawdownPct}%)` : ''}</div></div>
-        <div><span className="text-slate-500">Recovery line</span><div className="font-semibold text-emerald-300">{fmt(led.recoveryLineUsd)}{led.recoveryThresholdPct != null ? ` (-${led.recoveryThresholdPct}%)` : ''}</div></div>
-      </div>
+      {led && (
+        <>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-400"><Activity className="h-3 w-3" />Drawdown recovery journey</p>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${lifted ? 'bg-emerald-500/15 text-emerald-300' : 'bg-rose-500/15 text-rose-300'}`}>{lifted ? 'PROTECTION LIFTED' : `${led.ppUntilLift} pp until lift`}</span>
+          </div>
+          <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] sm:grid-cols-4">
+            <div><span className="text-slate-500">High-water</span><div className="font-semibold text-white">{fmt(led.highWaterMarkUsd)}</div></div>
+            <div><span className="text-slate-500">Breach</span><div className="font-semibold text-rose-300">{fmt(led.breachValueUsd)}{led.breachDrawdownPct != null ? ` (-${led.breachDrawdownPct}%)` : ''}</div></div>
+            <div><span className="text-slate-500">Current</span><div className="font-semibold text-white">{fmt(led.currentValueUsd)}{led.currentDrawdownPct != null ? ` (-${led.currentDrawdownPct}%)` : ''}</div></div>
+            <div><span className="text-slate-500">Recovery line</span><div className="font-semibold text-emerald-300">{fmt(led.recoveryLineUsd)}{led.recoveryThresholdPct != null ? ` (-${led.recoveryThresholdPct}%)` : ''}</div></div>
+          </div>
+        </>
+      )}
+      {past.length > 0 && (
+        <div className={led ? 'mt-2 border-t border-slate-800 pt-2' : ''}>
+          <button onClick={() => setShowPast(!showPast)} className="flex w-full items-center justify-between gap-2 text-left">
+            <span className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-400"><History className="h-3 w-3" />Past recoveries ({past.length})</span>
+            <ChevronDown className={`h-3.5 w-3.5 text-slate-500 transition ${showPast ? 'rotate-180' : ''}`} />
+          </button>
+          {showPast && (
+            <ul className="mt-1.5 space-y-1">
+              {past.map((ep, i) => (
+                <li key={i} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg border border-slate-800 bg-slate-900/40 px-2 py-1 text-[11px]">
+                  <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-bold text-emerald-300">RECOVERED</span>
+                  <span className="text-slate-400">Breach <b className="text-rose-300">{fmt(ep.breachValueUsd)}</b>{ep.breachDrawdownPct != null ? <span className="text-rose-300"> (-{ep.breachDrawdownPct}%)</span> : ''}</span>
+                  <ArrowRight className="h-3 w-3 text-slate-600" />
+                  <span className="text-slate-400">lifted at <b className="text-emerald-300">-{ep.liftedDrawdownPct}%</b></span>
+                  <span className="ml-auto text-[10px] text-slate-600">{fmtTs(ep.activatedAt)} → {fmtTs(ep.liftedAt)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -632,7 +659,7 @@ export default function AlbertPlan() {
       {complete && decisions && decisions.regime && (
         <div className="mt-3">
           <ProtectionBanner pr={decisions.portfolioRisk} decisions={decisions.decisions} />
-          <RecoveryLedgerStrip led={decisions.portfolioRisk?.recoveryLedger} />
+          <RecoveryLedgerStrip led={decisions.portfolioRisk?.recoveryLedger} timeline={decisions.portfolioRisk?.recoveryTimeline} />
           <RegimeBanner reg={decisions.regime} buyThresh={decisions.buyThreshold} pool={decisions.regimeDeployCeiling} />
           <div className="mt-2 rounded-xl border border-violet-500/25 bg-violet-500/[0.06] p-3">
             <p className="text-[10px] uppercase tracking-wide text-violet-300">Albert&apos;s call</p>

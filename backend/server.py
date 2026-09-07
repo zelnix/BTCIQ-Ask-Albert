@@ -8052,7 +8052,79 @@ def albert_discovery(pid: str = ''):
     return {'status': 'ready', 'stale': stale, **view}
 
 
-@app.get('/api/v1/albert/lifecycle-assets')
+# ---- Discovery Watchlist: pin/unpin discovered assets (pin != permission to buy) ----
+def _watchlist_symbols(pid):
+    from config import discovery_watchlist_col
+    return [d['symbol'] for d in discovery_watchlist_col.find({'pid': pid}).sort('pinnedAt', -1)]
+
+
+@app.get('/api/v1/albert/watchlist')
+def albert_watchlist(pid: str = ''):
+    """Discovery watchlist for this pid, enriched with the CURRENT discovery core +
+    per-pid eligibility so a pinned coin still shows its honest call. Pinning is a
+    bookmark only — an ineligible pinned coin still shows WAIT, never BUY."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    symbols = _watchlist_symbols(pid)
+    pinned_at = {}
+    try:
+        from config import discovery_watchlist_col
+        for d in discovery_watchlist_col.find({'pid': pid}):
+            pinned_at[d['symbol']] = d.get('pinnedAt')
+    except Exception:  # noqa
+        pass
+    core = _DISCOVERY_CACHE.get('core')
+    assets = []
+    if core and symbols:
+        summary = _portfolio_summary(pid)
+        mandate = _get_mandate(pid)
+        view = _discovery_mod.apply_eligibility(
+            core, held={h['asset'] for h in summary.get('holdings', [])},
+            excluded=set(mandate.get('excluded_coins') or []),
+            approved=set(mandate.get('approved_coins') or []),
+            mandate_complete=bool(summary.get('mandate_complete')))
+        by_sym = {a['symbol']: a for a in view.get('assets', [])}
+        for s in symbols:
+            a = by_sym.get(s)
+            if a:
+                a = dict(a); a['pinnedAt'] = pinned_at.get(s); a['inUniverse'] = True
+            else:
+                a = {'symbol': s, 'pinnedAt': pinned_at.get(s), 'inUniverse': False,
+                     'albertCall': 'WAIT', 'eligible': False, 'opportunityScore': None}
+            assets.append(a)
+    else:
+        assets = [{'symbol': s, 'pinnedAt': pinned_at.get(s), 'inUniverse': None,
+                   'albertCall': None, 'opportunityScore': None} for s in symbols]
+    return {'status': 'ready', 'symbols': symbols, 'assets': assets,
+            'buyThreshold': (core or {}).get('buyThreshold'), 'regime': (core or {}).get('regime'),
+            'note': 'Pinning is a bookmark — eligibility & sizing stay in the Command Centre.'}
+
+
+@app.post('/api/v1/albert/watchlist')
+def albert_watchlist_pin(payload: dict = Body(...)):
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    sym = (str(payload.get('symbol') or '')).strip().upper()[:20]
+    if not pid or not sym:
+        return {'error': 'pid and symbol required'}
+    from config import discovery_watchlist_col
+    discovery_watchlist_col.update_one(
+        {'pid': pid, 'symbol': sym},
+        {'$set': {'pid': pid, 'symbol': sym},
+         '$setOnInsert': {'pinnedAt': datetime.datetime.utcnow().isoformat()}},
+        upsert=True)
+    return {'status': 'ready', 'pinned': True, 'symbols': _watchlist_symbols(pid)}
+
+
+@app.delete('/api/v1/albert/watchlist/{symbol}')
+def albert_watchlist_unpin(symbol: str, pid: str = ''):
+    pid = (pid or '').strip()[:80]
+    sym = (symbol or '').strip().upper()[:20]
+    if not pid or not sym:
+        return {'error': 'pid and symbol required'}
+    from config import discovery_watchlist_col
+    discovery_watchlist_col.delete_one({'pid': pid, 'symbol': sym})
+    return {'status': 'ready', 'pinned': False, 'symbols': _watchlist_symbols(pid)}
 def albert_lifecycle_assets(pid: str = ''):
     """Phase H: assets that have a stored decision journey (snapshots/history/fills),
     whether currently held or only historically traded. Powers the 'View Journey' entry."""

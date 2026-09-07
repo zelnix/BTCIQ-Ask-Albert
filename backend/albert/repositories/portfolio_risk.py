@@ -52,6 +52,7 @@ def evaluate(pid, current_value, max_drawdown_pct):
     breach_value = state.get('breachValueUsd')
     breach_dd = state.get('breachDrawdownPct')
     last_episode = state.get('lastEpisode')
+    episodes = list(state.get('episodes') or [])
 
     cv = float(current_value or 0.0)
     # Flow-adjusted value: subtract net external inflows so deposits don't mint a
@@ -82,9 +83,12 @@ def evaluate(pid, current_value, max_drawdown_pct):
             # Remain protected until drawdown recovers to/under the recovery threshold.
             if drawdown_pct <= recovery_threshold:
                 # Protection lifts: retain the episode so a "recently lifted" ledger can render.
-                last_episode = {'highWaterMarkUsd': breach_hwm, 'breachValueUsd': breach_value,
-                                'breachDrawdownPct': breach_dd, 'activatedAt': activated_at,
-                                'liftedAt': _now(), 'liftedDrawdownPct': drawdown_pct}
+                episode = {'highWaterMarkUsd': breach_hwm, 'breachValueUsd': breach_value,
+                           'breachDrawdownPct': breach_dd, 'activatedAt': activated_at,
+                           'liftedAt': _now(), 'liftedDrawdownPct': drawdown_pct}
+                last_episode = episode
+                # Persist a rolling timeline (most recent last) so past recoveries stay visible.
+                episodes = (episodes + [episode])[-20:]
                 protection = False
                 activated_at = None
                 breach_hwm = None
@@ -106,6 +110,7 @@ def evaluate(pid, current_value, max_drawdown_pct):
            'breachValueUsd': breach_value,
            'breachDrawdownPct': breach_dd,
            'lastEpisode': last_episode,
+           'episodes': episodes,
            'recoveryThresholdPct': recovery_threshold,
            'maxDrawdownPct': max_dd,
            'updatedAt': _now()}
@@ -132,6 +137,7 @@ def evaluate(pid, current_value, max_drawdown_pct):
         'breachValueUsd': breach_value,
         'breachDrawdownPct': breach_dd,
         'recoveryLedger': recovery_ledger,
+        'recoveryTimeline': list(reversed(episodes)),
     }
 
 

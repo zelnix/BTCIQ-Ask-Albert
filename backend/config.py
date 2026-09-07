@@ -128,6 +128,15 @@ try:
 except Exception:  # noqa
     pass
 
+# Discovery Watchlist — assets a user has PINNED from the discovery feed. Pinning is
+# purely a bookmark: it is NOT permission to buy — mandate eligibility gates still apply.
+discovery_watchlist_col = db['albert_discovery_watchlist']
+try:
+    discovery_watchlist_col.create_index([('pid', 1), ('symbol', 1)], unique=True)
+    discovery_watchlist_col.create_index([('pid', 1), ('pinnedAt', -1)])
+except Exception:  # noqa
+    pass
+
 # Phase E constants
 ORDER_TTL_SECONDS = 300              # 5-minute TTL from intent createdAt
 DEFAULT_SLIPPAGE_BPS = 50            # 0.50% default price tolerance

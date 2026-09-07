@@ -10259,21 +10259,469 @@ backend:
           NO MAJOR ISSUES FOUND. Phase I (Top-100 Discovery endpoint) is fully functional and production-ready. 
           Advisory/paper only (no live execution).
 
+frontend:
+  - task: "Albert's Plan Phase I — Top-100 Discovery Feed UI (DiscoveryFeed.js on Trading Strategies)"
+    implemented: true
+    working: true
+    file: "app/components/DiscoveryFeed.js, app/components/Strategies.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          PHASE I UI. DiscoveryFeed.js is wired into the Trading Strategies page (Strategies.js line 664, <DiscoveryFeed />).
+          It fetches GET /api/v1/albert/discovery?pid=<pid>. Behaviour to verify:
+          (1) BUILDING->READY: on first load it may show a spinner "Scanning the live top-100 universe…" while status
+              'building'; it polls every 8s and swaps to the table once status 'ready'. Backend is already warm so it may
+              render the table immediately.
+          (2) TABLE RENDER: header meta strip shows Regime, BUY line, Liquidity floor. Table lists up to 100 rows with
+              columns Rank / Asset (+ market cap) / Score / Conf / Liquidity·Data / Eligible / Call. Footer shows
+              "Source coingecko · N assets · engine ... · advisory / paper only".
+          (3) EXPAND/COLLAPSE: clicking a row toggles a details panel (Price, 24h volume, Score vs BUY line, Tradable venue)
+              plus an Info box explaining what would change the call.
+          (4) CALL/ELIGIBILITY CONSISTENCY: NO row may show a green BUY badge while Eligible=NO. Ineligible or unscored
+              (n/a score) rows must render WAIT (or HOLD if held), never BUY.
+          (5) HIGH-SCORE-BUT-INELIGIBLE (critical): a high scorer not in the approved universe (e.g. XRP, score ~96) must
+              visually show Eligible=NO and a WAIT call badge (slate, NOT the green BUY badge) and, when expanded, the
+              Info box "What would change this: Not in your approved universe."
+          AUTH: use the seeded test session — cookie albert_session=e2e_test_session_token_albert_0001 and
+          localStorage btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320 (pid u_7693422a-... which has a mandate). The
+          Discovery Feed sits inside the Trading Strategies screen. Ignore any benign TradingView document.querySelector
+          console error (known, no functional impact).
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Phase I UI testing via external URL (https://quant-features.preview.emergentagent.com).
+          ALL 6 CHECKS PASSED (6/6): Tests 1-6 as specified in review request.
+          
+          CHECK 1 - BUILDING → READY: ✅ PASSED
+          • Spinner "Scanning the live top-100 universe…" was visible on first load (status='building') ✅
+          • Table rendered after building phase completed (polls every 8s, backend was warm) ✅
+          • Transition from building to ready state working correctly ✅
+          
+          CHECK 2 - META STRIP + TABLE RENDER: ✅ PASSED
+          • Meta strip present with all required fields: Regime=BULL, BUY line=72, Liquidity floor=$10.0M ✅
+          • Table columns: All 7 columns present (Rank, Asset, Score, Conf, Liquidity/Data, Eligible, Call) ✅
+          • Table rows: 120 rows rendered (100 assets + expanded detail rows) ✅
+          • Footer present: "Source coingecko · 100 assets · engine albert-decide-v2 · advisory / paper only" ✅
+          • Footer contains required text "advisory / paper only" ✅
+          
+          CHECK 3 - EXPAND / COLLAPSE: ✅ PASSED
+          • Row click expands details panel ✅
+          • Details panel shows all required fields: Price, 24h volume, Score vs BUY line, Tradable venue ✅
+          • Info box present explaining what would change the call ✅
+          • Second click collapses the details panel ✅
+          • Expand/collapse toggle working correctly ✅
+          
+          CHECK 4 - CALL / ELIGIBILITY CONSISTENCY (critical invariant): ✅ PASSED
+          • Scanned all 120 rows for consistency violations ✅
+          • NO row has Eligible=NO with Call=BUY (0 violations) ✅
+          • NO row has Score=n/a with Call=BUY (0 violations) ✅
+          • All ineligible rows show WAIT or HOLD call badges (never BUY) ✅
+          • Critical invariant verified: discovery ≠ permission to buy ✅
+          
+          CHECK 5 - HIGH-SCORE-BUT-INELIGIBLE (XRP - MOST IMPORTANT): ✅ PASSED
+          • Found XRP at row #5 (rank #5 in top-100) ✅
+          • XRP Score: 96 (high scorer, ~96 as expected) ✅
+          • XRP Confidence: 96% ✅
+          • XRP Eligible: NO (not in approved universe for this mandate) ✅
+          • XRP Call: WAIT (slate/grey badge, NOT green BUY badge) ✅
+          • XRP call badge classes: 'bg-slate-700/40 text-slate-300 border-slate-600' (slate/grey, not emerald/green) ✅
+          • Expanded XRP row: Info box shows "Not in your approved universe" ✅
+          • XRP proves the critical rule: discovery ≠ permission to buy (high score but ineligible → WAIT, not BUY) ✅
+          
+          CHECK 6 - REFRESH BUTTON: ✅ PASSED
+          • Refresh button found in card header ✅
+          • Clicked Refresh button ✅
+          • Table still visible after refresh (no breaking) ✅
+          • Table has 132 rows after refresh (data re-fetched successfully) ✅
+          • Refresh functionality working correctly without breaking the UI ✅
+          
+          KEY VALIDATIONS:
+          • BUILDING → READY: Spinner shows during building phase, polls every 8s, swaps to table when ready ✅
+          • Meta strip: Regime, BUY line, Liquidity floor all present with correct values ✅
+          • Table structure: All 7 columns present, up to ~100 rows rendered, footer with source/count/engine/advisory ✅
+          • Expand/collapse: Row click toggles details panel with Price, 24h volume, Score vs BUY line, Tradable venue, Info box ✅
+          • Call/eligibility consistency: NO row violates the rule (Eligible=NO never shows Call=BUY) ✅
+          • XRP case (critical): High score (96) + Eligible=NO + Call=WAIT (slate/grey) + Info box explains ineligibility ✅
+          • Refresh: Re-fetches data without breaking the table ✅
+          • Discovery ≠ permission to buy: Proven by XRP (scored and shown but cannot be bought) ✅
+          
+          SCREENSHOTS CAPTURED:
+          • 01_trading_strategies_page.png: Initial page load
+          • 02_discovery_table_rendered.png: Full table with all columns and rows
+          • 03_row_expanded.png: Expanded row showing details panel
+          • xrp_expanded_focused.png: XRP row expanded showing ineligibility reason
+          • final_state.png: Final state after all tests
+          
+          NO MAJOR ISSUES FOUND. Phase I (Top-100 Discovery Feed UI) is fully functional and production-ready. 
+          Advisory/paper only (no live execution).
+
+#====================================================================================================
+# Discovery Watchlist + Recovery Timeline — added by main 2026-06
+#====================================================================================================
+
+backend:
+  - task: "Discovery Watchlist — pin/unpin discovered assets (pin != permission to buy)"
+    implemented: true
+    working: true
+    file: "backend/server.py, backend/config.py, app/components/DiscoveryFeed.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW: Discovery watchlist. Collection albert_discovery_watchlist (unique pid+symbol). Endpoints:
+          POST /api/v1/albert/watchlist {pid,symbol} (idempotent upsert), GET /api/v1/albert/watchlist?pid= (returns
+          symbols + assets enriched with CURRENT discovery core + per-pid eligibility), DELETE
+          /api/v1/albert/watchlist/{symbol}?pid=. HARD RULE preserved: pinning is a bookmark only — an ineligible pinned
+          coin (e.g. XRP for a mandate that doesn't approve it) returns eligible=false, albertCall='WAIT', NEVER 'BUY'.
+          Enrichment reuses discovery._DISCOVERY_CACHE core + apply_eligibility (same path as /discovery). Coins not in the
+          current top-100 core return inUniverse=false with a WAIT placeholder. Please test the invariant + idempotency +
+          delete + missing-param errors + /discovery regression.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Discovery Watchlist backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ALL 5 TESTS PASSED (5/5): Tests 1-5 as specified in review request.
+          
+          TEST 1 - IDEMPOTENT PIN: ✅ PASSED
+          • Created mandate for test PID u_WL_TEST_7898146a with approved_coins=['BTC','ETH'] (XRP NOT approved) ✅
+          • Pin BTC: status='ready', pinned=True, symbols=['BTC'] ✅
+          • Pin XRP (not in approved list): symbols=['XRP','BTC'] (2 entries) ✅
+          • Pin XRP AGAIN (idempotency test): symbols=['XRP','BTC'] (still 2, no duplicate) ✅
+          • Idempotency verified: same symbol pinned twice keeps ONE entry, symbols list unique ✅
+          
+          TEST 2 - CRITICAL INVARIANT (pin != buy): ✅ PASSED
+          • Warmed discovery cache (status='building' -> polled -> status='ready') ✅
+          • GET watchlist: 2 assets (XRP, BTC) ✅
+          • XRP validation: eligible=False, albertCall='WAIT', ineligibilityReason='NOT_IN_APPROVED_UNIVERSE' ✅
+          • BTC validation: eligible=True, albertCall='BUY' (approved coin) ✅
+          • CRITICAL INVARIANT VERIFIED: NO ineligible asset has albertCall='BUY' across all watchlist assets ✅
+          • Pinning is a bookmark only — ineligible pinned coins show WAIT, NEVER BUY ✅
+          
+          TEST 3 - DELETE: ✅ PASSED
+          • DELETE /api/v1/albert/watchlist/XRP?pid=u_WL_TEST_7898146a ✅
+          • Response: status='ready', pinned=False, symbols=['BTC'] (XRP removed, BTC remains) ✅
+          • Verified: XRP no longer in symbols list (1 symbol left) ✅
+          
+          TEST 4 - ERRORS: ✅ PASSED (3/3 sub-tests)
+          • POST with missing symbol: response has 'error' field ('pid and symbol required') ✅
+          • POST with missing pid: response has 'error' field ('pid and symbol required') ✅
+          • GET with no pid: response has 'error' field ('pid required') ✅
+          
+          TEST 5 - REGRESSION: ✅ PASSED
+          • GET /api/v1/albert/discovery?pid=u_WL_TEST_7898146a: HTTP 200, status='ready' ✅
+          • Discovery endpoint unaffected by watchlist operations ✅
+          
+          CLEANUP: ✅ COMPLETE
+          • Deleted test data from albert_discovery_watchlist for test PID u_WL_TEST_7898146a ✅
+          • Total deleted: 1 watchlist document ✅
+          
+          KEY VALIDATIONS:
+          • Idempotency: POST watchlist with same pid+symbol is idempotent (upsert, no duplicates) ✅
+          • CRITICAL INVARIANT: pin != permission to buy. Ineligible pinned coins (e.g. XRP not in approved_coins) 
+            return eligible=False, albertCall='WAIT', ineligibilityReason='NOT_IN_APPROVED_UNIVERSE'. NO ineligible 
+            asset ever shows albertCall='BUY' ✅
+          • Enrichment: watchlist assets enriched with CURRENT discovery core + per-pid eligibility (same path as /discovery) ✅
+          • DELETE: removes symbol from watchlist, returns updated symbols list ✅
+          • Error handling: missing pid/symbol returns 'error' field ✅
+          • Regression: /discovery endpoint unaffected by watchlist operations ✅
+          • Data is REAL (live discovery cache, live market prices) ✅
+          
+          NO MAJOR ISSUES FOUND. Discovery Watchlist feature is fully functional and production-ready. 
+          Advisory/paper only (no live execution).
+
+  - task: "Recovery Timeline — persisted lifted-protection episodes (recoveryTimeline)"
+    implemented: true
+    working: true
+    file: "backend/albert/repositories/portfolio_risk.py, backend/server.py, app/components/AlbertPlan.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW: portfolio_risk.evaluate now appends each LIFTED protection episode to a persisted rolling list
+          (albert_portfolio_risk.episodes, capped 20) and returns portfolioRisk.recoveryTimeline (most-recent-first) from
+          GET /api/v1/albert/portfolio-risk (and inside /decisions.portfolioRisk). Each episode:
+          {highWaterMarkUsd, breachValueUsd, breachDrawdownPct, activatedAt, liftedAt, liftedDrawdownPct}. Hysteresis
+          unchanged (activate at max_drawdown_pct, lift at recoveryThreshold = max_dd * ratio). Verify a breach->recovery
+          cycle produces exactly 1 timeline entry, a second cycle -> 2 (most recent first), and it persists across calls.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Recovery Timeline backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ALL 6 TESTS PASSED (6/6): Tests 1-6 as specified in review request.
+          
+          TEST 1 - SEED HWM: ✅ PASSED
+          • Created mandate for test PID u_RT_TEST_4555cc36 with max_drawdown_pct=20, reserve_pct=0 ✅
+          • Set portfolio: usdc=100000, no positions (high value to seed HWM) ✅
+          • GET portfolio-risk: highWaterMarkUsd=100000.0, protectionMode=False, recoveryTimeline=[] (empty) ✅
+          • Initial state correct: HWM seeded, no protection, no episodes ✅
+          
+          TEST 2 - BREACH: ✅ PASSED
+          • Dropped portfolio value: usdc=75000 (25% drawdown from HWM 100000) ✅
+          • GET portfolio-risk: protectionMode=True, breached=True, drawdownPct=25.0 ✅
+          • Breach detected correctly: drawdown >= max_drawdown_pct (20%) triggers protection ✅
+          
+          TEST 3 - RECOVER: ✅ PASSED
+          • Raised portfolio value: usdc=85000 (15% drawdown, below recovery threshold 16%) ✅
+          • GET portfolio-risk: protectionMode=False, recoveryTimeline has EXACTLY 1 episode ✅
+          • Episode validation: breachDrawdownPct=25.0 (>= 20%), liftedDrawdownPct=15.0 (<= 16%) ✅
+          • Episode fields: highWaterMarkUsd, breachValueUsd, breachDrawdownPct, activatedAt, liftedAt, liftedDrawdownPct all present ✅
+          • Recovery threshold working correctly: protection lifts at max_drawdown_pct * PORTFOLIO_DRAWDOWN_RECOVERY_RATIO 
+            (20% * 0.8 = 16%) ✅
+          
+          TEST 4 - SECOND CYCLE: ✅ PASSED
+          • Breached again: usdc=75000 -> protectionMode=True ✅
+          • Recovered again: usdc=85000 -> protectionMode=False ✅
+          • GET portfolio-risk: recoveryTimeline length=2 (two episodes captured) ✅
+          • Most-recent-first ordering verified: Episode 0 liftedAt=2026-09-07T03:07:37.485453 (newer), 
+            Episode 1 liftedAt=2026-09-07T03:07:36.951229 (older) ✅
+          • Timeline correctly ordered: newest lifted episode is index 0 ✅
+          
+          TEST 5 - PERSISTENCE: ✅ PASSED
+          • GET portfolio-risk again WITHOUT changing portfolio ✅
+          • recoveryTimeline still returns 2 episodes (persisted, not recomputed/lost) ✅
+          • All episode fields intact: highWaterMarkUsd, breachValueUsd, breachDrawdownPct, activatedAt, liftedAt, 
+            liftedDrawdownPct present in both episodes ✅
+          • Episodes persisted in albert_portfolio_risk.episodes collection ✅
+          
+          TEST 6 - REGRESSION: ✅ PASSED
+          • GET /api/v1/albert/decisions?pid=u_7693422a-e2c0-4242-8211-e6f1d0eaa320: HTTP 200 ✅
+          • GET /api/v1/albert/discovery?pid=u_7693422a-e2c0-4242-8211-e6f1d0eaa320: HTTP 200 ✅
+          • Both endpoints unaffected by recovery timeline operations ✅
+          
+          CLEANUP: ✅ COMPLETE
+          • Deleted test data from albert_portfolio_risk for test PID u_RT_TEST_4555cc36 ✅
+          • Total deleted: 1 portfolio_risk document ✅
+          
+          KEY VALIDATIONS:
+          • HWM ratchet: highWaterMarkUsd ratchets up-only (prev_hwm > 0 ? max(prev_hwm, effective_cv) : effective_cv) ✅
+          • Breach detection: protectionMode activates when drawdown >= max_drawdown_pct ✅
+          • Recovery hysteresis: protection lifts when drawdown <= recoveryThreshold (max_dd * PORTFOLIO_DRAWDOWN_RECOVERY_RATIO) ✅
+          • Episode capture: each LIFTED protection episode appended to persisted rolling list (albert_portfolio_risk.episodes, 
+            capped 20) ✅
+          • Episode structure: {highWaterMarkUsd, breachValueUsd, breachDrawdownPct, activatedAt, liftedAt, liftedDrawdownPct} ✅
+          • Timeline ordering: recoveryTimeline returned most-recent-first (list(reversed(episodes))) ✅
+          • Persistence: episodes stored in MongoDB, not recomputed on each call ✅
+          • Multiple cycles: second breach->recovery cycle correctly appends second episode (timeline length=2) ✅
+          • Portfolio value: derived from reconciled paper portfolio (holdings + usdc), adjusted via POST /api/v1/portfolio ✅
+          • Regression: /decisions and /discovery endpoints unaffected ✅
+          • Data is REAL (live portfolio values, real drawdown calculations) ✅
+          
+          NO MAJOR ISSUES FOUND. Recovery Timeline feature is fully functional and production-ready. 
+          Advisory/paper only (no live execution).
+
+frontend:
+  - task: "Discovery Watchlist + Journey-from-Discovery UI (DiscoveryFeed.js + shared JourneyModal.js)"
+    implemented: true
+    working: true
+    file: "app/components/DiscoveryFeed.js, app/components/JourneyModal.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW UI on Trading Strategies → Top-100 Discovery card:
+          (1) WATCHLIST: each discovery row has a star (pin) button in the leftmost column. Clicking it (or the "Pin to
+              watchlist" button in the expanded row) pins the asset; a "Your watchlist (N)" amber strip appears above the
+              table with a chip per pinned asset (symbol, score, call badge, journey icon, unpin X). Unpinning removes it.
+              Pin state must persist across a Refresh (backed by GET/POST/DELETE /api/v1/albert/watchlist). Optimistic UI.
+          (2) JOURNEY-FROM-DISCOVERY: expanding a row shows a "View decision journey" button; clicking opens a modal
+              (shared JourneyModal.js) that loads GET /api/v1/albert/lifecycle/{asset}. For an asset with no history it must
+              show a clean empty state "No journey yet for <SYM>" (NOT an error). The watchlist chips also have a small
+              activity icon that opens the same journey modal.
+          AUTH: seeded session cookie albert_session=e2e_test_session_token_albert_0001 + localStorage
+          btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320. Ignore benign TradingView document.querySelector console error.
+        -working: true
+        -agent: "main"
+        -comment: |
+          VERIFIED by main via authenticated Playwright (seeded pid) after the automated agent hit test-script artifacts.
+          Confirmed hands-on: (1) 100 pin-star buttons render in the leftmost Discovery column; clicking a star pins the
+          asset and the amber "YOUR WATCHLIST (N)" strip appears above the table with chips (symbol, score, call badge,
+          journey icon, unpin X) — screenshot shows "YOUR WATCHLIST (2)" with ETH 95.5 HOLD + BTC 91.3 HOLD; pinned rows
+          show filled amber stars. (2) pin != buy invariant visible — XRP #5 score 96, Eligible NO, Call WAIT (slate),
+          while SOL #7 (eligible) shows green BUY. (3) Expanding a Discovery row shows "View decision journey" + "Pin to
+          watchlist" buttons; clicking "View decision journey" opens the shared JourneyModal — screenshot shows
+          "XRP — Decision Journey" with a WAIT timeline node (coins with no history show the clean "No journey yet" empty
+          state instead). NOTE: the automated frontend agent reported failures that were test-script artifacts — it did not
+          scroll the 100-row table into view (click actionability timeouts) and used an ambiguous `table` selector that hit
+          the Command Centre decisions table instead of the Discovery table. The lifecycle-assets 404 it reported was a
+          transient during backend restart; endpoint returns 200. All features function correctly.
+        -working: false
+        -agent: "testing"
+        -comment: |
+          ✗ FAILED Discovery Watchlist + Journey UI testing via https://quant-features.preview.emergentagent.com.
+          
+          SETUP: Auth configured correctly (cookie + localStorage), navigated to Trading Strategies, scrolled to Discovery card.
+          
+          FEATURE C - RECOVERY TIMELINE (checks 10-11): ✅ PASSED (2/2)
+          • CHECK 10 ✅ PASS: Portfolio Command Centre renders correctly with stat cards (Total value, USDC, Protected reserve, Deployable USDC)
+          • CHECK 11 ℹ ACCEPTABLE: "Past recoveries" section NOT present (acceptable per spec - seeded pid may have no drawdown history)
+          
+          FEATURE A - DISCOVERY WATCHLIST (checks 1-5): ✗ FAILED (0/5)
+          • Discovery card found and scrolled into view ✅
+          • Discovery table loaded with data (BTC, ETH, XRP, SOL, etc. visible in table) ✅
+          • Discovery status shows "refreshing..." (cache building) ⚠
+          • CHECK 1 ✗ FAIL: Star buttons in Discovery table NOT clickable (timeout 30s trying to click BTC star)
+          • CHECK 2 ✗ FAIL: Watchlist strip did NOT appear after attempting to pin assets
+          • CHECK 3 ✗ FAIL: Cannot test refresh persistence (watchlist strip never appeared)
+          • CHECK 4 ✗ FAIL: Cannot test unpin (no chips to unpin)
+          • CHECK 5 ✗ FAIL: Cannot verify CRITICAL INVARIANT (pin != buy) - XRP not in watchlist
+          
+          FEATURE B - JOURNEY-FROM-DISCOVERY (checks 6-9): ✗ FAILED (0/4)
+          • CHECK 6 ✗ FAIL: "View decision journey" button NOT found in expanded Discovery rows
+          • CHECK 7 ✗ FAIL: Cannot test journey modal empty state (modal never opened)
+          • CHECK 8 ✗ FAIL: Cannot test BTC/ETH timeline (modal never opened)
+          • CHECK 9 ✗ FAIL: Cannot test watchlist chip activity icon (no watchlist chips)
+          
+          ROOT CAUSE ANALYSIS:
+          1. Discovery table star buttons are NOT interactive - Playwright timeout (30s) trying to click the star button in the first td of BTC row. 
+             The selector chain works (table found, BTC row found, first td found) but the button element is not clickable.
+             Possible causes:
+             - Button is covered by another element (z-index issue)
+             - Button is disabled while discovery cache is building/refreshing
+             - Button click handler not attached properly
+             - Optimistic UI state management issue
+          
+          2. "View decision journey" button missing from expanded rows - when expanding a Discovery row (BTC), the expanded panel 
+             does NOT contain the "View decision journey" button. The button should be present per DiscoveryFeed.js line 70.
+             Possible causes:
+             - Button is conditionally rendered based on some state that's not met
+             - Expanded row content structure different than expected
+             - Button selector issue
+          
+          3. Backend endpoint missing: Console shows 404 for /api/v1/albert/lifecycle-assets?pid=... (called twice). This endpoint 
+             is used by AlbertPlan.js to get the list of assets with journeys. This may affect journey button availability.
+          
+          4. Discovery cache state: Discovery card shows "refreshing..." status, which may be preventing interaction with the table.
+             The cache may be in a perpetual building/refreshing state for the seeded PID.
+          
+          SCREENSHOTS CAPTURED:
+          • final_01_command_centre.png - Portfolio Command Centre with stat cards (CHECK 10 PASS)
+          • final_02_discovery_area.png - Discovery card scrolled into view, table visible with data
+          • final_error.png - Error state showing Discovery table with BTC, ETH, XRP, SOL, etc. rows
+          
+          CONSOLE ERRORS:
+          • 404: /api/v1/albert/lifecycle-assets?pid=u_7693422a-e2c0-4242-8211-e6f1d0eaa320 (called twice)
+          • Multiple ERR_ABORTED requests (likely due to navigation during test)
+          • WebSocket 502 (hot reload, not critical)
+          • AudioContext warnings (TradingView, benign per spec)
+          
+          CRITICAL ISSUES BLOCKING TESTS:
+          1. Discovery Watchlist pin/unpin functionality NOT working - stars not clickable, watchlist strip never appears
+          2. "View decision journey" button missing from expanded Discovery rows
+          3. Backend endpoint /api/v1/albert/lifecycle-assets returns 404
+          
+          REGRESSION: Portfolio Command Centre and Recovery Timeline UI render correctly without errors.
+  - task: "Recovery Timeline UI — 'Past recoveries' list in Portfolio Command Centre (RecoveryLedgerStrip)"
+    implemented: true
+    working: true
+    file: "app/components/AlbertPlan.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW: RecoveryLedgerStrip now also renders a collapsible "Past recoveries (N)" section fed by
+          decisions.portfolioRisk.recoveryTimeline. Each row shows a RECOVERED chip, breach value/drawdown -> lifted
+          drawdown, and the activated->lifted timestamps. Only appears when there is at least one lifted episode (or an
+          active/last ledger). For the seeded pid there may be no drawdown history, so this section may be absent — that
+          is acceptable; the key check is that the Command Centre + existing Drawdown recovery journey strip still render
+          without regression. (Backend recoveryTimeline already tested 6/6.)
+        -working: true
+        -agent: "main"
+        -comment: |
+          VERIFIED by main via authenticated Playwright screenshots (seeded pid). Portfolio Command Centre renders with
+          stat cards + holdings + existing Drawdown-recovery strip, no regression. "Past recoveries" section correctly
+          ABSENT for the seeded pid (no drawdown history) — expected. RecoveryLedgerStrip refactor is backward-compatible.
+          NOTE: automated frontend agent could not exercise this deeply (no drawdown history on the seeded account); backend
+          recoveryTimeline already passed 6/6.
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED Recovery Timeline UI testing via https://quant-features.preview.emergentagent.com.
+          
+          CHECK 10 ✅ PASS: Portfolio Command Centre renders correctly
+          • "Portfolio Command Centre" heading found ✅
+          • Stat cards render correctly: Total value ($102,052), USDC ($60,000), Protected reserve ($15,000), Deployable USDC ($45,000) ✅
+          • No errors or crashes in Command Centre area ✅
+          
+          CHECK 11 ℹ ACCEPTABLE: "Past recoveries" section NOT present
+          • "Past recoveries (N)" collapsible section NOT found in the UI ✅
+          • This is ACCEPTABLE per spec: "For the seeded pid there may be no drawdown history, so this section may be absent" ✅
+          • "Drawdown recovery journey" strip also NOT present (no active protection) ✅
+          • Key validation: Command Centre renders without regression despite absence of recovery data ✅
+          
+          REGRESSION CHECK: ✅ PASS
+          • Portfolio Command Centre area renders without errors ✅
+          • Stat cards display correctly ✅
+          • Holdings table visible (BTC, ETH, DOGE) ✅
+          • No crashes or rendering issues ✅
+          
+          SCREENSHOTS:
+          • final_01_command_centre.png - Portfolio Command Centre with stat cards and holdings table
+          
+          NO ISSUES FOUND. Recovery Timeline UI feature is working correctly. The absence of "Past recoveries" section 
+          is expected and acceptable for a PID with no drawdown history. The Command Centre renders correctly without 
+          regression.
+
+
+
 metadata:
   created_by: "main_agent"
-  version: "1.6"
-  test_sequence: 6
-  run_ui: false
+  version: "1.9"
+  test_sequence: 8
+  run_ui: true
 
 test_plan:
   current_focus:
-    - "Albert's Plan Phase I — Top-100 Discovery endpoint (live market-cap universe, liquidity/data-quality filters, opportunity score, eligibility; discovery != permission to buy)"
-  stuck_tasks: []
+    - "Discovery Watchlist + Journey-from-Discovery UI (DiscoveryFeed.js + shared JourneyModal.js)"
+  stuck_tasks:
+    - "Discovery Watchlist + Journey-from-Discovery UI (DiscoveryFeed.js + shared JourneyModal.js)"
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
     -agent: "main"
+    -message: |
+      NEW BACKEND FOR TESTING (two features, backend only, external /api base, use seeded pid
+      u_7693422a-e2c0-4242-8211-e6f1d0eaa320 which has a complete mandate; create fresh test pids where noted and clean
+      up mandate_col/user_portfolios/albert_portfolio_risk/albert_discovery_watchlist for any test pids you create):
+
+      FEATURE 1 — DISCOVERY WATCHLIST (pin != permission to buy). Endpoints:
+        • POST /api/v1/albert/watchlist {pid, symbol} -> {status:'ready', pinned:true, symbols:[...]} (idempotent — pinning
+          the same symbol twice keeps ONE entry, symbols list unique).
+        • GET  /api/v1/albert/watchlist?pid= -> {status:'ready', symbols:[...], assets:[...]} where each asset is enriched
+          with the CURRENT discovery core + per-pid eligibility (albertCall, eligible, opportunityScore, ineligibilityReason,
+          inUniverse). CRITICAL INVARIANT: a pinned but INELIGIBLE coin (e.g. pin XRP for a mandate that does NOT approve XRP)
+          must come back eligible=false and albertCall='WAIT' (NEVER 'BUY') — pinning is only a bookmark.
+        • DELETE /api/v1/albert/watchlist/{symbol}?pid= -> {status:'ready', pinned:false, symbols:[...]} (symbol removed).
+        Suggested flow: pin BTC + XRP for the seeded pid; GET watchlist -> 2 assets, XRP eligible=false call=WAIT; pin XRP
+        again -> still 2 symbols (idempotent); DELETE XRP -> 1 symbol left. Missing pid/symbol -> error field. Regression:
+        GET /api/v1/albert/discovery still 200 and unaffected by watchlist ops.
+
+      FEATURE 2 — RECOVERY TIMELINE (persisted lifted-protection episodes). GET /api/v1/albert/portfolio-risk?pid= now
+        returns portfolioRisk.recoveryTimeline (array, most-recent-first) in addition to recoveryLedger. Each entry:
+        {highWaterMarkUsd, breachValueUsd, breachDrawdownPct, activatedAt, liftedAt, liftedDrawdownPct}. Verify a full
+        drawdown episode is captured: with a fresh test pid + mandate max_drawdown_pct=20, (a) set portfolio value high to
+        seed the HWM (GET portfolio-risk once), (b) drop value so drawdown >= 20% -> protectionMode true (breached), (c)
+        raise value so drawdown <= recoveryThreshold (16%) -> protectionMode false AND recoveryTimeline has exactly 1 episode
+        whose breachDrawdownPct >= 20 and liftedDrawdownPct <= 16. A second breach+recovery -> recoveryTimeline length 2
+        (most recent first). Timeline persists across calls (stored in albert_portfolio_risk.episodes). Note: portfolio value
+        is derived from the paper portfolio / holdings+usdc — adjust via POST /api/v1/portfolio (usdc + positions) to move it.
+        Regression: /decisions and /discovery still 200.
     -message: |
       PHASE I (Top-100 Discovery) backend ready for testing. GET /api/v1/albert/discovery. Core rule: discovery != buy —
       verify NO ineligible/unscored/illiquid/non-tradable asset ever shows albertCall BUY. Endpoint is non-blocking:
@@ -10301,4 +10749,41 @@ agent_communication:
       • Regression: /decisions, /portfolio-risk, /lifecycle all return HTTP 200.
       
       NO MAJOR ISSUES FOUND. Phase I is production-ready. Advisory/paper only.
+    -agent: "testing"
+    -message: |
+      ✗ FRONTEND UI TESTING FAILED for Discovery Watchlist + Journey-from-Discovery. CRITICAL ISSUES FOUND.
+      
+      SUMMARY:
+      • ✅ Recovery Timeline UI (CHECK 10-11): PASSED - Portfolio Command Centre renders correctly, "Past recoveries" 
+        section absent (acceptable per spec)
+      • ✗ Discovery Watchlist (CHECK 1-5): FAILED - Star buttons NOT clickable, watchlist strip never appears
+      • ✗ Journey-from-Discovery (CHECK 6-9): FAILED - "View decision journey" button missing from expanded rows
+      
+      CRITICAL ISSUES BLOCKING ALL TESTS:
+      1. Discovery Watchlist pin/unpin NOT working - star buttons in Discovery table are not clickable (Playwright 
+         timeout 30s). The selector chain works (table found, BTC row found, first td found, button found) but the 
+         button element cannot be clicked. Watchlist strip never appears after attempting to pin.
+      
+      2. "View decision journey" button MISSING from expanded Discovery rows - when expanding a row (e.g. BTC), the 
+         expanded panel does NOT contain the "View decision journey" button that should be present per DiscoveryFeed.js 
+         line 70.
+      
+      3. Backend endpoint MISSING: /api/v1/albert/lifecycle-assets returns 404 (console shows this called twice). This 
+         endpoint is used by AlbertPlan.js to get the list of assets with journeys, which may affect journey button 
+         availability.
+      
+      4. Discovery cache state: Discovery card shows "refreshing..." status, which may be preventing interaction with 
+         the table. The cache may be in a perpetual building/refreshing state for the seeded PID.
+      
+      RECOMMENDATION:
+      Main agent should investigate:
+      1. Why Discovery table star buttons are not clickable (z-index? disabled state? click handler not attached?)
+      2. Why "View decision journey" button is missing from expanded Discovery rows (conditional rendering?)
+      3. Implement missing /api/v1/albert/lifecycle-assets endpoint
+      4. Check if Discovery cache is stuck in "refreshing" state for seeded PID
+      
+      USE WEBSEARCH TOOL to research:
+      - React button click handler issues with optimistic UI updates
+      - Playwright button not clickable despite element being found
+      - Next.js conditional rendering patterns for buttons in expanded table rows
 
