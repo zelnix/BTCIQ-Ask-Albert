@@ -8,9 +8,23 @@ import logging
 import os
 
 from pymongo import MongoClient
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 
 load_dotenv('/app/.env')
+
+# --- Google auth: make /app/.env authoritative -------------------------------
+# The deployment platform can inject a STALE GOOGLE_CLIENT_ID (and related keys) as a
+# real container environment variable. Because load_dotenv() above uses override=False,
+# that stale injected value would win over the current /app/.env — which is exactly how
+# production kept serving an old OAuth client id across redeploys, causing Google
+# `origin_mismatch`. Force ONLY the Google auth keys from /app/.env to take precedence.
+# We deliberately do NOT override platform-managed secrets (MONGO_URL / DB_NAME /
+# NEXT_PUBLIC_BASE_URL) — those must keep coming from the deployment injection.
+_ENV_FILE = dotenv_values('/app/.env')
+for _k in ('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'NEXT_PUBLIC_GOOGLE_CLIENT_ID'):
+    _v = (_ENV_FILE.get(_k) or '').strip()
+    if _v:
+        os.environ[_k] = _v
 
 logger = logging.getLogger("btciq.config")
 
