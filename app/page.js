@@ -24,6 +24,7 @@ import { SymbolContext } from './lib/context';
 import { useFetch } from './lib/useFetch';
 import FloatingAlbert from './components/FloatingAlbert';
 import WelcomeBrief from './components/WelcomeBrief';
+import PublishStamp from './components/PublishStamp';
 import AlbertText from './components/AlbertText';
 import HomePage from './components/HomePage';
 import { fetchMe, logout as authLogout, rememberUser } from './lib/auth';
@@ -3559,7 +3560,7 @@ export default function DashboardPage() {
           <div className="mb-6 flex flex-col items-center gap-1 px-1">
             <img src="/ask-albert-logo.png" alt="Ask Albert" className="h-24 w-auto object-contain" />
             <p className="bg-gradient-to-r from-amber-300 via-yellow-400 to-amber-500 bg-clip-text text-center text-[12px] font-bold uppercase tracking-[0.18em] text-transparent drop-shadow-[0_1px_1px_rgba(0,0,0,0.4)]">Hucentai Crypto IQ</p>
-            <PublishStamp />
+            <PublishStamp className="pl-0.5" />
             <EnvBadge />
           </div>
           <nav className="flex-1 space-y-1">
@@ -3745,23 +3746,8 @@ function EnvBadge() {
   );
 }
 
-/* ===================== Live "published" date + time under the logo ===================== */
-function PublishStamp() {
-  const [now, setNow] = useState(null); // null on first render to avoid SSR hydration mismatch
-  useEffect(() => {
-    setNow(new Date());
-    const t = setInterval(() => setNow(new Date()), 60000);
-    return () => clearInterval(t);
-  }, []);
-  if (!now) return null;
-  const date = now.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
-  const time = now.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  return (
-    <p className="pl-0.5 text-[10px] leading-tight text-slate-500" suppressHydrationWarning>
-      <span className="text-slate-400">Published</span> {date} · {time}
-    </p>
-  );
-}
+/* PublishStamp is shared from ./components/PublishStamp (used in the sidebar + every footer) */
+
 
 /* ===================== Albert voice picker (Meet Albert) ===================== */
 function VoicePicker() {

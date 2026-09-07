@@ -6,6 +6,7 @@ import { getAuthConfig, exchangeGoogleCredential, rememberUser } from '../lib/au
 import {
   Brain, Bell, LineChart, Mic, TrendingUp, ShieldCheck, Sparkles, Radar, Loader2,
 } from 'lucide-react';
+import PublishStamp from './PublishStamp';
 
 const HERO_IMG = 'https://images.unsplash.com/photo-1660165458059-57cfb6cc87e5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTJ8MHwxfHNlYXJjaHwxfHxibG9ja2NoYWluJTIwYWJzdHJhY3R8ZW58MHx8fGJsdWV8MTc4ODUzNDU3M3ww&ixlib=rb-4.1.0&q=85';
 const DASH_IMG = 'https://images.unsplash.com/photo-1660020619062-70b16c44bf0f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAxODF8MHwxfHNlYXJjaHwxfHxmaW5hbmNpYWwlMjBkYXNoYm9hcmR8ZW58MHx8fGJsdWV8MTc4ODUzNDU3M3ww&ixlib=rb-4.1.0&q=85';
@@ -164,6 +165,7 @@ export default function HomePage({ onAuthed }) {
 
       <footer className="border-t border-slate-900 py-8 text-center text-xs text-slate-600">
         Ask Albert · AI crypto intelligence. For research/education — not financial advice.
+        <PublishStamp className="mt-2 text-center" />
       </footer>
     </main>
   );
