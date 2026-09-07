@@ -599,6 +599,8 @@ export default function AlbertPlan() {
 
   const setM = (k, v) => setMandate((m) => ({ ...(m || {}), [k]: v }));
   const s = summary || {};
+  // Single journey-availability contract shared by the row button AND the Past-journeys chips.
+  const hasJourney = (sym) => (tradedAssets || []).includes(sym);
 
   return (
     <div className="rounded-2xl border border-sky-500/20 bg-gradient-to-b from-sky-500/[0.06] to-slate-900/40 p-4">
@@ -644,13 +646,13 @@ export default function AlbertPlan() {
               <tbody>
                 {decisions.decisions.map((d) => (
                   <React.Fragment key={d.symbol}>
-                    <tr className="border-t border-slate-800/60 hover:bg-slate-900/40">
+                    <tr className="cursor-pointer border-t border-slate-800/60 hover:bg-slate-900/40" onClick={() => setExpanded(expanded === d.symbol ? null : d.symbol)}>
                       <td className="py-1.5 pl-3 pr-2 font-semibold text-slate-200">{d.symbol}</td>
                       <td className="pr-2"><div className="flex flex-col gap-0.5"><div className="flex flex-wrap items-center gap-1"><ActionPill a={d.action} big />{d.action === 'SELL' && <SellActionPill p={d.sellPlan} />}<EligibilityChip d={d} /></div>{d.action === 'SELL' && <span className="text-[9px] text-slate-500">{REASON_LABEL[d.reasonCode] || d.reasonCode}</span>}</div></td>
                       <td className="pr-2 text-[11px] text-slate-400">{d.opportunityScore}</td>
                       <td className="pr-2 text-[11px] text-slate-500">{d.confidence}%</td>
                       <td className="pr-2"><CallCell d={d} /></td>
-                      <td className="pr-3 text-right"><button onClick={() => setExpanded(expanded === d.symbol ? null : d.symbol)} className="text-slate-500 hover:text-slate-200"><ChevronDown className={`h-4 w-4 transition-transform ${expanded === d.symbol ? 'rotate-180' : ''}`} /></button></td>
+                      <td className="pr-3 text-right"><button onClick={(e) => { e.stopPropagation(); setExpanded(expanded === d.symbol ? null : d.symbol); }} className="text-slate-500 hover:text-slate-200"><ChevronDown className={`h-4 w-4 transition-transform ${expanded === d.symbol ? 'rotate-180' : ''}`} /></button></td>
                     </tr>
                     {expanded === d.symbol && (
                       <tr className="border-t border-slate-800/40 bg-slate-950/40"><td colSpan={6} className="px-3 py-2">
@@ -692,7 +694,7 @@ export default function AlbertPlan() {
                           )}
                           <button onClick={() => setExplainFor(d)} className="inline-flex items-center gap-1 rounded-full border border-violet-500/40 bg-violet-500/10 px-2.5 py-1 text-[11px] font-semibold text-violet-200 hover:bg-violet-500/20"><MessageCircle className="h-3 w-3" />Ask Albert about this call</button>
                           <button onClick={() => setHistoryFor(d.symbol)} className="inline-flex items-center gap-1 rounded-full border border-slate-700 px-2.5 py-1 text-[11px] text-slate-300 hover:bg-slate-800"><History className="h-3 w-3" />History</button>
-                          <button onClick={() => setJourneyFor(d.symbol)} className="inline-flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/20"><Activity className="h-3 w-3" />View journey</button>
+                          {hasJourney(d.symbol) && <button onClick={() => setJourneyFor(d.symbol)} className="inline-flex items-center gap-1 rounded-full border border-sky-500/40 bg-sky-500/10 px-2.5 py-1 text-[11px] font-semibold text-sky-200 hover:bg-sky-500/20"><Activity className="h-3 w-3" />View journey</button>}
                         </div>
                       </td></tr>
                     )}
@@ -704,7 +706,7 @@ export default function AlbertPlan() {
           <p className="mt-1.5 text-[10px] text-slate-600">Deterministic engine {decisions.engineVersion} · advisory / paper only · Albert explains these calls, he doesn&apos;t change them.</p>
           {(() => {
             const shown = new Set((decisions.decisions || []).map((d) => d.symbol));
-            const extra = (tradedAssets || []).filter((a) => !shown.has(a));
+            const extra = (tradedAssets || []).filter((a) => a && !shown.has(a));
             if (extra.length === 0) return null;
             return (
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
