@@ -23,6 +23,7 @@ import { fmtUsd, fmtAud, fmtPct, CAT_COLORS, BAR_COLORS, scoreColor, signalText,
 import { SymbolContext } from './lib/context';
 import { useFetch } from './lib/useFetch';
 import FloatingAlbert from './components/FloatingAlbert';
+import WelcomeBrief from './components/WelcomeBrief';
 import AlbertText from './components/AlbertText';
 import HomePage from './components/HomePage';
 import { fetchMe, logout as authLogout, rememberUser } from './lib/auth';
@@ -3179,6 +3180,8 @@ export default function DashboardPage() {
   const [switching, setSwitching] = useState(false);
   // Auth gate: undefined = checking, null = signed out, {user} = signed in.
   const [authUser, setAuthUser] = useState(undefined);
+  const [welcomeOpen, setWelcomeOpen] = useState(false);
+  const welcomeChecked = React.useRef(false);
   React.useEffect(() => {
     let alive = true;
     fetchMe().then((u) => {
@@ -3188,6 +3191,17 @@ export default function DashboardPage() {
     });
     return () => { alive = false; };
   }, []);
+  // Personalized Welcome Brief — shown once per browser session right after sign-in.
+  React.useEffect(() => {
+    if (!authUser || welcomeChecked.current) return;
+    welcomeChecked.current = true;
+    try {
+      if (!sessionStorage.getItem('albert_welcome_shown')) {
+        setWelcomeOpen(true);
+        sessionStorage.setItem('albert_welcome_shown', '1');
+      }
+    } catch (e) { setWelcomeOpen(true); }
+  }, [authUser]);
   const handleSignOut = React.useCallback(async () => {
     await authLogout();
     setAuthUser(null);
@@ -3514,6 +3528,7 @@ export default function DashboardPage() {
     <SymbolContext.Provider value={symbol}>
     <div className="relative min-h-screen bg-slate-950 text-slate-100">
       {albertBioOpen && <AlbertBioModal onClose={() => setAlbertBioOpen(false)} />}
+      {welcomeOpen && <WelcomeBrief onClose={() => setWelcomeOpen(false)} onOpenCommandCentre={() => { setActive('strategies'); setWelcomeOpen(false); }} />}
       <AlbertVoiceToast />
       {chatStrategyBuilding && !chatStrategy?.draft && (
         <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">

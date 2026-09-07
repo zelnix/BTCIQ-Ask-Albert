@@ -122,6 +122,7 @@ class LlmChat:
         self._temp = None
         self._max = None
         self._tools = False
+        self._thinking_budget = None
 
     def with_model(self, provider, model):
         self._model = model
@@ -130,6 +131,8 @@ class LlmChat:
     def with_params(self, temperature=None, max_tokens=None, **kwargs):
         self._temp = temperature
         self._max = max_tokens
+        if 'thinking_budget' in kwargs:
+            self._thinking_budget = kwargs.get('thinking_budget')
         return self
 
     def with_tools(self, tools):
@@ -147,6 +150,11 @@ class LlmChat:
             cfg['max_output_tokens'] = int(self._max)
         if self._temp is not None:
             cfg['temperature'] = self._temp
+        if getattr(self, '_thinking_budget', None) is not None:
+            try:
+                cfg['thinking_config'] = types.ThinkingConfig(thinking_budget=int(self._thinking_budget))
+            except Exception:  # noqa
+                pass
         if self._tools:
             cfg['tools'] = [types.Tool(google_search=types.GoogleSearch())]
             # Google Search grounding is supported on Flash, not the Pro preview —
@@ -7964,6 +7972,138 @@ def albert_portfolio_risk(pid: str = ''):
     pr = _portfolio_risk_repo.evaluate(pid, summary.get('total_value'), mandate.get('max_drawdown_pct'))
     pr['triggeredAt'] = pr.get('protectionActivatedAt')
     return {'status': 'ready', 'portfolioRisk': pr}
+
+
+# ---- Welcome Brief: personalized morning brief shown right after sign-in -----
+_WELCOME_CACHE = {}          # pid -> {'ts': float, 'data': dict}
+_WELCOME_TTL_SEC = 300       # cache the assembled brief ~5 min (instant re-open/retry)
+WELCOME_LINE_SYSTEM = (
+    "You are Albert — a disciplined, character-driven crypto risk & strategy quant. You are given a read-only "
+    "JSON snapshot of ONE user's situation this morning (their portfolio totals, drawdown-protection state, and "
+    "the COUNTS of your current BUY/SELL/HOLD calls). Write ONE short, warm, in-character sentence (max ~28 words) "
+    "greeting them by first name if given and framing today's posture. ABSOLUTE RULES: do NOT quote specific dollar "
+    "amounts or percentages — the interface already shows the exact figures; keep it qualitative (posture, "
+    "discipline, patience, risk). Never invent numbers, no financial advice, no hype, no emojis, no markdown, no "
+    "quotes. Output exactly one plain sentence."
+)
+
+
+def _welcome_line_fallback(name, counts, protection_active):
+    who = name or 'there'
+    if protection_active:
+        return f"Morning, {who} — protection is on while we ride out the drawdown, so I'm keeping risk tight today."
+    b, s = counts.get('BUY', 0), counts.get('SELL', 0)
+    if s:
+        return f"Morning, {who} — a few positions want trimming today; discipline first, then we look for spots."
+    if b:
+        return f"Morning, {who} — the tape looks constructive and I've lined up where fresh capital could work."
+    return f"Morning, {who} — nothing screaming today, so we stay patient and let the setups come to us."
+
+
+@app.get('/api/v1/albert/welcome-brief')
+def albert_welcome_brief(pid: str = ''):
+    """Personalized morning welcome brief shown right after sign-in. Deterministic
+    snapshot (portfolio totals, drawdown-protection state, counts of Albert's current
+    calls, watchlist highlights) plus ONE character-driven line from Albert (read-only;
+    the LLM never invents numbers). Falls back to a templated line if the LLM is off.
+    Result is cached per-pid for a short TTL so the sign-in modal is instant on
+    re-open/retry and never recomputes the ~decisions pass on every request."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    now = _time_mod.time()
+    cached = _WELCOME_CACHE.get(pid)
+    if cached and (now - cached['ts']) < _WELCOME_TTL_SEC:
+        return cached['data']
+    name = None
+    try:
+        if pid.startswith('u_'):
+            u = users_col.find_one({'_id': pid[2:]}, {'name': 1})
+            if u and u.get('name'):
+                name = str(u['name']).strip().split(' ')[0] or None
+    except Exception:  # noqa
+        pass
+    summary = _portfolio_summary(pid)
+    mandate = _get_mandate(pid)
+    mandate_complete = bool(summary.get('mandate_complete'))
+
+    protection = {'active': False}
+    try:
+        pr = _portfolio_risk_repo.evaluate(pid, summary.get('total_value'), mandate.get('max_drawdown_pct'))
+        protection = {'active': bool(pr.get('protectionMode')), 'drawdownPct': pr.get('drawdownPct'),
+                      'maxDrawdownPct': pr.get('maxDrawdownPct')}
+    except Exception:  # noqa
+        pass
+
+    counts = {'BUY': 0, 'SELL': 0, 'HOLD': 0, 'WAIT': 0}
+    buys, sells, watch = [], [], []
+    if mandate_complete:
+        try:
+            snap = _albert_decisions(pid)
+            decisions = snap.get('decisions', [])
+            pinned = set(_watchlist_symbols(pid))
+            for d in decisions:
+                act = d.get('action') or d.get('call')
+                if act in counts:
+                    counts[act] += 1
+                if act == 'BUY':
+                    buys.append({'symbol': d['symbol'], 'deployNowUsd': d.get('recommendedDeployNowUsd'),
+                                 'score': d.get('opportunityScore') or d.get('score')})
+                elif act == 'SELL':
+                    sp = d.get('sellPlan') or {}
+                    sells.append({'symbol': d['symbol'], 'action': sp.get('action'),
+                                  'sellUsd': sp.get('sellUsd'), 'reasonCode': d.get('reasonCode')})
+                if d['symbol'] in pinned:
+                    watch.append({'symbol': d['symbol'], 'albertCall': act, 'eligible': d.get('eligible'),
+                                  'score': d.get('opportunityScore') or d.get('score')})
+        except Exception:  # noqa
+            traceback.print_exc()
+    buys.sort(key=lambda x: (x.get('score') or 0), reverse=True)
+
+    portfolio = {
+        'totalValueUsd': summary.get('total_value'),
+        'usdcUsd': summary.get('usdc'),
+        'deployableUsdcUsd': summary.get('deployable_usdc'),
+        'holdingsCount': len(summary.get('holdings', []) or []),
+    }
+
+    line = _welcome_line_fallback(name, counts, protection.get('active'))
+    if mandate_complete and LLM_READY_KEY and _HAS_LLM:
+        try:
+            facts = {'name': name, 'portfolio': portfolio, 'protection': protection,
+                     'callCounts': counts, 'topBuys': buys[:3], 'topSells': sells[:3]}
+            prompt = ('User morning snapshot (read-only JSON):\n' + json.dumps(facts, default=str)
+                      + '\n\nWrite the one-sentence greeting now.')
+
+            def _call():
+                async def _go():
+                    chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'welcome-{pid}', system_message=WELCOME_LINE_SYSTEM)
+                            .with_model('gemini', _model_for('chat_standard')).with_params(temperature=0.6, max_tokens=400, thinking_budget=0))
+                    return await chat.send_message(UserMessage(text=prompt))
+                return asyncio.run(_go())
+            reply = _LLM_POOL.submit(_call).result(timeout=40)
+            txt = reply.strip() if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '').strip()
+            if txt:
+                line = txt.split('\n')[0].strip().strip('"').strip()
+        except Exception:  # noqa
+            traceback.print_exc()
+
+    result = {
+        'status': 'ready',
+        'name': name,
+        'date': datetime.datetime.utcnow().isoformat(),
+        'mandateComplete': mandate_complete,
+        'onboarding': not mandate_complete,
+        'portfolio': portfolio,
+        'protection': protection,
+        'callCounts': counts,
+        'topBuys': buys[:3],
+        'topSells': sells[:3],
+        'watchlist': watch[:6],
+        'albertLine': line,
+    }
+    _WELCOME_CACHE[pid] = {'ts': _time_mod.time(), 'data': result}
+    return result
 
 
 # ---- Phase I: Top-100 Discovery ---------------------------------------------
