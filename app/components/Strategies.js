@@ -583,7 +583,11 @@ function BasketSection() {
       )}
       <BasketDigestPanel refreshKey={active.length} />
       {active.length >= 2 && <BasketCompare baskets={active} />}
-      {active.length > 0 && <div className="mt-4 space-y-3">{active.map((b) => <BasketCard key={b.id} b={b} onClose={closeBasket} closing={closing === b.id} onReload={load} />)}</div>}
+      {active.length > 0 && <div className="mt-4 space-y-3">{active.map((b) => (
+        <div key={b.id} id={`strategy-${b.id}`} className={focusId === b.id ? 'rounded-2xl ring-2 ring-sky-400/70 ring-offset-2 ring-offset-slate-950 transition' : 'transition'}>
+          <BasketCard b={b} onClose={closeBasket} closing={closing === b.id} onReload={load} />
+        </div>
+      ))}</div>}
       {history.length > 0 && (
         <details className="mt-4"><summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">Past strategies ({history.length})</summary>
           <div className="mt-2 space-y-3">{history.map((b) => <BasketCard key={b.id} b={b} onClose={closeBasket} closing={false} />)}</div>
@@ -621,6 +625,25 @@ export default function StrategiesSection() {
     const id = setInterval(load, 30000); // keep P&L / nudges fresh
     return () => clearInterval(id);
   }, [load]);
+
+  // Deep-link: jump straight to a specific strategy (set from the Morning Brief).
+  const [focusId, setFocusId] = React.useState(null);
+  React.useEffect(() => {
+    const apply = (fid) => { if (fid) setFocusId(fid); };
+    try { apply(window.__albertFocusStrategy); window.__albertFocusStrategy = null; } catch (e) { /* noop */ }
+    const onFocus = (e) => apply(e && e.detail);
+    window.addEventListener('albert:focus-strategy', onFocus);
+    return () => window.removeEventListener('albert:focus-strategy', onFocus);
+  }, []);
+  React.useEffect(() => {
+    if (!focusId || !data) return undefined;
+    const t = setTimeout(() => {
+      const el = document.getElementById(`strategy-${focusId}`);
+      if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 250);
+    const clear = setTimeout(() => setFocusId(null), 4000); // remove highlight after a moment
+    return () => { clearTimeout(t); clearTimeout(clear); };
+  }, [focusId, data]);
 
   const build = async () => {
     setBuilding(true);

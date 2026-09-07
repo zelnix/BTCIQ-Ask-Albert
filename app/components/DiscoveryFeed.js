@@ -1,7 +1,7 @@
 'use client';
 import React from 'react';
 import { API_BASE, getPid } from '../lib/api';
-import { Compass, Loader2, Info, RefreshCw, Star, Activity, X } from 'lucide-react';
+import { Compass, Loader2, Info, RefreshCw, Star, Activity, X, BellRing } from 'lucide-react';
 import JourneyModal from './JourneyModal';
 
 const fmtUsd = (n) => (n == null ? '—' : n >= 1e9 ? '$' + (n / 1e9).toFixed(1) + 'B' : n >= 1e6 ? '$' + (n / 1e6).toFixed(1) + 'M' : '$' + Number(n).toLocaleString());
@@ -76,6 +76,33 @@ function Row({ a, pinned, onTogglePin, onJourney }) {
   );
 }
 
+function WatchlistAlerts({ alerts, onDismiss, onJourney }) {
+  if (!alerts || alerts.length === 0) return null;
+  const arrow = (c) => (c === 'BUY' ? 'text-emerald-300' : c === 'SELL' ? 'text-rose-300' : c === 'HOLD' ? 'text-sky-300' : 'text-slate-300');
+  return (
+    <div className="mb-3 rounded-xl border border-sky-500/30 bg-sky-500/[0.07] p-2.5">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-sky-200">
+          <BellRing className="h-3.5 w-3.5" />Watchlist moves ({alerts.length})
+        </span>
+        <button onClick={onDismiss} className="text-[10px] font-semibold text-slate-400 hover:text-white">Dismiss all</button>
+      </div>
+      <div className="space-y-1">
+        {alerts.map((a) => (
+          <button key={a.id} onClick={() => onJourney && onJourney(a.symbol)} className="flex w-full items-center gap-1.5 text-left text-[12px] hover:opacity-90">
+            <span className="font-semibold text-slate-200">{a.symbol}</span>
+            <span className="text-slate-500">call flipped</span>
+            <span className={`font-bold ${arrow(a.fromCall)}`}>{a.fromCall}</span>
+            <span className="text-slate-500">→</span>
+            <span className={`font-bold ${arrow(a.toCall)}`}>{a.toCall}</span>
+            {a.toCall === 'BUY' && !a.eligible && <span className="ml-1 rounded-full border border-slate-600 px-1.5 text-[9px] text-slate-400">still gated</span>}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function WatchlistStrip({ assets, onUnpin, onJourney }) {
   if (!assets || assets.length === 0) return null;
   return (
@@ -106,6 +133,7 @@ export default function DiscoveryFeed() {
   const [pinned, setPinned] = React.useState([]);         // array of symbols
   const [watchAssets, setWatchAssets] = React.useState([]); // enriched pinned assets
   const [journeyFor, setJourneyFor] = React.useState(null);
+  const [alerts, setAlerts] = React.useState([]);   // unseen call-flip alerts
   const pollRef = React.useRef(null);
 
   const load = React.useCallback(() => {
@@ -125,7 +153,17 @@ export default function DiscoveryFeed() {
     const pid = getPid();
     if (!pid) return;
     fetch(`${API_BASE}/v1/albert/watchlist?pid=${encodeURIComponent(pid)}`, { cache: 'no-store' })
-      .then((r) => r.json()).then((j) => { setPinned(j.symbols || []); setWatchAssets(j.assets || []); }).catch(() => {});
+      .then((r) => r.json()).then((j) => {
+        setPinned(j.symbols || []); setWatchAssets(j.assets || []);
+        // watchlist GET also detects flips; now pull any unseen call-flip alerts.
+        return fetch(`${API_BASE}/v1/albert/watchlist/alerts?pid=${encodeURIComponent(pid)}`, { cache: 'no-store' });
+      }).then((r) => r && r.json()).then((j) => { if (j) setAlerts(j.alerts || []); }).catch(() => {});
+  }, []);
+
+  const dismissAlerts = React.useCallback(() => {
+    const pid = getPid();
+    setAlerts([]);
+    if (pid) fetch(`${API_BASE}/v1/albert/watchlist/alerts/ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid }) }).catch(() => {});
   }, []);
 
   React.useEffect(() => {
@@ -159,6 +197,7 @@ export default function DiscoveryFeed() {
       </div>
       <p className="mb-2 text-[11px] text-slate-400">What looks interesting across the live market-cap top 100. <span className="text-slate-500">Discovery is not permission to buy — eligibility &amp; sizing stay in the Command Centre.</span></p>
 
+      <WatchlistAlerts alerts={alerts} onDismiss={dismissAlerts} onJourney={setJourneyFor} />
       <WatchlistStrip assets={watchAssets} onUnpin={togglePin} onJourney={setJourneyFor} />
 
       {(loading || data?.status === 'building') && assets.length === 0 ? (

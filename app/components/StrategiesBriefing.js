@@ -23,6 +23,12 @@ export default function StrategiesBriefing({ onNav }) {
   }, []);
 
   const go = () => onNav && onNav('strategies');
+  // Deep-link: jump straight to a specific strategy card on the Trading Strategies page.
+  const goToStrategy = (id) => {
+    try { if (id) window.__albertFocusStrategy = id; } catch (e) { /* noop */ }
+    if (onNav) onNav('strategies');
+    try { if (id) window.dispatchEvent(new CustomEvent('albert:focus-strategy', { detail: id })); } catch (e) { /* noop */ }
+  };
 
   return (
     <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950/40">
@@ -57,10 +63,10 @@ export default function StrategiesBriefing({ onNav }) {
           {/* Per-strategy P&L rows */}
           <div className="space-y-1.5 px-3 py-2">
             {data.strategies.map((s) => (
-              <button key={s.id} onClick={go} className="flex w-full items-center justify-between gap-2 text-left">
+              <button key={s.id} onClick={() => goToStrategy(s.id)} className="flex w-full items-center justify-between gap-2 text-left hover:opacity-90">
                 <span className="flex min-w-0 items-center gap-1.5">
                   {s.pnlPct >= 0 ? <TrendingUp className="h-3.5 w-3.5 shrink-0 text-emerald-400" /> : <TrendingDown className="h-3.5 w-3.5 shrink-0 text-rose-400" />}
-                  <span className="truncate text-[13px] font-medium text-slate-200">{s.title}</span>
+                  <span className="truncate text-[13px] font-medium text-slate-200 underline-offset-2 hover:underline">{s.title}</span>
                   <span className="shrink-0 text-[10px] text-slate-500">{s.legCount} coin{s.legCount === 1 ? '' : 's'} · {s.daysActive}d</span>
                 </span>
                 <span className={`shrink-0 text-[12px] font-bold ${s.pnlPct >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{pct(s.pnlPct)}</span>
@@ -73,12 +79,12 @@ export default function StrategiesBriefing({ onNav }) {
             <div className="space-y-1 px-3 py-2">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Actions &amp; watch-outs</p>
               {data.actions.map((a, i) => (
-                <div key={i} className="flex items-start gap-1.5 text-[12px] leading-snug">
+                <button key={i} onClick={() => goToStrategy(a.strategyId)} className="flex w-full items-start gap-1.5 text-left text-[12px] leading-snug hover:opacity-90">
                   {a.level === 'action'
                     ? <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-amber-400" />
                     : <Eye className="mt-0.5 h-3 w-3 shrink-0 text-sky-400" />}
                   <span className={a.level === 'action' ? 'text-amber-100' : 'text-slate-300'}>{a.text}</span>
-                </div>
+                </button>
               ))}
             </div>
           ) : (

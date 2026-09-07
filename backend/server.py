@@ -8208,14 +8208,17 @@ def albert_watchlist(pid: str = ''):
         return {'error': 'pid required'}
     symbols = _watchlist_symbols(pid)
     pinned_at = {}
+    last_call = {}
     try:
         from config import discovery_watchlist_col
         for d in discovery_watchlist_col.find({'pid': pid}):
             pinned_at[d['symbol']] = d.get('pinnedAt')
+            last_call[d['symbol']] = d.get('lastCall')
     except Exception:  # noqa
         pass
     core = _DISCOVERY_CACHE.get('core')
     assets = []
+    flips = []
     if core and symbols:
         summary = _portfolio_summary(pid)
         mandate = _get_mandate(pid)
@@ -8233,12 +8236,60 @@ def albert_watchlist(pid: str = ''):
                 a = {'symbol': s, 'pinnedAt': pinned_at.get(s), 'inUniverse': False,
                      'albertCall': 'WAIT', 'eligible': False, 'opportunityScore': None}
             assets.append(a)
+            # Detect a call flip vs the last stored call for this pinned coin.
+            cur = a.get('albertCall')
+            prev = last_call.get(s)
+            if cur:
+                if prev and prev != cur:
+                    flip_doc = {'id': uuid.uuid4().hex, 'pid': pid, 'symbol': s,
+                                'fromCall': prev, 'toCall': cur, 'eligible': bool(a.get('eligible')),
+                                'opportunityScore': a.get('opportunityScore'),
+                                'at': datetime.datetime.utcnow().isoformat(), 'seen': False}
+                    flips.append({'symbol': s, 'fromCall': prev, 'toCall': cur})
+                    try:
+                        from config import watchlist_alerts_col
+                        watchlist_alerts_col.insert_one(dict(flip_doc))
+                    except Exception:  # noqa
+                        pass
+                if prev != cur:
+                    try:
+                        from config import discovery_watchlist_col
+                        discovery_watchlist_col.update_one({'pid': pid, 'symbol': s}, {'$set': {'lastCall': cur}})
+                    except Exception:  # noqa
+                        pass
     else:
         assets = [{'symbol': s, 'pinnedAt': pinned_at.get(s), 'inUniverse': None,
                    'albertCall': None, 'opportunityScore': None} for s in symbols]
-    return {'status': 'ready', 'symbols': symbols, 'assets': assets,
+    return {'status': 'ready', 'symbols': symbols, 'assets': assets, 'flips': flips,
             'buyThreshold': (core or {}).get('buyThreshold'), 'regime': (core or {}).get('regime'),
             'note': 'Pinning is a bookmark — eligibility & sizing stay in the Command Centre.'}
+
+
+@app.get('/api/v1/albert/watchlist/alerts')
+def albert_watchlist_alerts(pid: str = '', include_seen: bool = False):
+    """Unseen (default) call-flip alerts for a pid's pinned coins, most recent first."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    from config import watchlist_alerts_col
+    q = {'pid': pid} if include_seen else {'pid': pid, 'seen': False}
+    rows = list(watchlist_alerts_col.find(q, {'_id': 0}).sort('at', -1).limit(50))
+    return {'status': 'ready', 'alerts': rows, 'unseen': sum(1 for r in rows if not r.get('seen'))}
+
+
+@app.post('/api/v1/albert/watchlist/alerts/ack')
+def albert_watchlist_alerts_ack(payload: dict = Body(...)):
+    """Mark call-flip alerts seen. Pass {ids:[...]} for specific ones, or omit to ack all."""
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    ids = payload.get('ids')
+    from config import watchlist_alerts_col
+    q = {'pid': pid, 'seen': False}
+    if isinstance(ids, list) and ids:
+        q['id'] = {'$in': [str(x) for x in ids]}
+    res = watchlist_alerts_col.update_many(q, {'$set': {'seen': True}})
+    return {'status': 'ready', 'acked': res.modified_count}
 
 
 @app.post('/api/v1/albert/watchlist')

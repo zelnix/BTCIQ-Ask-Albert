@@ -151,6 +151,14 @@ try:
 except Exception:  # noqa
     pass
 
+# Watchlist Alerts — records when a PINNED coin's Albert call flips (e.g. WAIT -> BUY)
+# so the user never misses a shift. Detected lazily when the watchlist is evaluated.
+watchlist_alerts_col = db['albert_watchlist_alerts']
+try:
+    watchlist_alerts_col.create_index([('pid', 1), ('seen', 1), ('at', -1)])
+except Exception:  # noqa
+    pass
+
 # Phase E constants
 ORDER_TTL_SECONDS = 300              # 5-minute TTL from intent createdAt
 DEFAULT_SLIPPAGE_BPS = 50            # 0.50% default price tolerance
