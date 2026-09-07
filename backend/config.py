@@ -120,6 +120,14 @@ try:
 except Exception:  # noqa
     pass
 
+# Phase I: Top-100 Discovery — append-only universe snapshots (audit of what the
+# market-cap-ranked universe + scores looked like at a point in time).
+discovery_snapshots_col = db['albert_discovery_snapshots']
+try:
+    discovery_snapshots_col.create_index([('generatedAt', -1)])
+except Exception:  # noqa
+    pass
+
 # Phase E constants
 ORDER_TTL_SECONDS = 300              # 5-minute TTL from intent createdAt
 DEFAULT_SLIPPAGE_BPS = 50            # 0.50% default price tolerance

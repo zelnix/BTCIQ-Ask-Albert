@@ -11,6 +11,7 @@ import { API_BASE, getPid } from '../lib/api';
 import { fmtUsd } from '../lib/format';
 import { SymbolContext } from '../lib/context';
 import AlbertPlan from './AlbertPlan';
+import DiscoveryFeed from './DiscoveryFeed';
 import { SectionHead } from './shared';
 
 const pnlColor = (v) => (v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-slate-300');
@@ -659,6 +660,8 @@ export default function StrategiesSection() {
       <GuardrailsCard />
 
       <AlbertPlan />
+
+      <DiscoveryFeed />
 
       <BasketSection />
 

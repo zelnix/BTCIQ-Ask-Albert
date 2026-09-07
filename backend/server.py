@@ -7966,6 +7966,92 @@ def albert_portfolio_risk(pid: str = ''):
     return {'status': 'ready', 'portfolioRisk': pr}
 
 
+# ---- Phase I: Top-100 Discovery ---------------------------------------------
+from albert.engine import discovery as _discovery_mod  # noqa: E402
+
+import threading as _threading
+
+_DISCOVERY_CACHE = {'ts': 0.0, 'core': None, 'building': False}
+
+
+def _discovery_universe_rows():
+    """Provider layer: live top-100 by market cap via the CoinGecko public API."""
+    arr = _engine_get('https://api.coingecko.com/api/v3/coins/markets', params={
+        'vs_currency': 'usd', 'order': 'market_cap_desc', 'per_page': 100, 'page': 1,
+        'price_change_percentage': '24h'}) or []
+    rows, src_ts = [], None
+    for c in arr:
+        sym = str(c.get('symbol') or '').upper()
+        if not sym:
+            continue
+        rows.append({'symbol': sym, 'name': c.get('name'), 'rank': c.get('market_cap_rank'),
+                     'marketCapUsd': c.get('market_cap'), 'priceUsd': c.get('current_price'),
+                     'volume24hUsd': c.get('total_volume')})
+        if c.get('last_updated'):
+            src_ts = c.get('last_updated')
+    return rows, (src_ts or datetime.datetime.utcnow().isoformat())
+
+
+def _discovery_build():
+    """Heavy rebuild (CoinGecko + scoring). Runs in a background thread."""
+    try:
+        rows, src_ts = _discovery_universe_rows()
+        if not rows:
+            return
+        tradable = set(ALERT_COIN_PAIRS.keys()) | {'BTC'}
+        reg = _albert_regime() or {}
+        core = _discovery_mod.assemble_core(
+            rows=rows, regime=(reg.get('regime') or 'RANGE'), tradable_set=tradable,
+            score_fn=_score_asset, engine_version=ALBERT_ENGINE_VERSION,
+            source='coingecko', source_ts=src_ts)
+        _DISCOVERY_CACHE['core'] = core
+        _DISCOVERY_CACHE['ts'] = _time_mod.time()
+        try:
+            from config import discovery_snapshots_col
+            discovery_snapshots_col.insert_one({'_id': core['universeSnapshotId'], **core})
+        except Exception:  # noqa
+            pass
+    except Exception:  # noqa
+        traceback.print_exc()
+    finally:
+        _DISCOVERY_CACHE['building'] = False
+
+
+def _discovery_core():
+    """Return the cached core; trigger a background rebuild when stale/missing so the
+    request never blocks on the ~scoring pass. Serves the last snapshot while rebuilding."""
+    now = _time_mod.time()
+    core = _DISCOVERY_CACHE.get('core')
+    fresh = core and (now - _DISCOVERY_CACHE['ts']) < _discovery_mod.DISCOVERY_TTL_SEC
+    if not fresh and not _DISCOVERY_CACHE.get('building'):
+        _DISCOVERY_CACHE['building'] = True
+        _threading.Thread(target=_discovery_build, daemon=True).start()
+    return core
+
+
+@app.get('/api/v1/albert/discovery')
+def albert_discovery(pid: str = ''):
+    """Phase I: live top-100 discovery feed. Discovery is NOT permission to buy — the
+    core (rank/liquidity/data-quality/opportunity score) is pid-independent; mandate
+    eligibility + the honest discovery call are applied for this pid on top. If no
+    snapshot exists yet it returns status 'building' (poll again shortly)."""
+    core = _discovery_core()
+    if not core:
+        return {'status': 'building', 'assets': []}
+    stale = (_time_mod.time() - _DISCOVERY_CACHE['ts']) >= _discovery_mod.DISCOVERY_TTL_SEC
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'status': 'ready', 'stale': stale, **core}
+    summary = _portfolio_summary(pid)
+    mandate = _get_mandate(pid)
+    view = _discovery_mod.apply_eligibility(
+        core, held={h['asset'] for h in summary.get('holdings', [])},
+        excluded=set(mandate.get('excluded_coins') or []),
+        approved=set(mandate.get('approved_coins') or []),
+        mandate_complete=bool(summary.get('mandate_complete')))
+    return {'status': 'ready', 'stale': stale, **view}
+
+
 @app.get('/api/v1/albert/lifecycle-assets')
 def albert_lifecycle_assets(pid: str = ''):
     """Phase H: assets that have a stored decision journey (snapshots/history/fills),
