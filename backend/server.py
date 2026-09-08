@@ -8292,6 +8292,285 @@ def albert_watchlist_alerts_ack(payload: dict = Body(...)):
     return {'status': 'ready', 'acked': res.modified_count}
 
 
+# ---- Unified per-pid notification feed (Bell Integration) -------------------
+# Folds three per-user event streams into one bell feed that follows the user
+# across every screen: (1) watchlist call-flips, (2) paper fills, (3) drawdown
+# recoveries. Derived on the fly from existing collections; a per-pid "seen"
+# ledger (albert_notif_seen_col) tracks acknowledged fill/recovery items, while
+# flips reuse their own seen flag on watchlist_alerts_col.
+def _notif_seen_ids(pid):
+    try:
+        from config import albert_notif_seen_col
+        doc = albert_notif_seen_col.find_one({'_id': pid})
+        return set(doc.get('ids') or []) if doc else set()
+    except Exception:  # noqa
+        return set()
+
+
+def _fill_call_label(side, asset, usd, qty, price):
+    verb = 'Bought' if side == 'BUY' else 'Sold'
+    return f"{verb} {asset}: {fmt_usd_srv(usd)} at {fmt_usd_srv(price)}"
+
+
+def _albert_notifications(pid, limit=40):
+    """Build the merged, most-recent-first per-pid notification list."""
+    seen = _notif_seen_ids(pid)
+    items = []
+    # 1) Watchlist call-flips
+    try:
+        from config import watchlist_alerts_col
+        for a in watchlist_alerts_col.find({'pid': pid}).sort('at', -1).limit(30):
+            fr, to = a.get('fromCall'), a.get('toCall')
+            sym = a.get('symbol')
+            sev = 'high' if to == 'BUY' else 'warning' if to == 'SELL' else 'info'
+            items.append({
+                'id': f"flip_{a.get('id')}", 'category': 'flip', 'severity': sev,
+                'symbol': sym, 'ts': a.get('at'),
+                'title': f"{sym} call flipped: {fr} \u2192 {to}",
+                'message': f"Your pinned {sym} moved from {fr} to {to}"
+                           + (f" (score {a.get('opportunityScore')})" if a.get('opportunityScore') is not None else '') + '.',
+                'action': 'strategies', 'seen': bool(a.get('seen'))})
+    except Exception:  # noqa
+        traceback.print_exc()
+    # 2) Paper fills
+    try:
+        from config import order_ledger_col
+        for f in order_ledger_col.find({'pid': pid}).sort('ts', -1).limit(30):
+            fid = f"fill_{f.get('_id')}"
+            asset = f.get('asset'); side = f.get('side')
+            items.append({
+                'id': fid, 'category': 'fill', 'severity': 'success',
+                'symbol': asset, 'ts': f.get('ts'),
+                'title': f"Paper fill: {side} {asset}",
+                'message': _fill_call_label(side, asset, f.get('usd'), f.get('quantity'), f.get('price')) + '.',
+                'action': 'strategies', 'seen': fid in seen})
+    except Exception:  # noqa
+        traceback.print_exc()
+    # 3) Drawdown recoveries (protection episodes that have lifted)
+    try:
+        from config import portfolio_risk_col
+        pr = portfolio_risk_col.find_one({'_id': pid}) or {}
+        for ep in (pr.get('episodes') or []):
+            lifted = ep.get('liftedAt')
+            if not lifted:
+                continue
+            rid = f"recovery_{lifted}"
+            items.append({
+                'id': rid, 'category': 'recovery', 'severity': 'success',
+                'symbol': None, 'ts': lifted,
+                'title': 'Drawdown recovered \u2014 protection lifted',
+                'message': f"Your portfolio recovered from a {ep.get('breachDrawdownPct')}% drawdown; "
+                           f"protection is off and Albert can deploy again.",
+                'action': 'strategies', 'seen': rid in seen})
+    except Exception:  # noqa
+        traceback.print_exc()
+    items.sort(key=lambda x: (x.get('ts') or ''), reverse=True)
+    items = items[:limit]
+    unseen = sum(1 for i in items if not i.get('seen'))
+    return {'alerts': items, 'unseen': unseen, 'total': len(items)}
+
+
+@app.get('/api/v1/albert/notifications')
+def albert_notifications(pid: str = '', limit: int = 40):
+    """Unified per-pid bell feed: watchlist flips + paper fills + drawdown recoveries,
+    most recent first, with an unseen count for the header badge."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'status': 'ready', 'alerts': [], 'unseen': 0, 'total': 0}
+    try:
+        limit = max(1, min(int(limit), 80))
+    except Exception:  # noqa
+        limit = 40
+    return {'status': 'ready', **_albert_notifications(pid, limit)}
+
+
+@app.post('/api/v1/albert/notifications/ack')
+def albert_notifications_ack(payload: dict = Body(...)):
+    """Mark notifications seen. Pass {ids:[...]} for specific ones, or omit to ack all.
+    Flip ids clear the watchlist alert's seen flag; fill/recovery ids are recorded
+    in the per-pid seen ledger."""
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    ids = payload.get('ids')
+    if not (isinstance(ids, list) and ids):
+        ids = [i['id'] for i in _albert_notifications(pid, 80)['alerts']]
+    flip_alert_ids, ledger_ids = [], []
+    for nid in ids:
+        nid = str(nid)
+        if nid.startswith('flip_'):
+            flip_alert_ids.append(nid[5:])
+        else:
+            ledger_ids.append(nid)
+    acked = 0
+    if flip_alert_ids:
+        try:
+            from config import watchlist_alerts_col
+            res = watchlist_alerts_col.update_many(
+                {'pid': pid, 'id': {'$in': flip_alert_ids}}, {'$set': {'seen': True}})
+            acked += res.modified_count
+        except Exception:  # noqa
+            traceback.print_exc()
+    if ledger_ids:
+        try:
+            from config import albert_notif_seen_col
+            albert_notif_seen_col.update_one(
+                {'_id': pid}, {'$set': {'pid': pid}, '$addToSet': {'ids': {'$each': ledger_ids}}},
+                upsert=True)
+            acked += len(ledger_ids)
+        except Exception:  # noqa
+            traceback.print_exc()
+    return {'status': 'ready', 'acked': acked}
+
+
+# ---- Weekly Brief: Sunday recap of the week's calls, fills & recoveries ------
+_WEEKLY_BRIEF_CACHE = {}          # pid -> {'ts': float, 'data': dict}
+_WEEKLY_BRIEF_TTL_SEC = 900       # 15-min cache (Sunday modal is instant on re-open)
+WEEKLY_BRIEF_SYSTEM = (
+    "You are Albert \u2014 a disciplined, character-driven crypto risk & strategy quant. You are given a read-only "
+    "JSON recap of ONE user's PAST WEEK (counts of your call changes, their paper fills, and any drawdown "
+    "recoveries). Write ONE short, warm, in-character sentence (max ~32 words) recapping the week and setting the "
+    "tone for the week ahead, greeting them by first name if given. ABSOLUTE RULES: do NOT quote specific dollar "
+    "amounts or percentages \u2014 the interface already shows the exact figures; keep it qualitative (discipline, "
+    "patience, progress, risk). Never invent numbers, no financial advice, no hype, no emojis, no markdown, no "
+    "quotes. Output exactly one plain sentence."
+)
+
+
+def _weekly_brief_line_fallback(name, calls_n, fills_n, recov_n):
+    who = name or 'there'
+    if recov_n:
+        return f"Good week, {who} \u2014 we rode out a drawdown and came back on the other side; discipline did its job."
+    if fills_n and calls_n:
+        return f"Busy week, {who} \u2014 a few calls shifted and we acted where it counted; let's keep that same discipline into next week."
+    if calls_n:
+        return f"Quiet-but-watchful week, {who} \u2014 the plan shifted a little and I kept us patient; we stay ready for next week."
+    return f"Calm week, {who} \u2014 nothing forced our hand, so we stayed patient and protected capital. Fresh setups may come this week."
+
+
+@app.get('/api/v1/albert/weekly-brief')
+def albert_weekly_brief(pid: str = '', refresh: bool = False):
+    """A Sunday recap of the user's past 7 days: Albert's call changes, paper fills,
+    and drawdown recoveries, plus ONE character-driven line (read-only LLM; never
+    invents numbers). Deterministic aggregation; cached per-pid for a short TTL."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    now = _time_mod.time()
+    if not refresh:
+        cached = _WEEKLY_BRIEF_CACHE.get(pid)
+        if cached and (now - cached['ts']) < _WEEKLY_BRIEF_TTL_SEC:
+            return cached['data']
+
+    week_end = datetime.datetime.utcnow()
+    week_start = week_end - datetime.timedelta(days=7)
+    cutoff = week_start.isoformat()
+
+    name = None
+    try:
+        if pid.startswith('u_'):
+            u = users_col.find_one({'_id': pid[2:]}, {'name': 1})
+            if u and u.get('name'):
+                name = str(u['name']).strip().split(' ')[0] or None
+    except Exception:  # noqa
+        pass
+
+    # 1) Call changes over the week (from the immutable decision-history events).
+    call_items, buys, sells = [], 0, 0
+    try:
+        from config import decision_history_col
+        rows = list(decision_history_col.find(
+            {'pid': pid, 'changedAt': {'$gte': cutoff}}, {'_id': 0}).sort('changedAt', -1).limit(60))
+        for r in rows:
+            to = (r.get('toLabel') or '')
+            if to == 'Buy':
+                buys += 1
+            elif to in ('Sell', 'Exit 100%') or to.startswith('Trim'):
+                sells += 1
+            call_items.append({'asset': r.get('asset'), 'headline': r.get('headline'),
+                               'changeType': r.get('changeType'), 'changedAt': r.get('changedAt')})
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    # 2) Paper fills over the week.
+    fill_items, fill_buys, fill_sells, buy_usd, sell_usd = [], 0, 0, 0.0, 0.0
+    try:
+        from config import order_ledger_col
+        for f in order_ledger_col.find({'pid': pid, 'ts': {'$gte': cutoff}}).sort('ts', -1).limit(60):
+            side = f.get('side'); usd = float(f.get('usd') or 0)
+            if side == 'BUY':
+                fill_buys += 1; buy_usd += usd
+            else:
+                fill_sells += 1; sell_usd += usd
+            fill_items.append({'asset': f.get('asset'), 'side': side, 'usd': round(usd, 2),
+                               'quantity': f.get('quantity'), 'price': f.get('price'), 'ts': f.get('ts')})
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    # 3) Drawdown recoveries (protection episodes that lifted this week).
+    recov_items = []
+    try:
+        from config import portfolio_risk_col
+        pr = portfolio_risk_col.find_one({'_id': pid}) or {}
+        for ep in (pr.get('episodes') or []):
+            lifted = ep.get('liftedAt')
+            if lifted and lifted >= cutoff:
+                recov_items.append({'breachDrawdownPct': ep.get('breachDrawdownPct'),
+                                    'liftedDrawdownPct': ep.get('liftedDrawdownPct'),
+                                    'activatedAt': ep.get('activatedAt'), 'liftedAt': lifted})
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    # Current protection posture (context for the week ahead).
+    protection = {'active': False}
+    try:
+        summary = _portfolio_summary(pid)
+        mandate = _get_mandate(pid)
+        prr = _portfolio_risk_repo.evaluate(pid, summary.get('total_value'), mandate.get('max_drawdown_pct'))
+        protection = {'active': bool(prr.get('protectionMode')), 'drawdownPct': prr.get('drawdownPct')}
+    except Exception:  # noqa
+        pass
+
+    calls = {'total': len(call_items), 'buys': buys, 'sells': sells, 'items': call_items[:8]}
+    fills = {'total': len(fill_items), 'buys': fill_buys, 'sells': fill_sells,
+             'totalBuyUsd': round(buy_usd, 2), 'totalSellUsd': round(sell_usd, 2), 'items': fill_items[:8]}
+    recoveries = {'total': len(recov_items), 'items': recov_items}
+    empty = (calls['total'] == 0 and fills['total'] == 0 and recoveries['total'] == 0)
+
+    line = _weekly_brief_line_fallback(name, calls['total'], fills['total'], recoveries['total'])
+    if LLM_READY_KEY and _HAS_LLM:
+        try:
+            facts = {'name': name, 'calls': {k: calls[k] for k in ('total', 'buys', 'sells')},
+                     'fills': {k: fills[k] for k in ('total', 'buys', 'sells')},
+                     'recoveries': recoveries['total'], 'protectionActive': protection.get('active')}
+            prompt = ('User weekly recap (read-only JSON):\n' + json.dumps(facts, default=str)
+                      + '\n\nWrite the one-sentence weekly recap now.')
+
+            def _call():
+                async def _go():
+                    chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'weekly-brief-{pid}', system_message=WEEKLY_BRIEF_SYSTEM)
+                            .with_model('gemini', _model_for('chat_standard')).with_params(temperature=0.6, max_tokens=400, thinking_budget=0))
+                    return await chat.send_message(UserMessage(text=prompt))
+                return asyncio.run(_go())
+            reply = _LLM_POOL.submit(_call).result(timeout=40)
+            txt = reply.strip() if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '').strip()
+            if txt:
+                line = txt.split('\n')[0].strip().strip('"').strip()
+        except Exception:  # noqa
+            traceback.print_exc()
+
+    result = {
+        'status': 'ready', 'name': name,
+        'weekStart': week_start.isoformat(), 'weekEnd': week_end.isoformat(),
+        'weekOf': week_start.strftime('%b %d') + ' \u2013 ' + week_end.strftime('%b %d'),
+        'calls': calls, 'fills': fills, 'recoveries': recoveries,
+        'protection': protection, 'empty': empty, 'albertLine': line,
+    }
+    _WEEKLY_BRIEF_CACHE[pid] = {'ts': _time_mod.time(), 'data': result}
+    return result
+
+
+
 @app.post('/api/v1/albert/watchlist')
 def albert_watchlist_pin(payload: dict = Body(...)):
     pid = (str(payload.get('pid') or '')).strip()[:80]
@@ -8316,6 +8595,9 @@ def albert_watchlist_unpin(symbol: str, pid: str = ''):
     from config import discovery_watchlist_col
     discovery_watchlist_col.delete_one({'pid': pid, 'symbol': sym})
     return {'status': 'ready', 'pinned': False, 'symbols': _watchlist_symbols(pid)}
+
+
+@app.get('/api/v1/albert/lifecycle-assets')
 def albert_lifecycle_assets(pid: str = ''):
     """Phase H: assets that have a stored decision journey (snapshots/history/fills),
     whether currently held or only historically traded. Powers the 'View Journey' entry."""

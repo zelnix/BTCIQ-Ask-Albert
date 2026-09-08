@@ -114,6 +114,218 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Fix: /api/v1/albert/lifecycle-assets 404 (missing route decorator) + isolate Trading Strategies sub-panels"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/components/Strategies.js, app/components/PanelBoundary.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          BUG (user reported recurring "This panel hit a snag (Trading Strategies)"). Root cause: the
+          albert_lifecycle_assets() function in server.py had NO @app.get('/api/v1/albert/lifecycle-assets')
+          decorator, so the route 404'd (flagged in a prior fork's frontend test too). Fixed by adding the
+          decorator. Verified: GET /api/v1/albert/lifecycle-assets?pid=<seed> now 200 -> {status:'ready',
+          assets:[...12 symbols...]}; GET /api/v1/albert/lifecycle/{asset} still 200 (regression ok).
+          Also hardened the Trading Strategies panel: wrapped each heavy child (Guardrails, Command Centre/
+          AlbertPlan, Discovery, Baskets, Single-Coin Strategies) in its own PanelBoundary (new
+          app/components/PanelBoundary.js) so one data-specific render throw can no longer take down the whole
+          page and the boundary label pinpoints the failing sub-panel. Screenshot-verified locally with the
+          seeded session: no page-level snag, no sub-panel snag, no 404 in console, all sub-panels render.
+
+  - task: "Bell Integration — unified per-pid notification feed (watchlist flips + paper fills + drawdown recoveries)"
+    implemented: true
+    working: true
+    file: "backend/server.py, backend/config.py, app/page.js, app/components/WeeklyBrief.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW unified per-pid bell feed so watchlist call-flips, paper fills and drawdown recoveries follow the user
+          across every screen (previously flips only showed in a Strategies banner). Two new endpoints (both /api/v1/albert):
+          GET /notifications?pid=&limit= -> {status:'ready', alerts:[{id,category,severity,symbol,ts,title,message,action,seen}],
+          unseen, total}. Alerts are DERIVED on the fly and merged, most-recent-first:
+            • flips  -> id 'flip_<watchlistAlertId>', category 'flip', from watchlist_alerts_col (seen = that doc's seen flag)
+            • fills  -> id 'fill_<ledgerId>', category 'fill', severity 'success', from order_ledger_col
+            • recovery -> id 'recovery_<liftedAt>', category 'recovery', severity 'success', from portfolio_risk_col episodes (liftedAt set)
+          Fill/recovery seen-state is tracked in a NEW per-pid ledger collection albert_notif_seen_col ({_id:pid, ids:[...]}).
+          POST /notifications/ack {pid, ids?} -> ack specific ids or (omit ids) ack all: 'flip_' ids clear the watchlist
+          alert's seen flag; 'fill_'/'recovery_' ids are added to albert_notif_seen_col. Empty pid -> empty feed (no error).
+          FRONTEND: page.js loadNotif() now fetches BOTH /v1/alerts (global smart alerts) AND /v1/albert/notifications?pid
+          and merges them (combined unseen count powers the header bell badge); ackNotif routes ids to the correct ack
+          endpoint by prefix. NotificationBell navigates flip/fill/recovery clicks to the Strategies/Command Centre section.
+          PLEASE TEST (backend only, external /api base, FRESH pids, clean up watchlist_alerts_col + albert_notif_seen_col +
+          order_ledger_col + albert_portfolio_risk at end):
+          A) Empty pid -> GET /notifications?pid= returns status ready, alerts [], unseen 0 (no 500).
+          B) Seed a watchlist flip: insert a doc into watchlist_alerts_col {id, pid, symbol:'SOL', fromCall:'WAIT', toCall:'BUY',
+             at:<iso>, seen:false}. GET /notifications?pid= -> exactly one alert with id 'flip_<id>', category 'flip', seen false,
+             unseen 1. POST /notifications/ack {pid, ids:['flip_<id>']} -> acked 1; the watchlist_alerts_col doc now seen:true;
+             GET again -> that alert seen true, unseen 0.
+          C) Seed a fill: insert into order_ledger_col {_id, pid, accountId:'paper', orderIntentId:'x', asset:'ETH', side:'BUY',
+             quantity:1.0, price:2000, usd:2000, ts:<iso>}. GET /notifications?pid= -> a 'fill_<_id>' alert category 'fill'
+             severity 'success', seen false. Ack it by id -> albert_notif_seen_col for pid contains that id; GET -> seen true.
+          D) ack-all (POST /notifications/ack {pid} with NO ids) marks every current flip+fill+recovery seen -> unseen 0.
+          E) Ordering: with a flip at a LATER ts than a fill, the flip appears first (sorted by ts desc).
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Bell Integration backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ALL 5 TESTS PASSED (5/5): Tests A-E as specified in review request.
+          
+          TEST A - EMPTY PID: ✅ PASSED
+          • GET /api/v1/albert/notifications?pid= returns HTTP 200 ✅
+          • Response: status='ready', alerts=[], unseen=0, total=0 ✅
+          • No 500 error, gracefully handles empty pid ✅
+          
+          TEST B - WATCHLIST FLIP LIFECYCLE: ✅ PASSED
+          • Inserted watchlist alert: id=640a0a04116a4eb1a7e5bc35004997be, pid=u_BELL_daec2f83, SOL WAIT->BUY, seen=false ✅
+          • GET /notifications?pid=u_BELL_daec2f83 returned exactly 1 alert ✅
+          • Alert structure: id='flip_640a0a04116a4eb1a7e5bc35004997be', category='flip', seen=false, unseen=1 ✅
+          • POST /notifications/ack {pid, ids:['flip_640a0a04116a4eb1a7e5bc35004997be']} returned acked=1 ✅
+          • Verified watchlist_alerts_col doc now has seen=true in MongoDB ✅
+          • GET /notifications again: alert seen=true, unseen=0 ✅
+          • Flip alert lifecycle working correctly (insert -> GET unseen -> ack -> GET seen) ✅
+          
+          TEST C - PAPER FILL LIFECYCLE: ✅ PASSED
+          • Inserted paper fill: _id=673469d1-2afa-4e3d-835e-eef46d4af499, pid=u_BELL_56f99791, ETH BUY 1.0 @ $2000 ✅
+          • GET /notifications returned 1 fill alert: id='fill_673469d1-2afa-4e3d-835e-eef46d4af499', category='fill', 
+            severity='success', seen=false ✅
+          • POST /notifications/ack {pid, ids:['fill_673469d1-2afa-4e3d-835e-eef46d4af499']} successful ✅
+          • Verified albert_notif_seen_col for pid contains 'fill_673469d1-2afa-4e3d-835e-eef46d4af499' in ids array ✅
+          • GET /notifications again: fill alert seen=true ✅
+          • Fill alert lifecycle working correctly (insert -> GET unseen -> ack -> seen ledger updated -> GET seen) ✅
+          
+          TEST D - ACK ALL (NO IDS): ✅ PASSED
+          • Inserted both flip and fill for pid=u_BELL_da03f995 ✅
+          • GET /notifications: unseen=2 (both alerts unseen) ✅
+          • POST /notifications/ack {pid} with NO ids (ack all) successful ✅
+          • GET /notifications: unseen=0 (all alerts marked seen) ✅
+          • Ack-all functionality working correctly (marks ALL current flip+fill+recovery seen) ✅
+          
+          TEST E - ORDERING (TS DESC): ✅ PASSED
+          • Inserted fill at 2026-09-08T01:53:22.571836 (earlier timestamp) ✅
+          • Inserted flip at 2026-09-08T01:53:32.571836 (10s later) ✅
+          • GET /notifications returned 2 alerts ✅
+          • First alert: category='flip', id='flip_3b2d6d23' (later timestamp appears first) ✅
+          • Second alert: category='fill', id='fill_...' (earlier timestamp appears second) ✅
+          • Alerts correctly ordered by ts desc (most recent first) ✅
+          
+          CLEANUP: ✅ COMPLETE
+          • Deleted test data from 5 MongoDB collections for 5 test PIDs (u_BELL_daec2f83, u_BELL_56f99791, 
+            u_BELL_da03f995, u_BELL_3b2d6d23, u_BELL_fd9af2ac) ✅
+          • Total deleted: 8 documents (3 watchlist_alerts, 2 albert_notif_seen, 3 order_ledger) ✅
+          
+          KEY VALIDATIONS:
+          • Empty pid handling: Returns status='ready' with empty feed (no 500 error) ✅
+          • Watchlist flip alerts: Derived on-the-fly with id='flip_<watchlistAlertId>', category='flip', 
+            seen flag from watchlist_alerts_col doc ✅
+          • Paper fill alerts: Derived with id='fill_<ledgerId>', category='fill', severity='success', 
+            seen state tracked in albert_notif_seen_col ✅
+          • Ack specific ids: Routes 'flip_' ids to watchlist_alerts_col.seen=true, 'fill_'/'recovery_' ids 
+            to albert_notif_seen_col.ids array ✅
+          • Ack all (no ids): Marks ALL current alerts seen (both flips and fills) ✅
+          • Ordering: Alerts sorted by ts desc (most recent first) ✅
+          • Merged feed: Combines flips, fills, and recoveries in single response ✅
+          • Unseen count: Correctly counts alerts where seen=false ✅
+          
+          NO MAJOR ISSUES FOUND. Bell Integration (unified notification feed) is fully functional and production-ready.
+  - task: "Weekly Brief — Sunday recap of the week's calls, fills & drawdown recoveries (+ LLM persona line)"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/page.js, app/components/WeeklyBrief.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: "NA"
+        -agent: "main"
+        -comment: |
+          NEW GET /api/v1/albert/weekly-brief?pid=&refresh= -> deterministic aggregation of the user's PAST 7 DAYS plus ONE
+          character-driven Albert line (read-only Gemini; falls back to a templated line when LLM off). Cached per-pid ~15min
+          (refresh=true bypasses). Response: {status:'ready', name, weekStart, weekEnd, weekOf,
+            calls:{total, buys, sells, items:[{asset,headline,changeType,changedAt}]}   (from decision_history_col changedAt>=cutoff),
+            fills:{total, buys, sells, totalBuyUsd, totalSellUsd, items:[{asset,side,usd,quantity,price,ts}]}  (order_ledger_col ts>=cutoff),
+            recoveries:{total, items:[{breachDrawdownPct,liftedDrawdownPct,activatedAt,liftedAt}]}  (portfolio_risk_col episodes liftedAt>=cutoff),
+            protection:{active,drawdownPct}, empty:bool, albertLine}.
+          FRONTEND: WeeklyBrief.js renders as a Sunday auto-modal (once per browser session, day===0) AND as an inline
+          WeeklyBriefCard on the Morning Brief. Not the same as the existing LLM 'weekly-recap' note.
+          PLEASE TEST (backend only, external /api base, FRESH pids, clean up decision_history_col + order_ledger_col +
+          albert_portfolio_risk at end):
+          A) Empty pid -> error 'pid required'. A pid with no history -> status ready, empty true, calls/fills/recoveries totals 0,
+             non-empty albertLine (fallback allowed).
+          B) Seed decision_history_col events (pid, asset, changedAt within 7d, toLabel 'Buy'/'Exit 100%'/'Trim 25%', headline,
+             changeType) and order_ledger_col fills within 7d -> weekly-brief calls.total / fills.total reflect them; buys/sells
+             counts correct; totalBuyUsd/totalSellUsd sum the fills; empty false. Events OLDER than 7d are excluded.
+          C) refresh=false returns cached; refresh=true recomputes. albertLine present and never quotes specific $ / % (qualitative).
+        -working: true
+        -agent: "testing"
+        -comment: |
+          ✅ PASSED comprehensive Weekly Brief backend testing via external URL (https://quant-features.preview.emergentagent.com/api).
+          ALL 3 TESTS PASSED (3/3): Tests A-C as specified in review request.
+          
+          TEST A - NO PID & FRESH PID: ✅ PASSED (2/2 sub-tests)
+          • A1 - No pid: GET /api/v1/albert/weekly-brief with no pid param returns HTTP 200 with error='pid required' ✅
+          • A2 - Fresh pid with no data: pid=u_WK_fd9af2ac (fresh, no history) ✅
+            - Response: status='ready', empty=true ✅
+            - calls.total=0, fills.total=0, recoveries.total=0 ✅
+            - albertLine non-empty: "Your patience during this quiet period demonstrate..." (fallback line) ✅
+            - No error, gracefully handles pid with no history ✅
+          
+          TEST B - DATA AGGREGATION WITHIN 7 DAYS: ✅ PASSED
+          • Seeded 2 decision_history events within 7 days (3 days ago): 1 Buy (ETH), 1 Exit 100% (BTC) ✅
+          • Seeded 2 order_ledger fills within 7 days: 1 BUY $2000 (ETH), 1 SELL $500 (BTC) ✅
+          • Seeded 1 decision_history event OLDER than 7 days (10 days ago, SOL Buy) - should be excluded ✅
+          • GET /weekly-brief?pid=u_WK_ed3f849a&refresh=true returns HTTP 200 ✅
+          • Response: status='ready', empty=false ✅
+          • calls.total=2 (correct, old event excluded) ✅
+          • calls.buys=1, calls.sells=1 (correct counts) ✅
+          • fills.total=2 ✅
+          • fills.buys=1, fills.sells=1 ✅
+          • fills.totalBuyUsd=2000.0 (exact match) ✅
+          • fills.totalSellUsd=500.0 (exact match) ✅
+          • Old event (10 days ago) correctly excluded from aggregation (calls.total=2, not 3) ✅
+          • 7-day cutoff working correctly (changedAt >= cutoff for calls, ts >= cutoff for fills) ✅
+          
+          TEST C - CACHE BEHAVIOR & ALBERTLINE VALIDATION: ✅ PASSED
+          • Seeded 1 decision_history event within 7 days for pid=u_WK_28dd3069 ✅
+          • refresh=true call took 1.00s (recompute) ✅
+          • refresh=false call took 0.20s (cached, 5x faster) ✅
+          • Cached response matches recomputed response (calls.total same) ✅
+          • Cache TTL ~15min (900s) working correctly ✅
+          • albertLine present and non-empty: "Your single strategic move this week demonstrates a patient approach..." ✅
+          • albertLine is qualitative: NO '$' character found ✅
+          • albertLine is qualitative: NO '%' character found ✅
+          • albertLine validation: Does NOT quote specific dollar amounts or percentages (per spec) ✅
+          
+          CLEANUP: ✅ COMPLETE
+          • Deleted test data from 3 MongoDB collections for 3 test PIDs (u_WK_fd9af2ac, u_WK_ed3f849a, u_WK_28dd3069) ✅
+          • Total deleted: 9 documents (3 portfolio_risk, 2 order_ledger, 4 decision_history) ✅
+          
+          KEY VALIDATIONS:
+          • Error handling: Missing pid returns error='pid required' ✅
+          • Empty state: Fresh pid with no history returns status='ready', empty=true, all totals=0, 
+            non-empty albertLine (fallback) ✅
+          • Data aggregation: Correctly aggregates decision_history events (changedAt >= 7d cutoff) and 
+            order_ledger fills (ts >= 7d cutoff) ✅
+          • Call counts: calls.total, calls.buys, calls.sells correctly count toLabel='Buy'/'Exit 100%'/'Trim X' ✅
+          • Fill counts: fills.total, fills.buys, fills.sells correctly count side='BUY'/'SELL' ✅
+          • Fill USD sums: totalBuyUsd and totalSellUsd correctly sum usd field from fills ✅
+          • 7-day exclusion: Events/fills older than 7 days are correctly excluded ✅
+          • Cache behavior: refresh=false returns cached (fast), refresh=true recomputes (slower) ✅
+          • Cache TTL: ~15min (900s) per-pid cache working correctly ✅
+          • albertLine: Non-empty, character-driven, qualitative (no $ or % quotes), falls back to 
+            templated line when LLM off ✅
+          • Response structure: All required fields present (status, name, weekStart, weekEnd, weekOf, 
+            calls, fills, recoveries, protection, empty, albertLine) ✅
+          
+          NO MAJOR ISSUES FOUND. Weekly Brief endpoint is fully functional and production-ready.
+
   - task: "Albert's Plan Phase E — paper-only Execution Safety Layer (Paper Order Manager)"
     implemented: true
     working: true
@@ -10897,7 +11109,8 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Welcome Brief — personalized morning brief endpoint (GET /api/v1/albert/welcome-brief)"
+    - "Bell Integration — unified per-pid notification feed (watchlist flips + paper fills + drawdown recoveries)"
+    - "Weekly Brief — Sunday recap of the week's calls, fills & drawdown recoveries (+ LLM persona line)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -10905,7 +11118,69 @@ test_plan:
 agent_communication:
     -agent: "main"
     -message: |
-      NEW BACKEND FOR TESTING — WELCOME BRIEF (backend only, external /api base). Endpoint:
+      NEW BACKEND FOR TESTING (backend only, external /api base) — TWO features. Use FRESH pids and CLEAN UP at the end
+      (watchlist_alerts_col, albert_notif_seen_col, albert_paper_ledger/order_ledger_col, albert_portfolio_risk,
+      albert_decision_history). Direct Mongo seeding is expected for these (they read existing collections).
+
+      FEATURE 1 — UNIFIED BELL FEED. GET /api/v1/albert/notifications?pid=&limit= and POST /api/v1/albert/notifications/ack.
+      A) Empty pid -> GET returns status 'ready', alerts [], unseen 0 (NO 500).
+      B) Insert watchlist_alerts_col {id:<uuid hex>, pid, symbol:'SOL', fromCall:'WAIT', toCall:'BUY', at:<iso now>, seen:false}.
+         GET -> exactly 1 alert id 'flip_<id>', category 'flip', seen false, unseen 1. POST ack {pid, ids:['flip_<id>']} ->
+         acked>=1; watchlist_alerts_col doc now seen:true; GET again -> that alert seen true, unseen 0.
+      C) Insert order_ledger_col {_id:<uuid>, pid, accountId:'paper', orderIntentId:'x', asset:'ETH', side:'BUY',
+         quantity:1.0, price:2000, usd:2000, ts:<iso now>}. GET -> alert id 'fill_<_id>', category 'fill', severity 'success',
+         seen false. POST ack {pid, ids:['fill_<_id>']} -> albert_notif_seen_col for pid contains that id; GET -> seen true.
+      D) POST ack {pid} with NO ids -> marks ALL current flip+fill+recovery seen (GET unseen 0).
+      E) Ordering: a flip with a LATER ts than a fill appears FIRST (sorted by ts desc).
+
+      FEATURE 2 — WEEKLY BRIEF. GET /api/v1/albert/weekly-brief?pid=&refresh=.
+      A) No pid -> {error:'pid required'}. Fresh pid with no data -> status 'ready', empty true, calls/fills/recoveries totals 0,
+         albertLine NON-EMPTY (fallback). May take up to ~40s if LLM runs.
+      B) Seed albert_decision_history {pid, asset:'ETH', changedAt:<iso within 7d>, toLabel:'Buy', headline:'Wait -> Buy',
+         changeType:'WAIT->BUY'} (+ one with toLabel:'Exit 100%') and order_ledger_col fills within 7d (one BUY usd 2000, one
+         SELL usd 500). GET -> calls.total==2, calls.buys>=1, calls.sells>=1; fills.total==2, fills.buys==1, fills.sells==1,
+         totalBuyUsd==2000, totalSellUsd==500; empty false. Insert an event with changedAt OLDER than 7d -> it is EXCLUDED.
+      C) refresh=false returns cached (fast, same payload); refresh=true recomputes. albertLine must NOT quote specific $/%.
+    -agent: "testing"
+    -message: |
+      ✅ BACKEND TESTING COMPLETE FOR TWO NEW FEATURES. ALL 8 TESTS PASSED (8/8).
+      
+      Tested via external URL (https://quant-features.preview.emergentagent.com/api) with FRESH test PIDs 
+      (u_BELL_<uuid>, u_WK_<uuid>). Direct MongoDB seeding used as expected. All test data cleaned up.
+      
+      FEATURE 1 — UNIFIED BELL FEED: ✅ 5/5 TESTS PASSED
+      • Test A (Empty pid): Returns status='ready', alerts=[], unseen=0 (no 500 error) ✅
+      • Test B (Watchlist flip lifecycle): Insert flip -> GET unseen -> ack -> watchlist_alerts_col.seen=true -> GET seen ✅
+      • Test C (Paper fill lifecycle): Insert fill -> GET unseen -> ack -> albert_notif_seen_col.ids contains id -> GET seen ✅
+      • Test D (Ack all): POST ack {pid} with NO ids marks ALL current flip+fill+recovery seen (unseen=0) ✅
+      • Test E (Ordering): Flip with LATER ts appears FIRST (sorted by ts desc) ✅
+      
+      FEATURE 2 — WEEKLY BRIEF: ✅ 3/3 TESTS PASSED
+      • Test A (No pid & fresh pid): No pid returns error='pid required'; fresh pid returns empty=true, totals=0, 
+        non-empty albertLine (fallback) ✅
+      • Test B (Data aggregation): Seeded 2 calls (1 Buy, 1 Exit 100%) + 2 fills (1 BUY $2000, 1 SELL $500) within 7d -> 
+        calls.total=2, fills.total=2, totalBuyUsd=2000, totalSellUsd=500; event OLDER than 7d correctly excluded ✅
+      • Test C (Cache & albertLine): refresh=false cached (0.20s), refresh=true recomputes (1.00s); albertLine present 
+        and qualitative (no $ or %) ✅
+      
+      CLEANUP: ✅ COMPLETE
+      • Deleted 17 total documents from 5 collections (albert_watchlist_alerts, albert_notif_seen, albert_paper_ledger, 
+        albert_portfolio_risk, albert_decision_history) for 7 test PIDs ✅
+      
+      KEY FINDINGS:
+      • Bell Integration: Unified feed correctly merges flips (watchlist_alerts_col), fills (order_ledger_col), and 
+        recoveries (portfolio_risk_col.episodes) in ts desc order. Seen state tracked separately: flips use 
+        watchlist_alerts_col.seen flag, fills/recoveries use albert_notif_seen_col.ids array. Ack-all (no ids) 
+        marks ALL current items seen. Empty pid gracefully returns empty feed.
+      • Weekly Brief: Deterministic aggregation of past 7 days (decision_history_col changedAt>=cutoff, 
+        order_ledger_col ts>=cutoff). Correctly counts calls (Buy/Sell/Exit/Trim) and fills (BUY/SELL), sums 
+        totalBuyUsd/totalSellUsd. Events older than 7d excluded. Cache working (15min TTL). albertLine qualitative 
+        (no $ or % quotes), falls back to templated line.
+      
+      NO MAJOR ISSUES FOUND. Both features are fully functional and production-ready.
+    -agent: "main"
+    -message: |
+      [PRIOR — already tested & passing] WELCOME BRIEF.
       GET /api/v1/albert/welcome-brief?pid= — a personalized morning brief shown right after sign-in. Returns:
         {status:'ready', name, date, mandateComplete, onboarding, portfolio:{totalValueUsd,usdcUsd,deployableUsdcUsd,
          holdingsCount}, protection:{active,drawdownPct,maxDrawdownPct}, callCounts:{BUY,SELL,HOLD,WAIT},

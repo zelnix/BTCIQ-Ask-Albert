@@ -38,6 +38,7 @@ import PortfolioPanel from './components/PortfolioPanel';
 import AlbertTrackRecord from './components/AlbertTrackRecord';
 import AlertManager from './components/AlertManager';
 import WeeklyRecap from './components/WeeklyRecap';
+import WeeklyBrief, { WeeklyBriefCard } from './components/WeeklyBrief';
 
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
@@ -600,7 +601,7 @@ function NudgeApplyButton({ alert, onApplied }) {
   );
 }
 
-function NotificationBell({ alertsData, onAck, onViewAll, onOpenBrief }) {
+function NotificationBell({ alertsData, onAck, onViewAll, onOpenBrief, onNavSection }) {
   const [open, setOpen] = React.useState(false);
   const [perm, setPerm] = React.useState(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
   const [soundOn, setSoundOn] = React.useState(true);
@@ -702,11 +703,13 @@ function NotificationBell({ alertsData, onAck, onViewAll, onOpenBrief }) {
                 <p className="px-3 py-6 text-center text-xs text-slate-500">No notifications yet.</p>
               ) : alerts.slice(0, 10).map((a) => {
                 const isBrief = a.category === 'daily_brief';
+                const isAlbertFeed = a.category === 'flip' || a.category === 'fill' || a.category === 'recovery';
                 const isRebalNudge = a.action === 'basket_rebalance' && a.basket_id;
                 const onClickItem = () => {
                   setOpen(false);
                   if (a.id) onAck([a.id]);
                   if (isBrief && onOpenBrief) onOpenBrief(a.symbol || 'BTC');
+                  else if (isAlbertFeed && onNavSection) onNavSection(a.action || 'strategies');
                   else onViewAll();
                 };
                 const inner = (
@@ -2017,6 +2020,8 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
           </div>
           <div>
             <StrategiesBriefing onNav={onNav} />
+            <WeeklyBriefCard onNav={onNav} />
+
             <div className="mt-3 grid grid-cols-3 gap-2 text-center">
               <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.06] p-2"><p className="text-[10px] uppercase text-slate-500">Support</p><p className="text-sm font-bold text-emerald-300">{bear ? `$${bear.trigger_level.toLocaleString()}` : '—'}</p></div>
               <div className="rounded-lg border border-red-500/25 bg-red-500/[0.06] p-2"><p className="text-[10px] uppercase text-slate-500">Resistance</p><p className="text-sm font-bold text-red-300">{bull ? `$${bull.trigger_level.toLocaleString()}` : '—'}</p></div>
@@ -3189,6 +3194,8 @@ export default function DashboardPage() {
   const [authUser, setAuthUser] = useState(undefined);
   const [welcomeOpen, setWelcomeOpen] = useState(false);
   const welcomeChecked = React.useRef(false);
+  const [weeklyOpen, setWeeklyOpen] = useState(false);
+  const weeklyChecked = React.useRef(false);
   React.useEffect(() => {
     let alive = true;
     fetchMe().then((u) => {
@@ -3208,6 +3215,18 @@ export default function DashboardPage() {
         sessionStorage.setItem('albert_welcome_shown', '1');
       }
     } catch (e) { setWelcomeOpen(true); }
+  }, [authUser]);
+  // Weekly Brief — auto-shown on Sundays, once per browser session, after the Welcome Brief.
+  React.useEffect(() => {
+    if (!authUser || weeklyChecked.current) return;
+    weeklyChecked.current = true;
+    try {
+      const isSunday = new Date().getDay() === 0;
+      if (isSunday && !sessionStorage.getItem('albert_weekly_shown')) {
+        setWeeklyOpen(true);
+        sessionStorage.setItem('albert_weekly_shown', '1');
+      }
+    } catch (e) { /* noop */ }
   }, [authUser]);
   const handleSignOut = React.useCallback(async () => {
     await authLogout();
@@ -3321,18 +3340,40 @@ export default function DashboardPage() {
 
   // Global (all-coins) notification feed that powers the top-bar bell + sidebar
   // badge, so the unread count stays accurate no matter which coin is selected.
+  // Merges the global smart-alert feed with this user's personal Albert feed
+  // (watchlist flips + paper fills + drawdown recoveries) so those follow the
+  // user across every screen.
   const loadNotif = useCallback(async () => {
     try {
-      const r = await fetch(`${API_BASE}/v1/alerts?limit=50`, { cache: 'no-store' });
-      const j = await r.json();
-      if (j.status === 'ready') { __notifCache = j; setNotif(j); }
+      const pid = getPid();
+      const [gr, ar] = await Promise.all([
+        fetch(`${API_BASE}/v1/alerts?limit=50`, { cache: 'no-store' }).then((r) => r.json()).catch(() => null),
+        pid ? fetch(`${API_BASE}/v1/albert/notifications?pid=${encodeURIComponent(pid)}`, { cache: 'no-store' }).then((r) => r.json()).catch(() => null) : Promise.resolve(null),
+      ]);
+      const gAlerts = (gr && gr.status === 'ready' && gr.alerts) || [];
+      const aAlerts = (ar && ar.status === 'ready' && ar.alerts) || [];
+      const merged = [...aAlerts, ...gAlerts].sort((a, b) => String(b.ts || '').localeCompare(String(a.ts || '')));
+      const unseen = ((gr && gr.unseen) || 0) + ((ar && ar.unseen) || 0);
+      const combined = { status: 'ready', alerts: merged, unseen, total: ((gr && gr.total) || 0) + ((ar && ar.total) || 0) };
+      __notifCache = combined; setNotif(combined);
     } catch (e) { /* noop */ }
   }, []);
 
   const ackNotif = useCallback(async (ids) => {
     try {
-      const body = ids ? { ids } : {}; // empty payload => mark every coin's alerts read
-      await fetch(`${API_BASE}/v1/alerts/ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const pid = getPid();
+      // Route ids to the right ack endpoint by their prefix (Albert feed ids are
+      // prefixed flip_/fill_/recovery_); no ids => mark everything read on both.
+      const albertIds = ids ? ids.filter((i) => /^(flip_|fill_|recovery_)/.test(i)) : null;
+      const globalIds = ids ? ids.filter((i) => !/^(flip_|fill_|recovery_)/.test(i)) : null;
+      const calls = [];
+      if (!ids || (globalIds && globalIds.length)) {
+        calls.push(fetch(`${API_BASE}/v1/alerts/ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(globalIds && globalIds.length ? { ids: globalIds } : {}) }));
+      }
+      if (pid && (!ids || (albertIds && albertIds.length))) {
+        calls.push(fetch(`${API_BASE}/v1/albert/notifications/ack`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(albertIds && albertIds.length ? { pid, ids: albertIds } : { pid }) }));
+      }
+      await Promise.all(calls);
       loadNotif();
       loadAlerts();
     } catch (e) { /* noop */ }
@@ -3536,6 +3577,7 @@ export default function DashboardPage() {
     <div className="relative min-h-screen bg-slate-950 text-slate-100">
       {albertBioOpen && <AlbertBioModal onClose={() => setAlbertBioOpen(false)} />}
       {welcomeOpen && <WelcomeBrief onClose={() => setWelcomeOpen(false)} onOpenCommandCentre={() => { setActive('strategies'); setWelcomeOpen(false); }} />}
+      {weeklyOpen && !welcomeOpen && <WeeklyBrief onClose={() => setWeeklyOpen(false)} onOpenCommandCentre={() => { setActive('strategies'); setWeeklyOpen(false); }} />}
       <AlbertVoiceToast />
       {chatStrategyBuilding && !chatStrategy?.draft && (
         <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
@@ -3615,7 +3657,7 @@ export default function DashboardPage() {
               {ticker?.price_aud && <span className="rounded-md bg-amber-500/10 px-1.5 py-0.5 text-xs font-semibold text-amber-300 ring-1 ring-amber-500/20">≈ {fmtAud(ticker.price_aud)}</span>}
               <span className={`text-sm font-semibold ${(ticker?.change24h ?? d.day_change_pct) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{ticker?.change24h ?? d.day_change_pct}%</span>
             </div>
-            <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => setActive('alerts')} onOpenBrief={(sym) => { const s = (sym || 'BTC').toUpperCase(); if (s !== symbol) setSymbol(s); setActive('briefing'); }} />
+            <NotificationBell alertsData={notif} onAck={ackNotif} onViewAll={() => setActive('alerts')} onNavSection={(s) => setActive(s || 'strategies')} onOpenBrief={(sym) => { const s = (sym || 'BTC').toUpperCase(); if (s !== symbol) setSymbol(s); setActive('briefing'); }} />
             <Button onClick={() => setWelcomeOpen(true)} size="sm" variant="outline" title="Re-open today's Welcome Brief"
               className="gap-1.5 border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800">
               <Sparkles className="h-4 w-4 text-sky-300" /><span className="hidden sm:inline">Brief</span>

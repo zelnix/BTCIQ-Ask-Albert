@@ -12,6 +12,7 @@ import { fmtUsd } from '../lib/format';
 import { SymbolContext } from '../lib/context';
 import AlbertPlan from './AlbertPlan';
 import DiscoveryFeed from './DiscoveryFeed';
+import PanelBoundary from './PanelBoundary';
 import { SectionHead } from './shared';
 
 const pnlColor = (v) => (v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-slate-300');
@@ -680,14 +681,15 @@ export default function StrategiesSection() {
       <SectionHead icon={Crosshair} title="Trading Strategies"
         blurb={`Crypto strategies Albert builds and babysits — single-coin plays or multi-coin (portfolio-style) strategies, all in one place. Each has entries, profit targets, a stop and if-this-then-that rules on price, time and signals. Albert nudges you when it's time to act, paper-tracks the P&L, and keeps a history of how past plays performed.`} />
 
-      <GuardrailsCard />
+      <PanelBoundary label="Guardrails"><GuardrailsCard /></PanelBoundary>
 
-      <AlbertPlan />
+      <PanelBoundary label="Command Centre"><AlbertPlan /></PanelBoundary>
 
-      <DiscoveryFeed />
+      <PanelBoundary label="Discovery"><DiscoveryFeed /></PanelBoundary>
 
-      <BasketSection />
+      <PanelBoundary label="Baskets"><BasketSection /></PanelBoundary>
 
+      <PanelBoundary label="Single-Coin Strategies">
       <div className="flex items-center gap-2 pt-1">
         <Crosshair className="h-4 w-4 text-sky-300" />
         <h3 className="text-base font-bold text-white">Single-Coin Strategies</h3>
@@ -819,6 +821,7 @@ export default function StrategiesSection() {
           onRegenerate={build}
           onActivated={(s) => { setDraft(null); setGoal(''); load(); }} />
       )}
+      </PanelBoundary>
     </div>
   );
 }

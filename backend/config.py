@@ -159,6 +159,15 @@ try:
 except Exception:  # noqa
     pass
 
+# Unified per-pid notification "seen" ledger — tracks which derived notifications
+# (paper fills, drawdown recoveries) a user has acknowledged in the header bell.
+# Watchlist flips keep their own seen flag on watchlist_alerts_col. Doc: {_id: pid, ids: [...]}.
+albert_notif_seen_col = db['albert_notif_seen']
+try:
+    albert_notif_seen_col.create_index('pid')
+except Exception:  # noqa
+    pass
+
 # Phase E constants
 ORDER_TTL_SECONDS = 300              # 5-minute TTL from intent createdAt
 DEFAULT_SLIPPAGE_BPS = 50            # 0.50% default price tolerance
