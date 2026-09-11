@@ -114,6 +114,35 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Fix: Google 'Continue with Google' button does nothing on Windows"
+    implemented: true
+    working: true
+    file: "app/components/HomePage.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          BUG (user reported): clicking the custom "Continue with Google" button did nothing on Windows/Chrome
+          (worked on Mac). Root cause: the button proxied a SYNTHETIC .click() to a REAL GIS button that was
+          rendered OFF-SCREEN (position:absolute; left:-9999px). Synthetic clicks on an off-screen GIS
+          button/iframe are not a reliable user gesture across browsers and silently no-op on Windows/Chrome.
+          Confirmed against the verified integration playbook (integration_playbook_expert). No backend error
+          because no request was ever made.
+          FIX (transparent GIS-button overlay, per playbook): removed the synthetic-click triggerGoogle() and the
+          off-screen div. Now render the REAL GIS button in-layout (300x44) with opacity-0 and z-10 ON TOP of our
+          styled visual button, and set the visual button to pointer-events-none (visual only, always generic
+          text so no "Continue as <name>" flicker). The user's physical click lands directly on Google's real
+          button = genuine gesture, cross-browser. initialize/renderButton/callback and backend
+          POST /api/auth/google are UNCHANGED; config.py Google client-id override is UNTOUCHED.
+          VERIFIED locally via screenshot + DOM probe: wrapper 300x44, opacity 0, z-index 10, contains GIS
+          iframe + role=button, and document.elementFromPoint(center) lands INSIDE the GIS wrapper
+          (clickLandsInGIS=true) — i.e. the click now hits Google, not our visual button. The
+          "[GSI_LOGGER] origin not allowed" console msg on localhost is expected (only askalbert.app is an
+          authorized JS origin); real OAuth popup must be verified on the production origin after deploy.
+
   - task: "Fix: /api/v1/albert/lifecycle-assets 404 (missing route decorator) + isolate Trading Strategies sub-panels"
     implemented: true
     working: true
