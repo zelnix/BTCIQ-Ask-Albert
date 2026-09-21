@@ -177,8 +177,11 @@ class LlmChat:
 
 # in-memory ticker cache (avoid hammering the exchange on every poll)
 _ticker_cache = {}  # symbol -> {'data':..., 'ts':...}
-# USD->AUD fx rate cache (refreshed ~30 min)
-_fx_cache = {'rate': None, 'ts': 0.0}
+# USD->AUD fx rate cache (refreshed ~30 min). 'cooldown_ts' throttles retries after a
+# failed/429 Yahoo fetch so the frequently-polled /ticker endpoint can't hammer Yahoo.
+_fx_cache = {'rate': None, 'ts': 0.0, 'cooldown_ts': 0.0}
+_FX_TTL_SEC = 1800          # serve a good rate for 30 min
+_FX_FAIL_COOLDOWN_SEC = 600  # after a failure, don't retry Yahoo for 10 min
 
 
 def grade_pending(df):
@@ -5363,7 +5366,12 @@ def ticker(symbol: str = 'BTC'):
         return cache['data']
 
     def usd_aud():
-        if _fx_cache['rate'] and (now - _fx_cache['ts']) < 1800:
+        # Fresh cached rate — no network call.
+        if _fx_cache['rate'] and (now - _fx_cache['ts']) < _FX_TTL_SEC:
+            return _fx_cache['rate']
+        # Recently failed — back off (return last known rate, which may be None)
+        # instead of re-hitting Yahoo on every poll and triggering a 429 storm.
+        if (now - _fx_cache['cooldown_ts']) < _FX_FAIL_COOLDOWN_SEC:
             return _fx_cache['rate']
         try:
             s = fetch_yahoo_series('AUD=X', '5d')
@@ -5372,7 +5380,8 @@ def ticker(symbol: str = 'BTC'):
                 _fx_cache['rate'] = rate
                 _fx_cache['ts'] = now
         except Exception:  # noqa
-            traceback.print_exc()
+            # Start the cooldown so we don't retry for _FX_FAIL_COOLDOWN_SEC.
+            _fx_cache['cooldown_ts'] = now
         return _fx_cache['rate']
 
     for name in ['kraken', 'coinbase']:
