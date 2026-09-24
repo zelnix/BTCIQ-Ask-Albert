@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Target, Scale, BarChart3, Globe, History, Waves, Fish, Landmark,
   Gauge, Newspaper, ShieldAlert, CalendarClock, Trophy, MessageCircle, Bell, Activity,
-  Database, Cpu, ShieldCheck, Sparkles, CandlestickChart, ClipboardList, Info, Crosshair, Radar,
+  Database, Cpu, ShieldCheck, Sparkles, CandlestickChart, ClipboardList, Info, Crosshair, Radar, Users,
 } from 'lucide-react';
 
 const SECTIONS = [
@@ -21,6 +21,8 @@ const SECTIONS = [
     blurb: 'Run the same quant engine across Bitcoin, Ethereum and Solana side by side — score, market mood, near-term odds and key levels — so you can see how the majors stack up. Each coin computes its own model on first view, then caches.' },
   { id: 'market-intel', label: 'Market Intelligence', icon: BarChart3,
     blurb: 'The technical picture behind the score: chart structure and key levels, where Bitcoin sits in its 4-year cycle, and the raw indicators the model reads.' },
+  { id: 'drivers', label: 'Market Drivers', icon: Users,
+    blurb: 'Who is actually moving Bitcoin right now — the first mover, the current leader, who is confirming or resisting, and who could rotate in next. A deterministic read across intraday, swing and cycle horizons, honest about what is observed versus inferred. Proposes posture; your portfolio rules decide any action.' },
   { id: 'crossmarket', label: 'Cross-Market', icon: Globe,
     blurb: 'How this coin stacks up against traditional markets — S&P 500, Nasdaq, Dow, Nikkei, European indices, Gold and the US Dollar. See rebased performance, returns, correlation (is crypto moving with stocks or breaking away?) and volatility.' },
   { id: 'analogs', label: 'Happening Again', icon: History,
@@ -80,7 +82,7 @@ const sec = (id) => SECTIONS.find(s => s.id === id)
   || { id, label: id, icon: Info, blurb: '' };
 
 // Sections that are Bitcoin-specific and hidden from the nav when an altcoin is selected.
-const BTC_ONLY_SECTIONS = ['smartmoney', 'whales', 'macro', 'events', 'timemachine', 'leverage', 'network', 'dataaudit', 'admin'];
+const BTC_ONLY_SECTIONS = ['smartmoney', 'whales', 'macro', 'events', 'timemachine', 'leverage', 'network', 'dataaudit', 'admin', 'drivers'];
 // Sections removed from the app entirely (superseded by the global coin picker).
 const REMOVED_SECTIONS = ['compare'];
 

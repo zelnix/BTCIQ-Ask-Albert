@@ -5634,10 +5634,6 @@ def albert_trader_home(pid: str = '', symbol: str = 'BTC'):
                            'nTrades': qv.get('n_trades'),
                            'note': 'Purged walk-forward out-of-sample validation'}
 
-    # --- Projection (no dedicated projection engine wired yet: honest) ----------
-    projection = {'available': False, 'reason': 'not_available',
-                  'note': 'Projection bands are not yet wired into this aggregation.'}
-
     # --- Data integrity / freshness ---------------------------------------------
     integrity = {'lastRun': as_of, 'stale': False}
     try:
@@ -5648,6 +5644,71 @@ def albert_trader_home(pid: str = '', symbol: str = 'BTC'):
                      'stale': bool(audit.get('stale'))}
     except Exception:  # noqa
         pass
+
+    # --- Projection bands (reuse the horizon forecast engine; no new decision
+    # logic). Safety rules applied: enforce bear<=base<=bull ordering, only mark
+    # available when we have a live price + at least one horizon, and honestly
+    # flag staleness so the UI can gate the chart. Probabilistic, not guarantees. --
+    price_now = _num(mkt.get('price')) or _num(dash.get('last_close')) or _num(dash.get('price'))
+    anchor_price = _num(dash.get('last_close')) or _num(dash.get('price')) or price_now
+    fc_all = []
+    for _f in (dash.get('forecasts') or []):
+        if isinstance(_f, dict):
+            fc_all.append(_f)
+    for _f in (dash.get('long_outlook') or []):
+        if isinstance(_f, dict):
+            fc_all.append(_f)
+
+    def _pct(v):
+        return round((v / anchor_price - 1.0) * 100, 2) if (v is not None and anchor_price) else None
+
+    def _band(f):
+        base = _num(f.get('base')); bull = _num(f.get('bull')); bear = _num(f.get('bear'))
+        # Safety rule: never present an inverted cone.
+        if bear is not None and base is not None and bull is not None:
+            bear, base, bull = sorted([bear, base, bull])
+        q = f.get('quantiles') or {}
+        ev = f.get('ev') or {}
+        return {
+            'horizon': f.get('horizon'), 'days': f.get('days'),
+            'probUp': _num(f.get('higher_adj', f.get('higher'))), 'probDown': _num(f.get('lower')),
+            'lean': f.get('lean'),
+            'base': base, 'bull': bull, 'bear': bear,
+            'basePct': _pct(base), 'bullPct': _pct(bull), 'bearPct': _pct(bear),
+            'p10': _num(q.get('p10')), 'p25': _num(q.get('p25')), 'p50': _num(q.get('p50')),
+            'p75': _num(q.get('p75')), 'p90': _num(q.get('p90')),
+            'expectedLow': _num(f.get('expected_low')), 'expectedHigh': _num(f.get('expected_high')),
+            'confidence': f.get('confidence'), 'confidencePct': _num(f.get('confidence_pct')),
+            'accuracy': _num(f.get('accuracy')),
+            'invalidation': _num(f.get('invalidation')), 'invalidationDir': f.get('invalidation_dir'),
+            'expiry': f.get('expiry'),
+            'evPct': ev.get('ev_pct'), 'evVerdict': ev.get('verdict'), 'payoff': ev.get('payoff_ratio'),
+        }
+
+    horizons = [_band(f) for f in fc_all if f.get('horizon')]
+    if horizons and anchor_price:
+        drift_pct = (round((price_now / anchor_price - 1.0) * 100, 2)
+                     if (price_now and anchor_price) else None)
+        feeds_stale = bool(integrity.get('stale'))
+        projection = {
+            'available': True,
+            'priceNow': price_now,
+            'anchorPrice': anchor_price,
+            'anchorAsOf': as_of,
+            'liveDriftPct': drift_pct,
+            'horizons': horizons,
+            # Feed-delay staleness pauses the forward path (spec 7.1). A large live
+            # drift from the anchor is a softer caution, not a pause.
+            'stale': feeds_stale,
+            'driftWarning': bool(drift_pct is not None and abs(drift_pct) >= 3),
+            'bandCoverage': {'inner': '50% (p25\u2013p75)', 'outer': '80% (p10\u2013p90)'},
+            'method': 'Log-normal quantiles from drift + realised volatility (documented coverage).',
+            'disclaimer': ('Scenario ranges are anchored to the last engine run price and are '
+                           'probabilistic \u2014 odds, not guarantees. Paper / advisory only.'),
+        }
+    else:
+        projection = {'available': False, 'reason': 'no_forecasts',
+                      'note': 'Forecast horizons are not available for this asset yet.'}
 
     # --- Per-user portfolio impact ----------------------------------------------
     portfolio_impact = None
@@ -5697,6 +5758,600 @@ def albert_trader_home(pid: str = '', symbol: str = 'BTC'):
         'explanation': {'plain': plain, 'technical': signal.get('headline')},
         'paperOnly': True,
     }
+
+
+def _compute_performance_module(pid: str = '', symbol: str = 'BTC', fee_pct: float = 0.4):
+    """Computed (estimated) Portfolio / Model performance drill-down.
+
+    Builds two rebased equity curves from the engine's OWN resolved 24H prediction
+    ledger (no exchange connection required):
+      • Buy & hold the asset over the same window.
+      • A 'model-followed' curve that goes long when the engine leaned UP and sits
+        in cash otherwise, charging a per-flip taker fee so we can show the honest
+        fee drag (gross vs net).
+    Also attaches the signed-in user's live paper portfolio snapshot when available.
+    Estimated / advisory only."""
+    symbol = (symbol or 'BTC').strip().upper()[:6]
+    fee = max(0.0, min(2.0, float(fee_pct))) / 100.0
+    try:
+        sc = compute_scorecard() or {}
+    except Exception:  # noqa
+        traceback.print_exc()
+        sc = {}
+    ledger = [x for x in (sc.get('ledger') or [])
+              if x.get('resolved') and (x.get('horizon') == '24H')
+              and _num(x.get('price_at_issue')) and _num(x.get('actual_close'))]
+    ledger.sort(key=lambda x: x.get('issued_date') or '')
+
+    portfolio = None
+    if pid:
+        try:
+            summ = _portfolio_summary(pid)
+            hv = summ.get('holdings_value') or 0.0
+            # Blended unrealised return across held positions (value-weighted).
+            num = den = 0.0
+            for h in (summ.get('holdings') or []):
+                up = h.get('unrealized_pct'); val = h.get('value') or 0
+                if up is not None and val:
+                    num += up * val; den += val
+            blended = round(num / den, 2) if den else None
+            portfolio = {'totalValue': summ.get('total_value'), 'usdc': summ.get('usdc'),
+                         'holdingsValue': hv, 'blendedReturnPct': blended,
+                         'holdings': summ.get('holdings') or []}
+        except Exception:  # noqa
+            traceback.print_exc()
+
+    if len(ledger) < 5:
+        return {'status': 'ready', 'available': False, 'reason': 'insufficient_history',
+                'note': 'Not enough resolved forecasts yet to chart performance.',
+                'portfolio': portfolio}
+
+    bh = 100.0; net = 100.0; gross = 100.0
+    prev_pos = 0; trades = 0
+    bh_series = []; model_series = []
+    wins = 0; graded = 0
+    step_rets = []          # per-step net returns (for Sharpe / profit factor)
+    peak = 100.0; max_dd = 0.0
+    gain_sum = 0.0; loss_sum = 0.0
+    for x in ledger:
+        p0 = _num(x['price_at_issue']); p1 = _num(x['actual_close'])
+        ret = (p1 / p0 - 1.0) if p0 else 0.0
+        bh *= (1 + ret)
+        pos = 1 if (x.get('direction') == 'UP') else 0
+        fee_hit = 0.0
+        if pos != prev_pos:
+            trades += 1
+            fee_hit = fee
+            net *= (1 - fee)  # taker fee on the flip
+        step = ret if pos == 1 else 0.0
+        gross *= (1 + step)
+        net *= (1 + step)
+        # net step return incl. any fee paid this bar (for risk stats)
+        net_step = (1 + step) * (1 - fee_hit) - 1.0
+        step_rets.append(net_step)
+        if net_step >= 0:
+            gain_sum += net_step
+        else:
+            loss_sum += -net_step
+        prev_pos = pos
+        peak = max(peak, net)
+        if peak:
+            max_dd = min(max_dd, net / peak - 1.0)
+        if x.get('correct') is not None:
+            graded += 1
+            if x.get('correct'):
+                wins += 1
+        d = x.get('issued_date')
+        bh_series.append({'date': d, 'value': round(bh, 2)})
+        model_series.append({'date': d, 'value': round(net, 2)})
+
+    bh_ret = round(bh - 100.0, 2)
+    net_ret = round(net - 100.0, 2)
+    gross_ret = round(gross - 100.0, 2)
+    fee_drag = round(gross_ret - net_ret, 2)
+    # Risk stats on the model-followed curve (daily 24H steps -> annualise by sqrt(365)).
+    sharpe = None
+    if len(step_rets) > 5:
+        try:
+            arr = pd.Series(step_rets)
+            sd = float(arr.std())
+            sharpe = round(float(arr.mean()) / sd * math.sqrt(365), 2) if sd > 1e-9 else None
+        except Exception:  # noqa
+            sharpe = None
+    profit_factor = round(gain_sum / loss_sum, 2) if loss_sum > 1e-9 else None
+    overall = sc.get('overall') or {}
+    model_block = {
+        'label': 'Model-followed (net of fees)', 'returnPct': net_ret,
+        'grossReturnPct': gross_ret, 'feeDragPct': fee_drag,
+        'trades': trades, 'feeRatePct': round(fee * 100, 2),
+        'hitRate': round(wins / graded * 100, 1) if graded else None,
+        'sampleSize': graded,
+        'sharpe': sharpe, 'profitFactor': profit_factor,
+        'maxDrawdownPct': round(max_dd * 100, 2),
+        'brier': overall.get('brier'),
+        'modelVersion': (ledger[-1].get('model_version') if ledger else None),
+        'series': model_series,
+    }
+    portfolio_view = None
+    if portfolio and portfolio.get('totalValue') is not None:
+        tv = portfolio.get('totalValue') or 0
+        portfolio_view = {
+            'equity': tv,
+            'cash': portfolio.get('usdc'),
+            'holdingsValue': portfolio.get('holdingsValue'),
+            'totalReturnPct': portfolio.get('blendedReturnPct'),
+            'allocation': [{'asset': h.get('asset'), 'pct': h.get('portfolio_pct'),
+                            'value': h.get('value'), 'unrealizedPct': h.get('unrealized_pct')}
+                           for h in (portfolio.get('holdings') or [])],
+            # Drawdown / volatility need a portfolio time-series we don't retain yet.
+            'drawdownPct': None, 'volatilityPct': None,
+            'note': 'Return is a value-weighted unrealised estimate from cost basis; '
+                    'drawdown / volatility need a stored equity history (coming soon).',
+        }
+    return {
+        'status': 'ready', 'available': True, 'symbol': symbol,
+        'window': {'from': ledger[0].get('issued_date'), 'to': ledger[-1].get('issued_date'),
+                   'n': len(ledger)},
+        'benchmark': {'label': f'{symbol} buy & hold', 'returnPct': bh_ret, 'series': bh_series},
+        'model': model_block,
+        'edge': {'vsBuyHoldPct': round(net_ret - bh_ret, 2)},
+        'portfolio': portfolio,
+        'portfolioView': portfolio_view,
+        'estimated': True,
+        'disclaimer': ('Estimated from the engine\u2019s own resolved forecasts and a flat taker '
+                       'fee \u2014 not live exchange fills. Paper trading, backtest and live '
+                       'results are never merged. Advisory / paper only.'),
+    }
+
+
+@app.get('/api/v1/albert/performance')
+def albert_performance(pid: str = '', symbol: str = 'BTC', fee_pct: float = 0.4):
+    try:
+        pid = (pid or '').strip()[:80]
+        return _compute_performance_module(pid, symbol, fee_pct)
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error', 'available': False}
+
+
+# ===================== Market Driver Intelligence (v1) =====================
+# Deterministic BTC "who is moving the market" engine. Reuses existing engine
+# outputs + keyless public feeds (ETF flows, funding/OI, exchange balances,
+# on-chain valuation, retail sentiment, miners). Honest about evidence status
+# (OBSERVED vs inferred) and data quality; degrades confidence when inputs are
+# stale / missing / conflicting. Advisory only — it proposes posture; portfolio
+# rules decide permitted action and size. No order execution in v1.
+MARKET_DRIVER_ENGINE_VERSION = 'market-driver-intelligence-v1.0.0'
+
+_MD_WEIGHTS = {
+    'INTRADAY': {'LEVERAGED_TRADER': 0.35, 'INSTITUTIONAL': 0.22, 'RETAIL': 0.22,
+                 'WHALE': 0.11, 'LONG_TERM_HOLDER': 0.06, 'MINER': 0.04},
+    'SWING':    {'INSTITUTIONAL': 0.32, 'LEVERAGED_TRADER': 0.18, 'WHALE': 0.18,
+                 'LONG_TERM_HOLDER': 0.16, 'RETAIL': 0.10, 'MINER': 0.06},
+    'CYCLE':    {'LONG_TERM_HOLDER': 0.30, 'INSTITUTIONAL': 0.26, 'WHALE': 0.14,
+                 'MINER': 0.12, 'LEVERAGED_TRADER': 0.10, 'RETAIL': 0.08},
+}
+_MD_STAGE_RANK = {'AMPLIFYING': 5, 'LEADING': 4, 'CONFIRMING': 3, 'AWAKENING': 2,
+                  'EXHAUSTING': 1, 'REVERSING': 1, 'DORMANT': 0}
+
+
+def _md_stage(direction, magnitude, turning):
+    if direction == 'neutral' or magnitude < 12:
+        return 'DORMANT'
+    if turning:
+        return 'AWAKENING'
+    if magnitude >= 70:
+        return 'AMPLIFYING'
+    if magnitude >= 42:
+        return 'LEADING'
+    return 'CONFIRMING'
+
+
+def _md_iso_age_hours(iso):
+    try:
+        s = str(iso).replace('Z', '')
+        dt = datetime.datetime.fromisoformat(s[:19]) if len(s) >= 19 else datetime.datetime.fromisoformat(s)
+        return max(0.0, (datetime.datetime.utcnow() - dt).total_seconds() / 3600.0)
+    except Exception:  # noqa
+        return None
+
+
+def _compute_market_driver_btc(horizon: str = 'SWING'):
+    horizon = (horizon or 'SWING').strip().upper()
+    if horizon not in _MD_WEIGHTS:
+        horizon = 'SWING'
+    weights = _MD_WEIGHTS[horizon]
+    now = datetime.datetime.utcnow()
+    now_iso = now.isoformat() + 'Z'
+
+    run = {}
+    try:
+        run = runs_col.find_one(sort=[('created_at', -1)]) or {}
+    except Exception:  # noqa
+        traceback.print_exc()
+    run_as_of = run.get('created_at') or run.get('as_of')
+    run_age_h = _md_iso_age_hours(run_as_of)
+
+    drivers = []        # each: dict with actor/channel/behavior/stage/... + internal _contrib
+    snapshots = []      # provenance: point-in-time observations used
+    missing = []
+
+    def add_driver(actor, channel, behavior, direction, magnitude, confidence,
+                   evidence, label, detail, snap_id, snap):
+        w = weights.get(actor, 0.03)
+        mag = max(0.0, min(100.0, float(magnitude)))
+        conf = max(0.05, min(0.98, float(confidence)))
+        turning = behavior in ('SHORT_COVERING', 'CAPITULATION', 'REVERSING')
+        stage = _md_stage(direction, mag, turning)
+        dirsign = 1 if direction == 'bullish' else (-1 if direction == 'bearish' else 0)
+        contrib = dirsign * (mag / 100.0) * w * conf * 100.0
+        drivers.append({'actor': actor, 'channel': channel, 'behavior': behavior,
+                        'stage': stage, 'evidenceStatus': evidence, 'confidence': round(conf, 2),
+                        'direction': direction, 'magnitude': round(mag), 'weight': w,
+                        'label': label, 'detail': detail, '_contrib': contrib})
+        if snap is not None:
+            snapshots.append({'id': snap_id, **snap})
+
+    # --- 1) INSTITUTIONAL via ETF spot flows (OBSERVED, keyless Farside) --------
+    try:
+        etf = etf_flows_feed() or {}
+        n7 = etf.get('net_7d'); n1 = etf.get('net_1d'); n30 = etf.get('net_30d')
+        if n7 is not None:
+            direction = 'bullish' if n7 > 0 else ('bearish' if n7 < 0 else 'neutral')
+            behavior = 'ACCUMULATION' if n7 > 0 else ('DISTRIBUTION' if n7 < 0 else 'NEUTRAL')
+            mag = min(100.0, abs(n7) / 12.0)  # ~$1.2B/7d -> saturates
+            # persistence boosts confidence; sign flip (n1 vs n7) lowers it
+            conf = 0.86
+            if n1 is not None and n7 and (n1 > 0) != (n7 > 0):
+                conf = 0.6
+            add_driver('INSTITUTIONAL', 'ETF_SPOT', behavior, direction, mag, conf, 'OBSERVED',
+                       'US spot-ETF net flows',
+                       f"Net ${n7}M over 7d (1d ${n1}M, 30d ${n30}M).",
+                       f"etf:{etf.get('latest_date')}",
+                       {'source': etf.get('source'), 'asOf': etf.get('as_of'),
+                        'net_1d': n1, 'net_7d': n7, 'net_30d': n30, 'quality': 'OBSERVED'})
+        else:
+            missing.append('etf_flows')
+    except Exception:  # noqa
+        traceback.print_exc(); missing.append('etf_flows')
+
+    # --- 2) LEVERAGED_TRADER via perp funding + OI (OBSERVED, OKX/Binance) ------
+    lev = run.get('leverage_snapshot') or {}
+    if lev:
+        fr = _num(lev.get('funding_rate')) or 0.0
+        oi = _num(lev.get('oi_change_tf_pct')) or 0.0
+        fbias = (lev.get('funding_bias') or 'Neutral')
+        # positive funding + rising OI = crowded longs (bullish but fragile);
+        # negative funding + firm price = potential short-covering fuel (bullish);
+        # positive funding + falling OI = long unwind (bearish).
+        if fr > 0 and oi > 0:
+            direction, behavior = 'bullish', 'LONG_BUILDUP'
+        elif fr < 0 and oi > 0:
+            direction, behavior = 'bearish', 'LONG_BUILDUP'
+        elif fr < 0:
+            direction, behavior = 'bullish', 'SHORT_COVERING'
+        elif fr > 0 and oi < 0:
+            direction, behavior = 'bearish', 'PROFIT_TAKING'
+        else:
+            direction, behavior = 'neutral', 'NEUTRAL'
+        mag = min(100.0, abs(fr) * 90000.0 + abs(oi) * 4.0)
+        add_driver('LEVERAGED_TRADER', 'PERPETUAL_FUTURES', behavior, direction, mag, 0.8, 'OBSERVED',
+                   'Perp funding & open interest',
+                   f"Funding {round(fr * 100, 4)}% ({fbias}), OI {oi}% ({lev.get('oi_state')}).",
+                   'funding:latest',
+                   {'source': 'OKX/Binance/Bybit', 'asOf': run_as_of, 'funding_rate': fr,
+                    'oi_change_pct': oi, 'quality': 'OBSERVED'})
+    else:
+        missing.append('leverage')
+
+    # --- 3) WHALE / supply via exchange balances (OBSERVED on-chain recon) ------
+    try:
+        exf = _misc_get('exchange_flows', 30 * 60, compute_exchange_flows) or {}
+        series = exf.get('series') or exf.get('history') or exf.get('points') or []
+        chg = None
+        if isinstance(series, list) and len(series) >= 2:
+            def _bal(p):
+                return _num(p.get('balance') if isinstance(p, dict) else None)
+            first, last = _bal(series[0]), _bal(series[-1])
+            if first and last:
+                chg = (last - first) / first * 100.0
+        trend = exf.get('trend') or exf.get('direction')
+        if chg is not None:
+            # balances leaving exchanges (negative change) = accumulation (bullish)
+            direction = 'bullish' if chg < 0 else ('bearish' if chg > 0 else 'neutral')
+            behavior = 'ACCUMULATION' if chg < 0 else ('DISTRIBUTION' if chg > 0 else 'NEUTRAL')
+            mag = min(100.0, abs(chg) * 20.0)
+            add_driver('WHALE', 'ON_CHAIN_TRANSFER', behavior, direction, mag, 0.7, 'OBSERVED',
+                       'Exchange balance trend',
+                       f"Tracked exchange balances {'fell' if chg < 0 else 'rose'} {abs(round(chg, 2))}% over the window.",
+                       'exchange_balances:latest',
+                       {'source': exf.get('source', 'on-chain reconstruction'), 'asOf': exf.get('as_of'),
+                        'balance_change_pct': round(chg, 3), 'quality': 'OBSERVED'})
+        elif trend:
+            direction = 'bullish' if 'out' in str(trend).lower() or 'fall' in str(trend).lower() else 'neutral'
+            add_driver('WHALE', 'ON_CHAIN_TRANSFER', 'ACCUMULATION' if direction == 'bullish' else 'NEUTRAL',
+                       direction, 30, 0.5, 'WEAKLY_INFERRED', 'Exchange balance trend',
+                       f"Reported trend: {trend}.", 'exchange_balances:trend', None)
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    # --- 4) LONG_TERM_HOLDER via on-chain valuation (STRONGLY/WEAKLY INFERRED) --
+    try:
+        sm = run.get('smart_money') or {}
+        metrics = {m.get('name'): m for m in (sm.get('metrics') or []) if isinstance(m, dict)}
+        ev = 'STRONGLY_INFERRED' if not sm.get('demo') else 'WEAKLY_INFERRED'
+        mvrv = metrics.get('MVRV Z-score') or metrics.get('MVRV')
+        sopr = metrics.get('SOPR')
+        if mvrv or sopr:
+            sig = (mvrv or sopr).get('signal', 'Neutral').lower()
+            direction = 'bullish' if 'bull' in sig else ('bearish' if 'bear' in sig else 'neutral')
+            behavior = 'ACCUMULATION' if direction == 'bullish' else ('PROFIT_TAKING' if direction == 'bearish' else 'NEUTRAL')
+            add_driver('LONG_TERM_HOLDER', 'ON_CHAIN_TRANSFER', behavior, direction, 40, 0.55, ev,
+                       'On-chain valuation (MVRV / SOPR)',
+                       f"MVRV {(mvrv or {}).get('value', 'n/a')}, SOPR {(sopr or {}).get('value', 'n/a')} — {sig}.",
+                       'onchain_valuation:latest',
+                       {'source': sm.get('source'), 'asOf': sm.get('as_of'),
+                        'mvrv': (mvrv or {}).get('value'), 'sopr': (sopr or {}).get('value'),
+                        'quality': ev})
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    # --- 5) RETAIL via sentiment + news flow (WEAKLY_INFERRED) ------------------
+    try:
+        fg = _misc_get('fear_greed', 30 * 60, compute_fear_greed) or {}
+        val = _num(fg.get('value'))
+        dec = run.get('decision') or {}
+        news_bias = (dec.get('news_bias') or '').lower()
+        if val is not None:
+            direction = 'bullish' if val >= 55 else ('bearish' if val <= 45 else 'neutral')
+            if 'bull' in news_bias:
+                direction = 'bullish'
+            elif 'bear' in news_bias:
+                direction = 'bearish'
+            behavior = 'ACCUMULATION' if direction == 'bullish' else ('CAPITULATION' if val <= 25 else 'NEUTRAL')
+            mag = min(100.0, abs(val - 50) * 2.0)
+            add_driver('RETAIL', 'EXCHANGE_SPOT', behavior, direction, mag, 0.5, 'WEAKLY_INFERRED',
+                       'Retail sentiment & news flow',
+                       f"Fear & Greed {int(val)} ({fg.get('classification', '')}), news bias {news_bias or 'n/a'}.",
+                       'sentiment:latest',
+                       {'source': 'alternative.me + news engine', 'asOf': fg.get('as_of'),
+                        'fear_greed': val, 'quality': 'WEAKLY_INFERRED'})
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    # --- 6) MINER via network health (WEAKLY_INFERRED) -------------------------
+    try:
+        nh = _misc_get('network_health', 10 * 60, compute_network_health) or {}
+        hr = nh.get('hashrate_change_pct') or nh.get('hashrate_7d_pct')
+        if hr is not None:
+            hrv = _num(hr) or 0.0
+            direction = 'bullish' if hrv >= 0 else 'bearish'
+            behavior = 'NEUTRAL' if abs(hrv) < 3 else ('ACCUMULATION' if hrv > 0 else 'CAPITULATION')
+            add_driver('MINER', 'ON_CHAIN_TRANSFER', behavior, direction, min(100.0, abs(hrv) * 6.0), 0.45,
+                       'WEAKLY_INFERRED', 'Miner network health',
+                       f"Hashrate change {hrv}% — {'expanding' if hrv >= 0 else 'contracting'}.",
+                       'network_health:latest',
+                       {'source': 'mempool.space', 'asOf': nh.get('as_of'), 'hashrate_change_pct': hrv,
+                        'quality': 'WEAKLY_INFERRED'})
+    except Exception:  # noqa
+        traceback.print_exc()
+
+    # --- Score & posture --------------------------------------------------------
+    total = sum(d['_contrib'] for d in drivers)
+    abs_total = sum(abs(d['_contrib']) for d in drivers) or 1.0
+    score = int(round(max(0.0, min(100.0, 50.0 + 0.5 * total))))
+    if score >= 72:
+        posture = 'STRONGLY_BULLISH'
+    elif score >= 58:
+        posture = 'BULLISH'
+    elif score > 42:
+        posture = 'NEUTRAL_OR_MIXED'
+    elif score > 28:
+        posture = 'BEARISH'
+    else:
+        posture = 'STRONGLY_BEARISH'
+    posture_sign = 1 if score >= 50 else -1
+
+    # --- Data quality (honest degradation) --------------------------------------
+    confirming_mass = sum(d['_contrib'] for d in drivers if (d['_contrib'] > 0)) if posture_sign > 0 else -sum(d['_contrib'] for d in drivers if d['_contrib'] < 0)
+    resisting_mass = abs(sum(d['_contrib'] for d in drivers if (d['_contrib'] < 0))) if posture_sign > 0 else sum(d['_contrib'] for d in drivers if d['_contrib'] > 0)
+    conflicting = (abs_total > 0 and resisting_mass / abs_total >= 0.42 and confirming_mass / abs_total >= 0.42)
+    stale = bool(run_age_h is not None and run_age_h > 48)
+    if not drivers or len(missing) >= 3:
+        data_quality = 'MISSING'
+    elif conflicting:
+        data_quality = 'CONFLICTING'
+    elif stale:
+        data_quality = 'STALE'
+    else:
+        data_quality = 'VERIFIED'
+
+    # --- Confidence: one-sidedness scaled by data quality -----------------------
+    agreement = abs(total) / abs_total if abs_total else 0.0
+    dq_mult = {'VERIFIED': 1.0, 'STALE': 0.62, 'CONFLICTING': 0.7, 'MISSING': 0.4}[data_quality]
+    confidence = round(max(0.1, min(0.95, (0.35 + 0.6 * agreement) * dq_mult)), 2)
+
+    # --- Rank drivers -----------------------------------------------------------
+    for d in drivers:
+        d['contribution'] = round(d.pop('_contrib'), 2)
+    ranked = sorted(drivers, key=lambda x: abs(x['contribution']), reverse=True)
+    current_leader = ranked[0] if ranked else None
+    aligned = [d for d in drivers if (d['contribution'] > 0) == (posture_sign > 0) and d['contribution'] != 0]
+    resisting = [d for d in drivers if (d['contribution'] > 0) != (posture_sign > 0) and d['contribution'] != 0]
+    # First mover: strongest OBSERVED, posture-aligned, most-advanced-stage driver.
+    fm_pool = [d for d in aligned if d['evidenceStatus'] == 'OBSERVED'] or aligned or ranked
+    first_mover = sorted(fm_pool, key=lambda x: (_MD_STAGE_RANK.get(x['stage'], 0), x['confidence'], abs(x['contribution'])), reverse=True)
+    first_mover = first_mover[0] if first_mover else None
+    confirming = [d for d in sorted(aligned, key=lambda x: abs(x['contribution']), reverse=True)
+                  if d is not first_mover]
+    # Next movers: dormant/awakening actors that could rotate in next.
+    next_movers = []
+    for d in sorted(drivers, key=lambda x: x['confidence'], reverse=True):
+        if d['stage'] in ('DORMANT', 'AWAKENING'):
+            band = 'HIGH' if d['stage'] == 'AWAKENING' and d['confidence'] >= 0.6 else ('MEDIUM' if d['stage'] == 'AWAKENING' else 'LOW')
+            cond = {
+                'RETAIL': 'retail spot volume and venue premium keep rising',
+                'LEVERAGED_TRADER': 'funding turns and open interest expands with price',
+                'INSTITUTIONAL': 'ETF net flows turn persistently positive',
+                'WHALE': 'exchange balances keep falling on strength',
+                'LONG_TERM_HOLDER': 'coins keep aging out of exchange supply',
+                'MINER': 'hashrate stabilises and miner outflows ease',
+            }.get(d['actor'], 'its underlying feed confirms the turn')
+            next_movers.append({'actor': d['actor'], 'stage': d['stage'], 'probabilityBand': band,
+                                'condition': cond})
+        if len(next_movers) >= 3:
+            break
+
+    # --- Regime -----------------------------------------------------------------
+    leader_actor = current_leader['actor'] if current_leader else 'UNKNOWN'
+    lev_risk = 0
+    try:
+        sq = (run.get('leverage_snapshot') or {}).get('squeeze') or {}
+        lev_risk = max(_num(sq.get('long_risk')) or 0, _num(sq.get('short_risk')) or 0)
+    except Exception:  # noqa
+        pass
+    if data_quality in ('MISSING',) or posture == 'NEUTRAL_OR_MIXED':
+        regime = 'MIXED_OR_UNCLEAR'
+    elif lev_risk >= 70 and leader_actor == 'LEVERAGED_TRADER':
+        regime = 'LIQUIDATION_CASCADE'
+    elif leader_actor == 'MINER' and posture_sign < 0:
+        regime = 'MINER_CAPITULATION'
+    elif posture_sign > 0 and leader_actor in ('INSTITUTIONAL', 'WHALE', 'LONG_TERM_HOLDER'):
+        regime = 'INSTITUTIONAL_ABSORPTION'
+    elif posture_sign > 0 and leader_actor == 'RETAIL':
+        regime = 'RETAIL_SPOT_EXPANSION'
+    elif posture_sign < 0:
+        regime = 'DISTRIBUTION'
+    else:
+        regime = 'MIXED_OR_UNCLEAR'
+
+    sequence_stage = current_leader['stage'] if current_leader else 'DORMANT'
+
+    def _actor_hr(a):
+        return (a or 'the market').replace('_', ' ').lower()
+
+    if current_leader:
+        cont = (f"{_actor_hr(leader_actor)} keeps {current_leader['behavior'].replace('_', ' ').lower()} "
+                f"and confirming drivers hold their direction")
+        fail = (f"{_actor_hr(leader_actor)} {current_leader['behavior'].replace('_', ' ').lower()} reverses "
+                f"or resisting drivers overwhelm it")
+    else:
+        cont = 'a driver establishes clear leadership with fresh, agreeing feeds'
+        fail = 'feeds refresh and disagree, or leadership does not form'
+
+    # --- Plain-language explanation (honest; observed vs inferred) --------------
+    def _obs_word(d):
+        return 'observed' if d['evidenceStatus'] == 'OBSERVED' else 'appears (inferred)'
+    parts = []
+    if data_quality in ('STALE', 'MISSING'):
+        parts.append(f"Heads up: inputs are {data_quality.lower()} — treat this as low-conviction until feeds refresh.")
+    if first_mover:
+        parts.append(f"{_actor_hr(first_mover['actor']).capitalize()} {_obs_word(first_mover)} to be "
+                     f"{first_mover['behavior'].replace('_', ' ').lower()} via {first_mover['channel'].replace('_', ' ').lower()}, and looks like the first mover.")
+    if current_leader and current_leader is not first_mover:
+        parts.append(f"Right now {_actor_hr(leader_actor)} is carrying the tape.")
+    if confirming:
+        parts.append("Confirming it: " + ", ".join(_actor_hr(c['actor']) for c in confirming[:3]) + ".")
+    if resisting:
+        parts.append("Pushing back: " + ", ".join(_actor_hr(r['actor']) for r in resisting[:3]) + ".")
+    if next_movers:
+        parts.append(f"Watch {_actor_hr(next_movers[0]['actor'])} next ({next_movers[0]['probabilityBand'].lower()} odds) if {next_movers[0]['condition']}.")
+    parts.append("This is market intelligence, not an instruction — your portfolio rules still decide any action and size.")
+    explanation = ' '.join(parts)
+
+    day = (str(run_as_of)[:10] or now.strftime('%Y-%m-%d')).replace('-', '')
+    chain_hash = abs(hash((posture, leader_actor, score, horizon))) % 1000
+    driver_chain_id = f"btc-{horizon.lower()}-{day}-{chain_hash:03d}"
+
+    def _pub(d):
+        return {k: d[k] for k in ('actor', 'channel', 'behavior', 'stage', 'evidenceStatus',
+                                  'confidence', 'direction', 'magnitude', 'contribution', 'label', 'detail')}
+
+    return {
+        'engineVersion': MARKET_DRIVER_ENGINE_VERSION,
+        'asset': 'BTC',
+        'horizon': horizon,
+        'asOf': now_iso,
+        'marketPosture': posture,
+        'score': score,
+        'firstMover': _pub(first_mover) if first_mover else None,
+        'currentLeader': _pub(current_leader) if current_leader else None,
+        'confirmingDrivers': [_pub(d) for d in confirming[:4]],
+        'resistingDrivers': [_pub(d) for d in resisting[:4]],
+        'nextMoverCandidates': next_movers,
+        'sequenceStage': sequence_stage,
+        'regime': regime,
+        'continuationCondition': cont,
+        'failureCondition': fail,
+        'confidence': confidence,
+        'dataQuality': data_quality,
+        'driverChainId': driver_chain_id,
+        'sourceSnapshotIds': [s['id'] for s in snapshots],
+        'explanation': explanation,
+        'missingFeeds': missing,
+        'allDrivers': [_pub(d) for d in ranked],
+        '_snapshots': snapshots,
+        '_availableHorizons': list(_MD_WEIGHTS.keys()),
+        'paperOnly': True,
+    }
+
+
+@app.get('/api/v1/albert/market-driver/btc')
+def albert_market_driver_btc(horizon: str = 'SWING'):
+    try:
+        out = _compute_market_driver_btc(horizon)
+        out.pop('_snapshots', None)
+        return {'status': 'ready', **out}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
+
+
+@app.get('/api/v1/albert/market-driver/btc/trace')
+def albert_market_driver_trace(horizon: str = 'SWING'):
+    """Full rule contributions + evidence provenance for a result (diagnostic)."""
+    try:
+        out = _compute_market_driver_btc(horizon)
+        return {'status': 'ready', 'engineVersion': out['engineVersion'],
+                'horizon': out['horizon'], 'asOf': out['asOf'],
+                'driverChainId': out['driverChainId'], 'score': out['score'],
+                'marketPosture': out['marketPosture'], 'dataQuality': out['dataQuality'],
+                'drivers': out['allDrivers'], 'snapshots': out.get('_snapshots', []),
+                'weights': _MD_WEIGHTS[out['horizon']]}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
+
+
+@app.get('/api/v1/albert/market-driver/data-health')
+def albert_market_driver_health():
+    """Provider freshness / conflicts / missing feeds for the driver engine."""
+    try:
+        out = _compute_market_driver_btc('SWING')
+        snaps = out.get('_snapshots', [])
+        providers = []
+        for s in snaps:
+            age = _md_iso_age_hours(s.get('asOf'))
+            providers.append({'id': s.get('id'), 'source': s.get('source'),
+                              'asOf': s.get('asOf'), 'ageHours': (round(age, 1) if age is not None else None),
+                              'quality': s.get('quality'),
+                              'stale': bool(age is not None and age > 48)})
+        return {'status': 'ready', 'overall': out['dataQuality'],
+                'providers': providers, 'missing': out.get('missingFeeds', []),
+                'asOf': out['asOf']}
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
+
+
+@app.get('/api/v1/albert/market-driver/versions')
+def albert_market_driver_versions():
+    return {'status': 'ready', 'active': MARKET_DRIVER_ENGINE_VERSION,
+            'horizons': list(_MD_WEIGHTS.keys()),
+            'versions': [{'version': MARKET_DRIVER_ENGINE_VERSION, 'active': True,
+                          'notes': 'Deterministic v1 — reuses ETF/funding/on-chain/sentiment feeds.'}]}
+
+
 
 
 

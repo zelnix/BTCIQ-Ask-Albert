@@ -44,6 +44,7 @@ import AlertManager from './components/AlertManager';
 import WeeklyRecap from './components/WeeklyRecap';
 import { WeeklyBriefCard } from './components/WeeklyBrief';
 import TraderHome from './components/TraderHome';
+import MarketDrivers from './components/MarketDrivers';
 
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
@@ -1847,7 +1848,7 @@ function BriefCoinPicker() {
 }
 
 
-function ExecutiveSummary({ d, ticker, news, onNav }) {
+function ExecutiveSummary({ d, ticker, news, onNav, homeParams, setHomeParams }) {
   const [speaking, setSpeaking] = useState(false);
   const [warming, setWarming] = useState(false);
   const briefSym = (d && d.symbol) || 'BTC';
@@ -1934,7 +1935,7 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
 
   return (
     <div className="space-y-4">
-      <TraderHome symbol={briefSym || 'BTC'} onNav={onNav} />
+      <TraderHome symbol={briefSym || 'BTC'} onNav={onNav} params={homeParams} onParams={setHomeParams} />
       {/* KPI row — 4 across on every screen; compact on mobile */}
       <div className="grid grid-cols-4 gap-1.5 sm:gap-3">
         <ExecKpi label="Market Bias" onClick={() => onNav('overview')}>
@@ -3199,6 +3200,8 @@ export default function DashboardPage() {
   const [passAutoClear, setPassAutoClear] = useState(false);
   const [ticker, setTicker] = useState(__tickerCache);
   const [active, setActive] = useState('briefing');
+  const [homeParams, setHomeParams] = useState({ horizon: '7D', focus: null, mdHorizon: 'SWING' });
+  const skipUrlPush = React.useRef(false);
   const [chatStrategy, setChatStrategy] = useState(null); // {draft, symbol} — from "Save as strategy" in chat
   const [chatStrategyBuilding, setChatStrategyBuilding] = useState(false);
   const [showReport, setShowReport] = useState(false);
@@ -3249,6 +3252,60 @@ export default function DashboardPage() {
     try { const s = (localStorage.getItem('btciq_symbol') || '').toUpperCase(); if (s) setSymbol(s); } catch (e) { /* noop */ }
     fetch(`${API_BASE}/v1/compare/coins`).then((r) => r.json()).then((j) => { if (j.coins) setCoins([{ symbol: 'BTC', name: 'Bitcoin' }, ...j.coins.filter((c) => c.symbol !== 'BTC')]); }).catch(() => {});
   }, []);
+
+  // --- Deep-linking: shareable URL state (section / symbol / horizon / focus) ---
+  // Read the URL once on mount so a shared link opens the exact same view.
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const s = (q.get('symbol') || '').toUpperCase();
+      const sec = q.get('section');
+      const hz = q.get('horizon');
+      const fc = q.get('focus');
+      const mdh = q.get('mdh');
+      if (s || sec || hz || fc || mdh) {
+        skipUrlPush.current = true;
+        if (s) setSymbol(s);
+        if (sec) setActive(sec);
+        setHomeParams((p) => ({ ...p, horizon: hz || p.horizon, focus: fc || null, mdHorizon: mdh || p.mdHorizon }));
+      }
+    } catch (e) { /* noop */ }
+  }, []);
+
+  // Push state -> URL on every navigation so Back/Forward walk the history.
+  useEffect(() => {
+    if (skipUrlPush.current) { skipUrlPush.current = false; return; }
+    try {
+      const q = new URLSearchParams();
+      q.set('section', active);
+      if (symbol && symbol !== 'BTC') q.set('symbol', symbol);
+      if (active === 'briefing') {
+        if (homeParams.horizon) q.set('horizon', homeParams.horizon);
+        if (homeParams.focus) q.set('focus', homeParams.focus);
+      }
+      if (active === 'drivers' && homeParams.mdHorizon) q.set('mdh', homeParams.mdHorizon);
+      const url = `${window.location.pathname}?${q.toString()}`;
+      if (url !== `${window.location.pathname}${window.location.search}`) {
+        window.history.pushState({ active, symbol, ...homeParams }, '', url);
+      }
+    } catch (e) { /* noop */ }
+  }, [active, symbol, homeParams]);
+
+  // Back/Forward -> restore state from the URL without re-pushing.
+  useEffect(() => {
+    const onPop = () => {
+      try {
+        const q = new URLSearchParams(window.location.search);
+        skipUrlPush.current = true;
+        setSymbol((q.get('symbol') || 'BTC').toUpperCase());
+        setActive(q.get('section') || 'briefing');
+        setHomeParams({ horizon: q.get('horizon') || '7D', focus: q.get('focus') || null, mdHorizon: q.get('mdh') || 'SWING' });
+      } catch (e) { /* noop */ }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
 
   // Persist choice + reset the view whenever the coin changes so we never show a stale asset.
   useEffect(() => {
@@ -3541,10 +3598,11 @@ export default function DashboardPage() {
   const activeSection = sec(active);
   const visibleSections = SECTIONS.filter((s) => !REMOVED_SECTIONS.includes(s.id) && (symbol === 'BTC' || !BTC_ONLY_SECTIONS.includes(s.id)));
   const renderSection = () => {
-    if (active === 'briefing') return <ExecutiveSummary d={d} ticker={ticker} news={news} onNav={setActive} />;
+    if (active === 'briefing') return <ExecutiveSummary d={d} ticker={ticker} news={news} onNav={setActive} homeParams={homeParams} setHomeParams={setHomeParams} />;
     if (active === 'overview') return <OverviewSection d={d} ticker={ticker} />;
     if (active === 'forecasts') return <ForecastsHubSection d={d} />;
     if (active === 'market-intel') return <MarketIntelligenceSection d={d} />;
+    if (active === 'drivers') return <MarketDrivers horizon={homeParams.mdHorizon} onHorizon={(h) => setHomeParams((p) => ({ ...p, mdHorizon: h }))} />;
     if (active === 'crossmarket') return <CrossMarketSection />;
     if (active === 'analogs') return <AnalogsSection />;
     if (active === 'smartmoney') return <DemoMetricsCard title="Smart Money" icon={Waves} panel={d.smart_money} sectionId="smartmoney" />;

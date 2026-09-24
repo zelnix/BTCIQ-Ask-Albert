@@ -114,6 +114,54 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Trader Home projection bands + Performance module endpoints"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Wired PROJECTION into GET /api/v1/albert/trader-home: reuses the horizon forecast engine
+          (run doc forecasts + long_outlook) -> per-horizon bands (24H/7D/30D/3M/6M/1Y) with probUp,
+          bull/base/bear (absolute + % vs anchor), p10-p90 quantiles, EV, invalidation, expiry.
+          Safety rules: pct anchored to the forecast run price (not live) with liveDriftPct exposed;
+          bear<=base<=bull enforced; stale=feed-delay (pauses forward path in UI), driftWarning=soft
+          caution; bandCoverage labelled. Verified via curl (BTC anchor 80315, base +0.29% / bull +2.23%
+          / bear -1.61%; ETH returns 6 horizons).
+          NEW GET /api/v1/albert/performance?pid=&symbol=&fee_pct= — computed (estimated) Portfolio/Model
+          performance drill-down from the resolved 24H prediction ledger (compute_scorecard). Model-followed
+          equity (long-on-UP, cash otherwise) with per-flip taker fee vs BTC buy&hold; KPIs: returnPct,
+          gross/net, feeDragPct, trades, hitRate+sampleSize, sharpe, profitFactor, maxDrawdownPct, brier,
+          modelVersion; plus portfolioView (equity/cash/allocation, drawdown/vol marked n/a - need history).
+          Verified via curl (BTC bh +12.9% vs model net -28.2%, fee drag 17.7%, sharpe -2.98).
+  - task: "Market Driver Intelligence engine (v1) — /api/v1/albert/market-driver/*"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Deterministic BTC "who is moving the market" engine (market-driver-intelligence-v1.0.0). Reuses
+          existing keyless feeds (ETF flows Farside OBSERVED, perp funding/OI OBSERVED, exchange balances
+          OBSERVED on-chain recon, MVRV/SOPR INFERRED, Fear&Greed+news WEAKLY_INFERRED, hashrate
+          WEAKLY_INFERRED) - NO new API keys. Horizon weight profiles for INTRADAY/SWING/CYCLE. Outputs the
+          full spec shape: marketPosture, score, firstMover, currentLeader, confirming/resistingDrivers,
+          nextMoverCandidates (with probabilityBand + condition), sequenceStage, regime, continuation/failure
+          conditions, confidence, dataQuality (VERIFIED/CONFLICTING/STALE/MISSING with honest degradation),
+          driverChainId, sourceSnapshotIds, plain-language explanation (observed vs inferred wording).
+          Endpoints: GET /market-driver/btc, /btc/trace (rule contributions + provenance), /data-health
+          (per-provider freshness), /versions. Verified via curl: SWING posture BULLISH score 60 regime
+          INSTITUTIONAL_ABSORPTION, leader=INSTITUTIONAL, dataQuality STALE (run 429h old, honest),
+          determinism confirmed (identical chainId across calls). Advisory/paper only; no execution in v1.
+
   - task: "Trader Home Phase 2+3 — /api/v1/albert/trader-home aggregation + TraderHome cockpit landing UI"
     implemented: true
     working: true
@@ -11545,3 +11593,26 @@ agent_communication:
       ERR_ABORTED for the seeded PID. The frontend UI is production-ready; only the backend 
       endpoint needs attention.
 
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      SESSION UPDATE — Trader Home finished (tasks 1-4) + Market Driver Intelligence v1 (task 5) built.
+      Per the user's CREDIT-EFFICIENT TESTING POLICY, all backend verification was done via targeted curls
+      (not autonomous agents). Frontend compiles clean (2505 modules). NOTE: the screenshot/preview browser
+      in this environment cannot complete XHR to the external NEXT_PUBLIC_BASE_URL, so the app is stuck on the
+      "Waking Albert" auth splash for the automation harness only — real users authenticate fine (/api/auth/me
+      returns 200 with the seeded cookie via curl). Visual UI verification is therefore pending USER review.
+
+      NEW BACKEND (all verified via curl, all reuse existing engine data — NO new API keys):
+      1) GET /api/v1/albert/trader-home now returns a real `projection` block (bands per horizon, anchored to
+         run price, safety rules applied).
+      2) GET /api/v1/albert/performance?pid=&symbol=&fee_pct= — computed Model-followed vs BTC buy&hold with
+         fees + portfolio view.
+      3) GET /api/v1/albert/market-driver/btc?horizon=INTRADAY|SWING|CYCLE (+ /btc/trace, /data-health,
+         /versions) — deterministic driver attribution engine.
+
+      NEW FRONTEND: TraderHome.js (projection cone + performance drill-down, deep-linked); MarketDrivers.js
+      (new "Market Drivers" BTC-only section); deep-link URL state in page.js (section/symbol/horizon/focus/mdh
+      with Back/Forward). If frontend testing is later requested, inject cookie albert_session=
+      e2e_test_session_token_albert_0001 + localStorage btciq_user_id=7693422a-e2c0-4242-8211-e6f1d0eaa320.
