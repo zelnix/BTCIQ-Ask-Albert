@@ -5543,6 +5543,163 @@ def data_audit_live():
         return {'status': 'error'}
 
 
+@app.get('/api/v1/albert/trader-home')
+def albert_trader_home(pid: str = '', symbol: str = 'BTC'):
+    """Trader Home cockpit aggregation — one authenticated, user-scoped payload that
+    assembles the deterministic signal, drivers, historical edge, execution posture,
+    the user's portfolio impact, data integrity, and a plain-first executive brief by
+    REUSING existing engine outputs (no duplicated decision logic). Honest about
+    freshness; paper/advisory only."""
+    pid = (pid or '').strip()[:80]
+    symbol = (symbol or 'BTC').strip().upper()[:6]
+    now_iso = datetime.datetime.utcnow().isoformat()
+
+    # --- Core deterministic run (signal / drivers / levels / validation) --------
+    # Read the latest run doc directly (fast) — we only need the deterministic
+    # decision + validation, not the live on-chain overlay that dashboard() adds.
+    dash = {}
+    try:
+        if symbol == 'BTC':
+            run = runs_col.find_one(sort=[('created_at', -1)], projection={'smart_money': 0, 'institutional': 0})
+            dash = {'status': 'ready' if run else 'computing', **(run or {})}
+        else:
+            dash = dashboard(symbol) or {}
+    except Exception:  # noqa
+        traceback.print_exc()
+    status = dash.get('status')
+    decision = dash.get('decision') or {}
+    components = decision.get('components')
+    if isinstance(components, str):
+        try:
+            import ast as _ast
+            components = _ast.literal_eval(components)
+        except Exception:  # noqa
+            components = []
+    drivers_raw = components if isinstance(components, list) else []
+    qv = dash.get('quant_validation') or {}
+    as_of = dash.get('created_at') or dash.get('as_of')
+
+    def _num(v):
+        try:
+            return float(v)
+        except Exception:  # noqa
+            return None
+
+    # --- Live market snapshot ---------------------------------------------------
+    mkt = {}
+    try:
+        mkt = ticker(symbol) or {}
+    except Exception:  # noqa
+        pass
+
+    # --- Signal (from the deterministic decision) -------------------------------
+    call = decision.get('label')
+    signal = {
+        'call': call,
+        'regime': decision.get('regime'),
+        'regimeDescription': decision.get('regime_description'),
+        'alignment': decision.get('alignment'),
+        'bias': decision.get('news_bias'),
+        'confidence': decision.get('confidence_level'),
+        'conviction': _num(decision.get('overall_score')),
+        'riskLevel': decision.get('risk_level'),
+        'headline': decision.get('summary'),
+        'circuitBreaker': decision.get('circuit_breaker'),
+    }
+
+    # --- Drivers + confluence (from decision components) ------------------------
+    drivers = []
+    agree = 0
+    for d in (drivers_raw if isinstance(drivers_raw, list) else [])[:8]:
+        if isinstance(d, dict):
+            score = _num(d.get('score'))
+            direction = 'bullish' if (score is not None and score >= 50) else ('bearish' if score is not None else None)
+            drivers.append({'label': d.get('name') or d.get('label'), 'direction': direction,
+                            'score': score, 'weight': _num(d.get('weight'))})
+            if direction == 'bullish':
+                agree += 1
+        elif d:
+            drivers.append({'label': str(d), 'direction': None, 'score': None, 'weight': None})
+    confluence = ({'agree': agree, 'total': len(drivers),
+                   'note': f"{agree} of {len(drivers)} components lean bullish"} if drivers else None)
+
+    # --- Historical edge (quant validation) -------------------------------------
+    historical_edge = None
+    if qv:
+        historical_edge = {'brier': qv.get('brier_score'),
+                           'psr': qv.get('probabilistic_sharpe_ratio'),
+                           'dsr': qv.get('deflated_sharpe_ratio'),
+                           'sharpe': qv.get('annualized_sharpe'),
+                           'maxDrawdownPct': qv.get('max_drawdown_pct'),
+                           'nTrades': qv.get('n_trades'),
+                           'note': 'Purged walk-forward out-of-sample validation'}
+
+    # --- Projection (no dedicated projection engine wired yet: honest) ----------
+    projection = {'available': False, 'reason': 'not_available',
+                  'note': 'Projection bands are not yet wired into this aggregation.'}
+
+    # --- Data integrity / freshness ---------------------------------------------
+    integrity = {'lastRun': as_of, 'stale': False}
+    try:
+        audit = data_audit_live() or {}
+        integrity = {'lastRun': audit.get('last_run') or as_of,
+                     'feeds': audit.get('feeds') or audit.get('sources'),
+                     'overall': audit.get('overall') or audit.get('status'),
+                     'stale': bool(audit.get('stale'))}
+    except Exception:  # noqa
+        pass
+
+    # --- Per-user portfolio impact ----------------------------------------------
+    portfolio_impact = None
+    if pid:
+        try:
+            summary = _portfolio_summary(pid)
+            mandate = _get_mandate(pid)
+            prr = _portfolio_risk_repo.evaluate(pid, summary.get('total_value'), mandate.get('max_drawdown_pct'))
+            portfolio_impact = {
+                'totalValue': summary.get('total_value'),
+                'protectionActive': bool(prr.get('protectionMode')),
+                'drawdownPct': prr.get('drawdownPct'),
+                'maxDrawdownPct': mandate.get('max_drawdown_pct'),
+                'approvedCoins': mandate.get('approved_coins') or [],
+                'symbolApproved': (symbol in (mandate.get('approved_coins') or []) or not mandate.get('approved_coins')),
+            }
+        except Exception:  # noqa
+            traceback.print_exc()
+
+    # --- Executive brief (plain-first, from deterministic fields) ---------------
+    points = []
+    if signal.get('headline'):
+        points.append(signal['headline'])
+    for d in drivers[:3]:
+        if d.get('label'):
+            points.append(d['label'] + (f" ({int(d['score'])})" if d.get('score') is not None else ''))
+    plain = (f"For {symbol}, the engine's current call is {call or 'unavailable'}"
+             + (f" with {signal['confidence']} confidence" if signal.get('confidence') is not None else '')
+             + ". This is advisory / paper only — Albert explains the engine, he doesn't place live trades.")
+    executive_brief = {'points': points, 'take': signal.get('headline')}
+
+    return {
+        'status': 'ready' if status == 'ready' else (status or 'computing'),
+        'snapshot': {'symbol': symbol, 'asOf': as_of, 'generatedAt': now_iso},
+        'market': {'price': mkt.get('price'), 'priceAud': mkt.get('price_aud'),
+                   'change24h': mkt.get('change24h'), 'high': mkt.get('high'),
+                   'low': mkt.get('low'), 'source': mkt.get('source')},
+        'signal': signal,
+        'drivers': drivers,
+        'confluence': confluence,
+        'projection': projection,
+        'historicalEdge': historical_edge,
+        'execution': {'mode': 'paper', 'note': 'Advisory / paper execution only.'},
+        'portfolioImpact': portfolio_impact,
+        'integrity': integrity,
+        'executiveBrief': executive_brief,
+        'explanation': {'plain': plain, 'technical': signal.get('headline')},
+        'paperOnly': True,
+    }
+
+
+
 
 @app.get('/api/v1/validation')
 def quant_validation_endpoint():

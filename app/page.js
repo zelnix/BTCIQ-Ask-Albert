@@ -43,6 +43,7 @@ import AlbertTrackRecord from './components/AlbertTrackRecord';
 import AlertManager from './components/AlertManager';
 import WeeklyRecap from './components/WeeklyRecap';
 import { WeeklyBriefCard } from './components/WeeklyBrief';
+import TraderHome from './components/TraderHome';
 
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
@@ -1933,6 +1934,7 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
 
   return (
     <div className="space-y-4">
+      <TraderHome symbol={briefSym || 'BTC'} onNav={onNav} />
       {/* KPI row — 4 across on every screen; compact on mobile */}
       <div className="grid grid-cols-4 gap-1.5 sm:gap-3">
         <ExecKpi label="Market Bias" onClick={() => onNav('overview')}>

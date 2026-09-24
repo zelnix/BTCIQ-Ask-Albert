@@ -114,6 +114,40 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Trader Home Phase 2+3 — /api/v1/albert/trader-home aggregation + TraderHome cockpit landing UI"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/components/TraderHome.js, app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          PHASE 2 (backend, verified): new GET /api/v1/albert/trader-home?pid=&symbol= — one user-scoped payload
+          assembled by REUSING existing engine outputs (reads latest runs_col doc directly for speed; ticker;
+          data_audit_live; _portfolio_summary/_get_mandate/_portfolio_risk_repo). Returns 14 groups: snapshot,
+          market, signal {call=decision.label, conviction=overall_score, confidence=confidence_level, regime, bias,
+          riskLevel, circuitBreaker}, drivers (from decision.components w/ score+direction), confluence,
+          projection {available:false — honest, not wired yet}, historicalEdge (Brier/PSR/DSR/Sharpe/nTrades from
+          quant_validation), execution {mode:paper}, portfolioImpact (per-pid value/protection/approved-coin
+          check), integrity (data-audit freshness/stale + lastRun), executiveBrief, explanation {plain, technical},
+          paperOnly:true. Verified via direct calls: status ready, call 'Weakly Bullish', 4 real drivers, brier
+          0.31; ~2s response (ticker-bound). Switched off dashboard()'s live on-chain overlay to cut 6s->2s.
+          PHASE 3 (frontend MVP): new TraderHome.js renders the plain-first cockpit (signal+market hero w/
+          conviction, executive briefing, drivers bars + confluence, historical edge, portfolio impact, honest
+          integrity strip; advisory/paper footer). Wired as the LANDING HERO at the top of the briefing
+          (ExecutiveSummary), so with the Phase-1 modal removal users land straight on it. Compiles clean (200);
+          renders an honest loading state then the data (endpoint 2-4s via proxy; a screenshot showed 'Assembling'
+          only because the automation aborted the in-flight fetch — net::ERR_ABORTED — a harness timing artifact,
+          not a bug).
+          REMAINING (not yet built): Phase 3 full — URL deep-links (/?section=&symbol=&snapshot=&horizon=&focus=)
+          + Back/Forward, mobile decision-order stacking, ProjectionPanel, and splitting into the spec's named
+          sub-components; Phase 4 — format.js canonical formatters, projection-chart safety rules, Portfolio/Model
+          Performance drill-down module, and the contract/e2e tests. Then the QUEUED second spec
+          (Ask_Albert_Market_Driver_Intelligence).
+
   - task: "Trader Home spec — Phase 1: remove blocking modals + plain-first Albert (no Pro auto-open)"
     implemented: true
     working: true
