@@ -114,6 +114,32 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Trader Home spec — Phase 1: remove blocking modals + plain-first Albert (no Pro auto-open)"
+    implemented: true
+    working: true
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Phase 1 of the BTCIQ Trader Home developer spec (user approved full build, incremental). Done:
+          (1) Removed the blocking post-sign-in modals — deleted welcomeOpen/welcomeChecked/weeklyOpen/
+          weeklyChecked state, the two post-auth session effects, and the <WelcomeBrief>/<WeeklyBrief> modal renders
+          (+ their imports; kept the inline WeeklyBriefCard). Users now land directly on the briefing, no blocker.
+          (2) Plain-first: removed the two effects that auto-opened Technical content when getReadingLevel()==='pro'
+          (ExecutiveSummary + MorningBriefCard) — technical stays collapsed until explicit user action; manual
+          toggle buttons retained. Compiles clean (200). Targeted check per credit-efficient policy.
+          REMAINING PHASES (not yet built): Phase 2 backend GET /api/v1/albert/trader-home aggregation (snapshot/
+          market/signal/drivers/confluence/projection/historicalEdge/execution/portfolioImpact/integrity/
+          executiveBrief/explanation, reusing existing builders); Phase 3 TraderHome cockpit UI (SignalStrip,
+          ExecutiveBriefing+BriefingPointLink, ProjectionPanel, DecisionPanel, EvidenceRow, IntegrityStrip, URL
+          deep-links, mobile decision-order); Phase 4 format.js formatters, projection safety, Portfolio/Model
+          Performance module, tests. Also QUEUED: second spec Ask_Albert_Market_Driver_Intelligence (implement after
+          Trader Home).
+
   - task: "Chat UX corrections — per-message copy always visible, expand = full-screen widget, remove PDF (Copy=clipboard text)"
     implemented: true
     working: true

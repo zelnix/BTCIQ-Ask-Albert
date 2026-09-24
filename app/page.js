@@ -23,7 +23,6 @@ import { fmtUsd, fmtAud, fmtPct, CAT_COLORS, BAR_COLORS, scoreColor, signalText,
 import { SymbolContext } from './lib/context';
 import { useFetch } from './lib/useFetch';
 import FloatingAlbert from './components/FloatingAlbert';
-import WelcomeBrief from './components/WelcomeBrief';
 import PublishStamp from './components/PublishStamp';
 import StrategiesBriefing from './components/StrategiesBriefing';
 import AlbertText from './components/AlbertText';
@@ -43,7 +42,7 @@ import PortfolioPanel from './components/PortfolioPanel';
 import AlbertTrackRecord from './components/AlbertTrackRecord';
 import AlertManager from './components/AlertManager';
 import WeeklyRecap from './components/WeeklyRecap';
-import WeeklyBrief, { WeeklyBriefCard } from './components/WeeklyBrief';
+import { WeeklyBriefCard } from './components/WeeklyBrief';
 
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
@@ -1861,12 +1860,8 @@ function ExecutiveSummary({ d, ticker, news, onNav }) {
   const briefAgeH = (() => { try { if (!brief || !brief.generated_at) return null; const norm = /[zZ]$/.test(brief.generated_at) ? brief.generated_at : brief.generated_at + 'Z'; return (Date.now() - new Date(norm).getTime()) / 3600000; } catch (e) { return null; } })();
   const staleBrief = briefAgeH != null && briefAgeH > 24;
   const [techOpen, setTechOpen] = useState(false);
-  React.useEffect(() => {
-    const apply = () => setTechOpen(getReadingLevel() === 'pro');
-    apply();
-    window.addEventListener('btciq:reading-level', apply);
-    return () => window.removeEventListener('btciq:reading-level', apply);
-  }, []);
+  // Plain-first contract: technical content stays collapsed by default and is
+  // opened only by explicit user action — never auto-opened from a Pro preference.
   const buildParts = (b) => [`Good morning! Here is your ${briefName} brief.`,
     ...((b && b.observations) || []), (b && b.take) ? `My take: ${b.take}` : '']
     .filter(Boolean).join(' ');
@@ -2520,13 +2515,8 @@ function MorningBriefCard() {
   };
   const techObs = (tech && tech.observations) || [];
   const hasBrief = obs.length || (d && d.take);
-  React.useEffect(() => {
-    const apply = () => { if (getReadingLevel() === 'pro') openTech(); };
-    apply();
-    window.addEventListener('btciq:reading-level', apply);
-    return () => window.removeEventListener('btciq:reading-level', apply);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Plain-first: technical brief opens only on explicit user action, never auto
+  // from a stored Pro preference.
   return (
     <Card className="border-0 bg-gradient-to-br from-sky-950/40 to-slate-900 p-6 ring-1 ring-sky-900/50">
       <div className="mb-3 flex items-center gap-2">
@@ -3221,10 +3211,6 @@ export default function DashboardPage() {
   const [switching, setSwitching] = useState(false);
   // Auth gate: undefined = checking, null = signed out, {user} = signed in.
   const [authUser, setAuthUser] = useState(undefined);
-  const [welcomeOpen, setWelcomeOpen] = useState(false);
-  const welcomeChecked = React.useRef(false);
-  const [weeklyOpen, setWeeklyOpen] = useState(false);
-  const weeklyChecked = React.useRef(false);
   React.useEffect(() => {
     let alive = true;
     fetchMe().then((u) => {
@@ -3234,29 +3220,8 @@ export default function DashboardPage() {
     });
     return () => { alive = false; };
   }, []);
-  // Personalized Welcome Brief — shown once per browser session right after sign-in.
-  React.useEffect(() => {
-    if (!authUser || welcomeChecked.current) return;
-    welcomeChecked.current = true;
-    try {
-      if (!sessionStorage.getItem('albert_welcome_shown')) {
-        setWelcomeOpen(true);
-        sessionStorage.setItem('albert_welcome_shown', '1');
-      }
-    } catch (e) { setWelcomeOpen(true); }
-  }, [authUser]);
-  // Weekly Brief — auto-shown on Sundays, once per browser session, after the Welcome Brief.
-  React.useEffect(() => {
-    if (!authUser || weeklyChecked.current) return;
-    weeklyChecked.current = true;
-    try {
-      const isSunday = new Date().getDay() === 0;
-      if (isSunday && !sessionStorage.getItem('albert_weekly_shown')) {
-        setWeeklyOpen(true);
-        sessionStorage.setItem('albert_weekly_shown', '1');
-      }
-    } catch (e) { /* noop */ }
-  }, [authUser]);
+  // Trader Home: no blocking post-sign-in modals. Users land directly on the
+  // briefing; the Welcome/Weekly recaps are available inline (WeeklyBriefCard).
   const handleSignOut = React.useCallback(async () => {
     await authLogout();
     setAuthUser(null);
@@ -3605,8 +3570,6 @@ export default function DashboardPage() {
     <SymbolContext.Provider value={symbol}>
     <div className="relative min-h-screen bg-slate-950 text-slate-100">
       {albertBioOpen && <AlbertBioModal onClose={() => setAlbertBioOpen(false)} />}
-      {welcomeOpen && <WelcomeBrief onClose={() => setWelcomeOpen(false)} onOpenCommandCentre={() => { setActive('strategies'); setWelcomeOpen(false); }} />}
-      {weeklyOpen && !welcomeOpen && <WeeklyBrief onClose={() => setWeeklyOpen(false)} onOpenCommandCentre={() => { setActive('strategies'); setWeeklyOpen(false); }} />}
       <AlbertVoiceToast />
       {chatStrategyBuilding && !chatStrategy?.draft && (
         <div className="fixed inset-0 z-[95] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
