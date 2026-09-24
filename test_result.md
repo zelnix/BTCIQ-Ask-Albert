@@ -114,6 +114,35 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Chat enhancements — Search, PDF Export, Multiple Threads (Mandate Tuning deferred)"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/lib/chatStore.js, app/components/FloatingAlbert.js, app/components/ThreadMenu.js, app/components/CopyButton.js, app/page.js, package.json (jspdf)"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Built 3 of 4 requested chat features (Mandate Tuning intentionally deferred as a focused/sensitive follow-up).
+          (1) SEARCH — client-side message filter in both the floating widget and full Ask section (filters rendered
+          messages, shows match count). (2) PDF EXPORT — downloadChatPdf() via jspdf (added to package.json), clean
+          text-based PDF, button next to Copy in both views. (3) MULTIPLE THREADS — reworked chat persistence to
+          many named threads per user. Backend albert_chat_col now keyed by threadId ({_id:threadId, pid, title,
+          sessionId, messages, count, updated/createdAt}); endpoints: GET /chat/threads (list), GET /chat?threadId=
+          (one thread; falls back to most recent), PUT /chat (upsert + auto-title from first user msg), POST
+          /chat/new, /chat/rename, /chat/delete (replaced the old single-doc get/save/clear). chatStore.js rewritten
+          to a multi-thread store (useAlbertChat exposes messages/setMessages/sessionId/threadId/title/threads +
+          switchThread/newThread/renameThread/deleteThread, synced across both views via 'albert:chat' event,
+          active thread id persisted per-pid in localStorage). New ThreadMenu.js switcher dropdown in both headers.
+          VERIFIED: backend threads new/save/auto-title/list/get/rename/delete all pass; frontend compiles clean
+          (200); ThreadMenu ("Chats") renders in the full section; Copy/PDF/Search toolbar correctly shows only when
+          the active thread has messages. Kept to targeted checks per the user's credit-efficient testing policy.
+          DEFERRED (Phase 4, next): Mandate Tuning Chat — Albert proposes a mandate-change card (Apply/Cancel) that
+          POSTs to /api/v1/albert/mandate. Not started; sensitive (changes real risk inputs) so scheduled as a
+          dedicated build with full verification.
+
   - task: "Ask-Albert chat persistence (cross-device DB) + Copy (whole + per-message) + New chat"
     implemented: true
     working: true

@@ -2,10 +2,11 @@
 
 import React from 'react';
 import { Button } from '@/components/ui/button';
-import { Maximize2, X, Clock, Send, Brain, RefreshCw, Copy, Check, MessageSquarePlus } from 'lucide-react';
+import { Maximize2, X, Clock, Send, Brain, RefreshCw, Copy, Check, MessageSquarePlus, Search, FileDown } from 'lucide-react';
 import { API_BASE, getPid } from '../lib/api';
-import { useAlbertChat, chatToText } from '../lib/chatStore';
+import { useAlbertChat, chatToText, downloadChatPdf } from '../lib/chatStore';
 import CopyButton from './CopyButton';
+import ThreadMenu from './ThreadMenu';
 import AlbertText from './AlbertText';
 import AlbertReplyMeta from './AlbertReplyMeta';
 import BasketChatCard from './BasketChatCard';
@@ -27,7 +28,7 @@ const SECTION_LABELS = {
 export default function FloatingAlbert({ active, symbol, onExpand }) {
   const [open, setOpen] = React.useState(false);
   const pid = React.useMemo(() => getPid(), []);
-  const { messages, setMessages, sessionId, clear } = useAlbertChat(pid);
+  const { messages, setMessages, sessionId, clear, threads, threadId, switchThread, newThread, renameThread, deleteThread } = useAlbertChat(pid);
   const [input, setInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [deep, setDeep] = React.useState(false);
@@ -35,8 +36,11 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
   const [, setRateTick] = React.useState(0);
   const endRef = React.useRef(null);
   const [copied, setCopied] = React.useState(false);
+  const [search, setSearch] = React.useState('');
+  const [showSearch, setShowSearch] = React.useState(false);
   const isOverview = !active || active === 'overview';
   const scopeLabel = SECTION_LABELS[active] || 'all things Ask Albert';
+  const shown = search.trim() ? messages.filter((m) => (m.text || '').toLowerCase().includes(search.trim().toLowerCase())) : messages;
 
   React.useEffect(() => { if (open) endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading, open]);
   const copyAll = () => {
@@ -44,6 +48,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
     if (!txt) return;
     try { navigator.clipboard.writeText(txt); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) { /* noop */ }
   };
+  const exportPdf = () => { downloadChatPdf(messages, 'Ask Albert chat'); };
   React.useEffect(() => {
     if (!rateUntil) return;
     const id = setInterval(() => {
@@ -121,14 +126,24 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
             </div>
             {messages.length > 0 && (
               <>
+                <button onClick={() => setShowSearch((v) => !v)} title="Search this chat" className={`rounded-lg p-1.5 hover:bg-slate-800 hover:text-slate-200 ${showSearch ? 'text-sky-400' : 'text-slate-400'}`}><Search className="h-4 w-4" /></button>
+                <button onClick={exportPdf} title="Download as PDF" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><FileDown className="h-4 w-4" /></button>
                 <button onClick={copyAll} title="Copy whole conversation" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200">{copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}</button>
-                <button onClick={clear} title="New chat" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><MessageSquarePlus className="h-4 w-4" /></button>
               </>
             )}
+            <ThreadMenu compact threads={threads} activeId={threadId} title="" onSwitch={switchThread} onNew={newThread} onRename={renameThread} onDelete={deleteThread} />
             {onExpand && <button onClick={() => { setOpen(false); onExpand(); }} title="Open full chat" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><Maximize2 className="h-4 w-4" /></button>}
             <button onClick={() => setOpen(false)} title="Close" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><X className="h-4 w-4" /></button>
           </div>
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
+            {showSearch && messages.length > 0 && (
+              <div className="sticky top-0 z-10 -mx-1 mb-1 flex items-center gap-2 rounded-lg border border-slate-700 bg-slate-950/90 px-2.5 py-1.5">
+                <Search className="h-3.5 w-3.5 text-slate-500" />
+                <input autoFocus value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search messages…" className="flex-1 bg-transparent text-[12px] text-slate-100 placeholder-slate-500 focus:outline-none" />
+                {search && <span className="text-[10px] text-slate-500">{shown.length} match{shown.length === 1 ? '' : 'es'}</span>}
+                {search && <button onClick={() => setSearch('')} className="text-slate-500 hover:text-slate-300"><X className="h-3.5 w-3.5" /></button>}
+              </div>
+            )}
             {messages.length === 0 && (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
                 <img src="/albert.png" alt="Albert" className="h-16 w-16 rounded-full object-cover ring-2 ring-sky-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
@@ -141,7 +156,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
                 </div>
               </div>
             )}
-            {messages.map((m, i) => (
+            {shown.map((m, i) => (
               <div key={i} className={`group flex items-end gap-1.5 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
                 <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>

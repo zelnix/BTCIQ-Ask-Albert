@@ -13,7 +13,7 @@ import {
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
   Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet, Plus, Clock,
-  ChevronDown, Coins, Fish, Zap, Loader2, LogOut, MessageSquarePlus, Copy,
+  ChevronDown, Coins, Fish, Zap, Loader2, LogOut, MessageSquarePlus, Copy, Search, FileDown,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -28,7 +28,8 @@ import PublishStamp from './components/PublishStamp';
 import StrategiesBriefing from './components/StrategiesBriefing';
 import AlbertText from './components/AlbertText';
 import CopyButton from './components/CopyButton';
-import { useAlbertChat, chatToText } from './lib/chatStore';
+import ThreadMenu from './components/ThreadMenu';
+import { useAlbertChat, chatToText, downloadChatPdf } from './lib/chatStore';
 import HomePage from './components/HomePage';
 import { fetchMe, logout as authLogout, rememberUser } from './lib/auth';
 import { hydrateVoicePrefFromServer } from './lib/albertVoice';
@@ -2256,7 +2257,7 @@ function EventsSection({ d }) {
 function AskQuantSection({ d }) {
   const symbol = React.useContext(SymbolContext);
   const pid = React.useMemo(() => getPid(), []);
-  const { messages, setMessages, sessionId, clear } = useAlbertChat(pid);
+  const { messages, setMessages, sessionId, clear, threads, threadId, switchThread, newThread, renameThread, deleteThread } = useAlbertChat(pid);
   const [input, setInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [deep, setDeep] = React.useState(false);
@@ -2264,11 +2265,14 @@ function AskQuantSection({ d }) {
   const [, setRateTick] = React.useState(0);
   const endRef = React.useRef(null);
   const [copied, setCopied] = React.useState(false);
+  const [search, setSearch] = React.useState('');
+  const shown = search.trim() ? messages.filter((m) => (m.text || '').toLowerCase().includes(search.trim().toLowerCase())) : messages;
   const copyAll = () => {
     const txt = chatToText(messages);
     if (!txt) return;
     try { navigator.clipboard.writeText(txt); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) { /* noop */ }
   };
+  const exportPdf = () => { downloadChatPdf(messages, 'Ask Albert chat'); };
 
   React.useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
   React.useEffect(() => {
@@ -2352,10 +2356,18 @@ function AskQuantSection({ d }) {
           <div className="ml-auto flex items-center gap-1">
             {messages.length > 0 && (
               <>
+                <div className="mr-1 hidden items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-950/60 px-2 py-1 sm:flex">
+                  <Search className="h-3.5 w-3.5 text-slate-500" />
+                  <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" className="w-28 bg-transparent text-[12px] text-slate-100 placeholder-slate-500 focus:outline-none" />
+                  {search && <span className="text-[10px] text-slate-500">{shown.length}</span>}
+                  {search && <button onClick={() => setSearch('')} className="text-slate-500 hover:text-slate-300"><X className="h-3 w-3" /></button>}
+                </div>
+                <button onClick={exportPdf} title="Download as PDF" className="flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-[11px] font-semibold text-slate-300 hover:bg-slate-800 hover:text-white"><FileDown className="h-3.5 w-3.5" />PDF</button>
                 <button onClick={copyAll} title="Copy whole conversation" className="flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-[11px] font-semibold text-slate-300 hover:bg-slate-800 hover:text-white">{copied ? <><Check className="h-3.5 w-3.5 text-emerald-400" />Copied</> : <><Copy className="h-3.5 w-3.5" />Copy</>}</button>
                 <button onClick={clear} title="Start a new chat" className="flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-[11px] font-semibold text-slate-300 hover:bg-slate-800 hover:text-white"><MessageSquarePlus className="h-3.5 w-3.5" />New</button>
               </>
             )}
+            <ThreadMenu threads={threads} activeId={threadId} title="Chats" onSwitch={switchThread} onNew={newThread} onRename={renameThread} onDelete={deleteThread} />
             <span className="ml-1 flex items-center gap-1 text-[10px] font-bold text-emerald-400"><span className="h-2 w-2 rounded-full bg-emerald-400" />LIVE</span>
           </div>
         </div>
@@ -2374,7 +2386,7 @@ function AskQuantSection({ d }) {
               </div>
             </div>
           )}
-          {messages.map((m, i) => (
+          {shown.map((m, i) => (
             <div key={i} className={`group flex items-end gap-1.5 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" />}
               <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>

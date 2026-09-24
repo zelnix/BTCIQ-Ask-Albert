@@ -8588,73 +8588,130 @@ def _new_chat_sid():
     return uuid.uuid4().hex
 
 
-@app.get('/api/v1/albert/chat')
-def albert_chat_get(pid: str = ''):
-    """Return the user's saved Ask-Albert conversation so it persists across
-    navigation, expand and devices. Empty/new users get a fresh sessionId."""
-    pid = (pid or '').strip()[:80]
-    if not pid:
-        return {'status': 'ready', 'sessionId': _new_chat_sid(), 'messages': []}
-    try:
-        from config import albert_chat_col
-        doc = albert_chat_col.find_one({'_id': pid}, {'_id': 0})
-        if doc and doc.get('sessionId'):
-            return {'status': 'ready', 'sessionId': doc['sessionId'],
-                    'messages': doc.get('messages') or []}
-    except Exception:  # noqa
-        traceback.print_exc()
-    return {'status': 'ready', 'sessionId': _new_chat_sid(), 'messages': []}
+def _chat_title_from(messages):
+    for m in (messages or []):
+        if m.get('role') == 'user' and (m.get('text') or '').strip():
+            t = ' '.join(str(m['text']).split())
+            return t[:48] + ('…' if len(t) > 48 else '')
+    return 'New chat'
 
 
-@app.put('/api/v1/albert/chat')
-def albert_chat_save(payload: dict = Body(...)):
-    """Upsert the user's conversation (client-driven sync). Messages are trimmed
-    to the most recent turns and size-capped to protect the DB."""
-    pid = (str(payload.get('pid') or '')).strip()[:80]
-    if not pid:
-        return {'error': 'pid required'}
-    sid = (str(payload.get('sessionId') or '')).strip()[:80] or _new_chat_sid()
-    messages = payload.get('messages')
+def _trim_msgs(messages):
     if not isinstance(messages, list):
-        messages = []
+        return []
     messages = messages[-_CHAT_MAX_MESSAGES:]
-    # Size guard: drop oldest until under the byte cap.
     try:
         while messages and len(json.dumps(messages, default=str)) > _CHAT_MAX_BYTES:
             messages = messages[1:]
     except Exception:  # noqa
         pass
+    return messages
+
+
+@app.get('/api/v1/albert/chat/threads')
+def albert_chat_threads(pid: str = ''):
+    """List the user's saved conversation threads (most recent first), lightweight
+    (no message bodies)."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'status': 'ready', 'threads': []}
+    out = []
+    try:
+        from config import albert_chat_col
+        for d in albert_chat_col.find({'pid': pid}, {'messages': 0}).sort('updatedAt', -1).limit(100):
+            out.append({'threadId': d.get('_id'), 'title': d.get('title') or 'New chat',
+                        'updatedAt': d.get('updatedAt'), 'count': d.get('count', 0)})
+    except Exception:  # noqa
+        traceback.print_exc()
+    return {'status': 'ready', 'threads': out}
+
+
+@app.get('/api/v1/albert/chat')
+def albert_chat_get(pid: str = '', threadId: str = ''):
+    """Return one conversation thread. With threadId -> that thread; without ->
+    the most recent thread; none yet -> a fresh empty thread."""
+    pid = (pid or '').strip()[:80]
+    threadId = (threadId or '').strip()[:80]
+    if not pid:
+        return {'status': 'ready', 'threadId': _new_chat_sid(), 'sessionId': _new_chat_sid(), 'title': 'New chat', 'messages': []}
+    try:
+        from config import albert_chat_col
+        doc = None
+        if threadId:
+            doc = albert_chat_col.find_one({'_id': threadId, 'pid': pid}, {'_id': 0, 'messages': 1, 'sessionId': 1, 'title': 1})
+        if not doc:
+            doc = albert_chat_col.find_one({'pid': pid}, {'_id': 1, 'messages': 1, 'sessionId': 1, 'title': 1}, sort=[('updatedAt', -1)])
+            if doc:
+                threadId = doc.get('_id')
+        if doc and doc.get('sessionId'):
+            return {'status': 'ready', 'threadId': threadId or _new_chat_sid(),
+                    'sessionId': doc['sessionId'], 'title': doc.get('title') or 'New chat',
+                    'messages': doc.get('messages') or []}
+    except Exception:  # noqa
+        traceback.print_exc()
+    return {'status': 'ready', 'threadId': _new_chat_sid(), 'sessionId': _new_chat_sid(), 'title': 'New chat', 'messages': []}
+
+
+@app.put('/api/v1/albert/chat')
+def albert_chat_save(payload: dict = Body(...)):
+    """Upsert one thread (client-driven sync). Auto-titles from the first user
+    message when no title is set."""
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    tid = (str(payload.get('threadId') or '')).strip()[:80] or _new_chat_sid()
+    sid = (str(payload.get('sessionId') or '')).strip()[:80] or _new_chat_sid()
+    messages = _trim_msgs(payload.get('messages'))
+    title = (str(payload.get('title') or '')).strip()[:80] or _chat_title_from(messages)
     try:
         from config import albert_chat_col
         albert_chat_col.update_one(
-            {'_id': pid},
-            {'$set': {'pid': pid, 'sessionId': sid, 'messages': messages,
-                      'updatedAt': datetime.datetime.utcnow().isoformat()}},
+            {'_id': tid},
+            {'$set': {'pid': pid, 'sessionId': sid, 'title': title, 'messages': messages,
+                      'count': len(messages), 'updatedAt': datetime.datetime.utcnow().isoformat()},
+             '$setOnInsert': {'createdAt': datetime.datetime.utcnow().isoformat()}},
             upsert=True)
     except Exception:  # noqa
         traceback.print_exc()
         return {'error': 'save failed'}
-    return {'status': 'ready', 'saved': len(messages)}
+    return {'status': 'ready', 'threadId': tid, 'title': title, 'saved': len(messages)}
 
 
-@app.post('/api/v1/albert/chat/clear')
-def albert_chat_clear(payload: dict = Body(...)):
-    """Start a fresh conversation ("New chat"): clears saved messages and rotates
-    the sessionId so the LLM context restarts too."""
+@app.post('/api/v1/albert/chat/new')
+def albert_chat_new(payload: dict = Body(...)):
+    """Return fresh threadId + sessionId for a brand-new conversation. The thread
+    is persisted lazily on its first saved message."""
+    return {'status': 'ready', 'threadId': _new_chat_sid(), 'sessionId': _new_chat_sid(), 'title': 'New chat'}
+
+
+@app.post('/api/v1/albert/chat/rename')
+def albert_chat_rename(payload: dict = Body(...)):
     pid = (str(payload.get('pid') or '')).strip()[:80]
-    if not pid:
-        return {'error': 'pid required'}
-    sid = (str(payload.get('sessionId') or '')).strip()[:80] or _new_chat_sid()
+    tid = (str(payload.get('threadId') or '')).strip()[:80]
+    title = (str(payload.get('title') or '')).strip()[:80] or 'New chat'
+    if not (pid and tid):
+        return {'error': 'pid and threadId required'}
     try:
         from config import albert_chat_col
-        albert_chat_col.update_one(
-            {'_id': pid},
-            {'$set': {'pid': pid, 'sessionId': sid, 'messages': [],
-                      'updatedAt': datetime.datetime.utcnow().isoformat()}},
-            upsert=True)
+        albert_chat_col.update_one({'_id': tid, 'pid': pid}, {'$set': {'title': title}})
     except Exception:  # noqa
         traceback.print_exc()
-    return {'status': 'ready', 'sessionId': sid}
+    return {'status': 'ready', 'title': title}
+
+
+@app.post('/api/v1/albert/chat/delete')
+def albert_chat_delete(payload: dict = Body(...)):
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    tid = (str(payload.get('threadId') or '')).strip()[:80]
+    if not (pid and tid):
+        return {'error': 'pid and threadId required'}
+    try:
+        from config import albert_chat_col
+        albert_chat_col.delete_one({'_id': tid, 'pid': pid})
+    except Exception:  # noqa
+        traceback.print_exc()
+    return {'status': 'ready', 'deleted': tid}
+
 
 
 
