@@ -2,8 +2,10 @@
 
 import React from 'react';
 import { Button } from '@/components/ui/button';
-import { Maximize2, X, Clock, Send, Brain, RefreshCw } from 'lucide-react';
+import { Maximize2, X, Clock, Send, Brain, RefreshCw, Copy, Check, MessageSquarePlus } from 'lucide-react';
 import { API_BASE, getPid } from '../lib/api';
+import { useAlbertChat, chatToText } from '../lib/chatStore';
+import CopyButton from './CopyButton';
 import AlbertText from './AlbertText';
 import AlbertReplyMeta from './AlbertReplyMeta';
 import BasketChatCard from './BasketChatCard';
@@ -24,21 +26,24 @@ const SECTION_LABELS = {
 // Floating, screen-aware Ask Albert widget (present on every screen).
 export default function FloatingAlbert({ active, symbol, onExpand }) {
   const [open, setOpen] = React.useState(false);
-  const [sessionId] = React.useState(() => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)));
-  const [messages, setMessages] = React.useState([]);
+  const pid = React.useMemo(() => getPid(), []);
+  const { messages, setMessages, sessionId, clear } = useAlbertChat(pid);
   const [input, setInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [deep, setDeep] = React.useState(false);
-  const pid = React.useMemo(() => getPid(), []);
   const [rateUntil, setRateUntil] = React.useState(0);
   const [, setRateTick] = React.useState(0);
   const endRef = React.useRef(null);
+  const [copied, setCopied] = React.useState(false);
   const isOverview = !active || active === 'overview';
   const scopeLabel = SECTION_LABELS[active] || 'all things Ask Albert';
 
   React.useEffect(() => { if (open) endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading, open]);
-  // Reset the mini-thread when the user switches screens so context stays relevant.
-  React.useEffect(() => { setMessages([]); }, [active]);
+  const copyAll = () => {
+    const txt = chatToText(messages);
+    if (!txt) return;
+    try { navigator.clipboard.writeText(txt); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) { /* noop */ }
+  };
   React.useEffect(() => {
     if (!rateUntil) return;
     const id = setInterval(() => {
@@ -114,6 +119,12 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
               <p className="truncate text-sm font-semibold text-white">Ask Albert</p>
               <p className="truncate text-[10px] text-sky-400">{isOverview ? 'Talking about all things Ask Albert' : `Focused on: ${scopeLabel}`}</p>
             </div>
+            {messages.length > 0 && (
+              <>
+                <button onClick={copyAll} title="Copy whole conversation" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200">{copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}</button>
+                <button onClick={clear} title="New chat" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><MessageSquarePlus className="h-4 w-4" /></button>
+              </>
+            )}
             {onExpand && <button onClick={() => { setOpen(false); onExpand(); }} title="Open full chat" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><Maximize2 className="h-4 w-4" /></button>}
             <button onClick={() => setOpen(false)} title="Close" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><X className="h-4 w-4" /></button>
           </div>
@@ -131,11 +142,12 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
               </div>
             )}
             {messages.map((m, i) => (
-              <div key={i} className={`flex items-end gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div key={i} className={`group flex items-end gap-1.5 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
                 <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>
                   {m.role === 'assistant' ? <><AlbertText text={m.text} />{m.error && m.retry ? <button onClick={() => send(m.retry)} disabled={loading} className="mt-2 flex items-center gap-1.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-50"><RefreshCw className="h-3 w-3" />Retry</button> : m.basket_draft ? <BasketChatCard draft={m.basket_draft} pid={pid} /> : m.basket_rebalance ? <BasketRebalanceCard rebalance={m.basket_rebalance} /> : m.basket_close ? <BasketCloseCard close={m.basket_close} /> : <AlbertReplyMeta text={m.text} sources={m.sources} symbol={symbol} pid={pid} />}</> : m.text}
                 </div>
+                {!m.error && (m.text || '').trim() && <CopyButton text={m.text} className="opacity-0 group-hover:opacity-100" />}
               </div>
             ))}
             {loading && (

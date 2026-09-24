@@ -168,6 +168,15 @@ try:
 except Exception:  # noqa
     pass
 
+# Ask-Albert chat persistence — one conversation per user (pid), stored so it
+# survives navigation/expand and follows the user across devices.
+# Doc: {_id: pid, sessionId, messages: [...], updatedAt}.
+albert_chat_col = db['albert_chat']
+try:
+    albert_chat_col.create_index('pid')
+except Exception:  # noqa
+    pass
+
 # Phase E constants
 ORDER_TTL_SECONDS = 300              # 5-minute TTL from intent createdAt
 DEFAULT_SLIPPAGE_BPS = 50            # 0.50% default price tolerance

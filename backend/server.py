@@ -8579,6 +8579,86 @@ def albert_weekly_brief(pid: str = '', refresh: bool = False):
     return result
 
 
+# ---- Ask-Albert chat persistence (one conversation per user, cross-device) ---
+_CHAT_MAX_MESSAGES = 200          # keep the most recent N turns
+_CHAT_MAX_BYTES = 400_000         # hard cap on stored payload size
+
+
+def _new_chat_sid():
+    return uuid.uuid4().hex
+
+
+@app.get('/api/v1/albert/chat')
+def albert_chat_get(pid: str = ''):
+    """Return the user's saved Ask-Albert conversation so it persists across
+    navigation, expand and devices. Empty/new users get a fresh sessionId."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'status': 'ready', 'sessionId': _new_chat_sid(), 'messages': []}
+    try:
+        from config import albert_chat_col
+        doc = albert_chat_col.find_one({'_id': pid}, {'_id': 0})
+        if doc and doc.get('sessionId'):
+            return {'status': 'ready', 'sessionId': doc['sessionId'],
+                    'messages': doc.get('messages') or []}
+    except Exception:  # noqa
+        traceback.print_exc()
+    return {'status': 'ready', 'sessionId': _new_chat_sid(), 'messages': []}
+
+
+@app.put('/api/v1/albert/chat')
+def albert_chat_save(payload: dict = Body(...)):
+    """Upsert the user's conversation (client-driven sync). Messages are trimmed
+    to the most recent turns and size-capped to protect the DB."""
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    sid = (str(payload.get('sessionId') or '')).strip()[:80] or _new_chat_sid()
+    messages = payload.get('messages')
+    if not isinstance(messages, list):
+        messages = []
+    messages = messages[-_CHAT_MAX_MESSAGES:]
+    # Size guard: drop oldest until under the byte cap.
+    try:
+        while messages and len(json.dumps(messages, default=str)) > _CHAT_MAX_BYTES:
+            messages = messages[1:]
+    except Exception:  # noqa
+        pass
+    try:
+        from config import albert_chat_col
+        albert_chat_col.update_one(
+            {'_id': pid},
+            {'$set': {'pid': pid, 'sessionId': sid, 'messages': messages,
+                      'updatedAt': datetime.datetime.utcnow().isoformat()}},
+            upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'error': 'save failed'}
+    return {'status': 'ready', 'saved': len(messages)}
+
+
+@app.post('/api/v1/albert/chat/clear')
+def albert_chat_clear(payload: dict = Body(...)):
+    """Start a fresh conversation ("New chat"): clears saved messages and rotates
+    the sessionId so the LLM context restarts too."""
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    if not pid:
+        return {'error': 'pid required'}
+    sid = (str(payload.get('sessionId') or '')).strip()[:80] or _new_chat_sid()
+    try:
+        from config import albert_chat_col
+        albert_chat_col.update_one(
+            {'_id': pid},
+            {'$set': {'pid': pid, 'sessionId': sid, 'messages': [],
+                      'updatedAt': datetime.datetime.utcnow().isoformat()}},
+            upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+    return {'status': 'ready', 'sessionId': sid}
+
+
+
+
 
 @app.post('/api/v1/albert/watchlist')
 def albert_watchlist_pin(payload: dict = Body(...)):

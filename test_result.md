@@ -114,6 +114,38 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Ask-Albert chat persistence (cross-device DB) + Copy (whole + per-message) + New chat"
+    implemented: true
+    working: true
+    file: "backend/server.py, backend/config.py, app/lib/chatStore.js, app/components/FloatingAlbert.js, app/components/CopyButton.js, app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          FEATURE (user reported chats lost on navigate/expand; wanted copy + persistence across devices).
+          Root cause: both chat views (full AskQuantSection + FloatingAlbert widget) kept messages only in local
+          component state (fresh sessionId + empty messages each mount) AND FloatingAlbert wiped messages on every
+          section change. They were also two separate chats.
+          FIX: (1) Backend persistence — new albert_chat_col ({_id:pid, sessionId, messages, updatedAt}) + endpoints
+          GET /api/v1/albert/chat?pid= (returns {sessionId, messages}), PUT /api/v1/albert/chat (upsert, trimmed to
+          last 200 msgs + 400KB size cap), POST /api/v1/albert/chat/clear (new chat: clears + rotates sessionId).
+          (2) Shared frontend store app/lib/chatStore.js (useAlbertChat(pid) hook) — loads from backend once per pid,
+          debounced save on change, live cross-component sync via a window 'albert:chat' event, guards against
+          clobbering an in-flight local message. Both FloatingAlbert and AskQuantSection now use this hook (same
+          conversation, in sync). Removed the wipe-on-section-change. (3) Copy: header "Copy" copies the whole
+          conversation (chatToText), plus a per-message hover CopyButton (new app/components/CopyButton.js) in both
+          views. (4) "New chat" button in both headers.
+          VERIFIED: backend GET/PUT/clear all pass (save 2 -> load 2 -> clear -> 0). Frontend screenshot-verified
+          with seeded session: browser pid u_7693..., GET /chat returned the seeded 2 msgs, floating widget rendered
+          the persisted conversation, Copy + New chat buttons present. (An earlier "empty" screenshot run was a
+          test-harness pid race — localStorage set after mount; real users get pid via rememberUser before the
+          widget mounts, confirmed by re-test with an init-script.) Persistence is per authenticated user so it
+          follows them across devices. NOTE: not tested via the autonomous testing agent (kept to targeted checks
+          per the user's credit-efficient testing policy).
+
   - task: "Fix: Google 'Continue with Google' button does nothing on Windows"
     implemented: true
     working: true

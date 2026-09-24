@@ -13,7 +13,7 @@ import {
   Sparkles, Info, Lock, Compass, CandlestickChart, Layers, Landmark, Globe, Newspaper,
   Brain, Send, ShieldAlert, Scale, CalendarClock, ClipboardList, ShieldCheck,
   Volume2, VolumeX, Maximize2, Minimize2, SlidersHorizontal, Magnet, Plus, Clock,
-  ChevronDown, Coins, Fish, Zap, Loader2, LogOut,
+  ChevronDown, Coins, Fish, Zap, Loader2, LogOut, MessageSquarePlus, Copy,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -27,6 +27,8 @@ import WelcomeBrief from './components/WelcomeBrief';
 import PublishStamp from './components/PublishStamp';
 import StrategiesBriefing from './components/StrategiesBriefing';
 import AlbertText from './components/AlbertText';
+import CopyButton from './components/CopyButton';
+import { useAlbertChat, chatToText } from './lib/chatStore';
 import HomePage from './components/HomePage';
 import { fetchMe, logout as authLogout, rememberUser } from './lib/auth';
 import { hydrateVoicePrefFromServer } from './lib/albertVoice';
@@ -2253,15 +2255,20 @@ function EventsSection({ d }) {
 /* ----------------------------- Ask Quant ----------------------------- */
 function AskQuantSection({ d }) {
   const symbol = React.useContext(SymbolContext);
-  const [sessionId] = React.useState(() => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)));
-  const [messages, setMessages] = React.useState([]);
+  const pid = React.useMemo(() => getPid(), []);
+  const { messages, setMessages, sessionId, clear } = useAlbertChat(pid);
   const [input, setInput] = React.useState('');
   const [loading, setLoading] = React.useState(false);
   const [deep, setDeep] = React.useState(false);
   const [rateUntil, setRateUntil] = React.useState(0);
   const [, setRateTick] = React.useState(0);
   const endRef = React.useRef(null);
-  const pid = React.useMemo(() => getPid(), []);
+  const [copied, setCopied] = React.useState(false);
+  const copyAll = () => {
+    const txt = chatToText(messages);
+    if (!txt) return;
+    try { navigator.clipboard.writeText(txt); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) { /* noop */ }
+  };
 
   React.useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, loading]);
   React.useEffect(() => {
@@ -2342,7 +2349,15 @@ function AskQuantSection({ d }) {
         <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3">
           <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-sky-500/40" />
           <div><p className="text-sm font-semibold text-white">Albert · Ask Albert HuCentAI Quant</p><p className="text-[10px] text-slate-500">Crypto strategist & advisor · live dashboard + web search · fast by default, Deep dive for depth</p></div>
-          <span className="ml-auto flex items-center gap-1 text-[10px] font-bold text-emerald-400"><span className="h-2 w-2 rounded-full bg-emerald-400" />LIVE</span>
+          <div className="ml-auto flex items-center gap-1">
+            {messages.length > 0 && (
+              <>
+                <button onClick={copyAll} title="Copy whole conversation" className="flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-[11px] font-semibold text-slate-300 hover:bg-slate-800 hover:text-white">{copied ? <><Check className="h-3.5 w-3.5 text-emerald-400" />Copied</> : <><Copy className="h-3.5 w-3.5" />Copy</>}</button>
+                <button onClick={clear} title="Start a new chat" className="flex items-center gap-1 rounded-lg border border-slate-700 px-2 py-1 text-[11px] font-semibold text-slate-300 hover:bg-slate-800 hover:text-white"><MessageSquarePlus className="h-3.5 w-3.5" />New</button>
+              </>
+            )}
+            <span className="ml-1 flex items-center gap-1 text-[10px] font-bold text-emerald-400"><span className="h-2 w-2 rounded-full bg-emerald-400" />LIVE</span>
+          </div>
         </div>
         <div className="flex-1 space-y-4 overflow-y-auto p-5">
           {messages.length === 0 && (
@@ -2360,11 +2375,12 @@ function AskQuantSection({ d }) {
             </div>
           )}
           {messages.map((m, i) => (
-            <div key={i} className={`flex items-end gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div key={i} className={`group flex items-end gap-1.5 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               {m.role === 'assistant' && <img src="/albert.png" alt="Albert" className="h-9 w-9 shrink-0 rounded-full object-cover ring-1 ring-sky-500/30" />}
               <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>
                 {m.role === 'assistant' ? <><AlbertText text={m.text} />{m.error && m.retry ? <button onClick={() => send(m.retry)} disabled={loading} className="mt-2 flex items-center gap-1.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-50"><RefreshCw className="h-3 w-3" />Retry</button> : m.basket_draft ? <BasketChatCard draft={m.basket_draft} pid={pid} /> : m.basket_rebalance ? <BasketRebalanceCard rebalance={m.basket_rebalance} /> : m.basket_close ? <BasketCloseCard close={m.basket_close} /> : <AlbertReplyMeta text={m.text} sources={m.sources} symbol={symbol} pid={pid} />}</> : m.text}
               </div>
+              {!m.error && (m.text || '').trim() && <CopyButton text={m.text} className="opacity-0 group-hover:opacity-100" />}
             </div>
           ))}
           {loading && (
