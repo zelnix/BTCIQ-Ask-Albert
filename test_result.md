@@ -114,6 +114,27 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Chat UX corrections — per-message copy always visible, expand = full-screen widget, remove PDF (Copy=clipboard text)"
+    implemented: true
+    working: true
+    file: "app/components/FloatingAlbert.js, app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          User feedback on the chat features: (1) per-message copy was hover-only (invisible on touch) -> now ALWAYS
+          visible (removed opacity-0 group-hover). (2) The floating widget's maximize used to NAVIGATE to the full
+          Ask section -> now it FULL-SCREENS the widget itself (new `expanded` state; panel switches to fixed inset-0
+          / sm:inset-3; Maximize2<->Minimize2 toggle; onExpand no longer used for it). (3) Removed the PDF/Export
+          buttons from both the widget and the full section per user request; Copy stays as copy-conversation-to-
+          clipboard-as-text, and per-message copy also copies that message's text. downloadChatPdf/FileDown imports
+          cleaned up. VERIFIED (screenshot): widget shows 2 per-message copy icons (always visible), no PDF button,
+          full-screen toggle expands the panel to ~full viewport (1896x1056) with an Exit-full-screen control.
+          Frontend-only, compiles clean (200). Targeted checks per credit-efficient policy.
+
   - task: "Voice Ask — mic button to speak questions to Albert (Web Speech API)"
     implemented: true
     working: true

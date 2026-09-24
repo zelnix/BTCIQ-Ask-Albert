@@ -2,9 +2,9 @@
 
 import React from 'react';
 import { Button } from '@/components/ui/button';
-import { Maximize2, X, Clock, Send, Brain, RefreshCw, Copy, Check, MessageSquarePlus, Search, FileDown } from 'lucide-react';
+import { Maximize2, Minimize2, X, Clock, Send, Brain, RefreshCw, Copy, Check, MessageSquarePlus, Search } from 'lucide-react';
 import { API_BASE, getPid } from '../lib/api';
-import { useAlbertChat, chatToText, downloadChatPdf } from '../lib/chatStore';
+import { useAlbertChat, chatToText } from '../lib/chatStore';
 import CopyButton from './CopyButton';
 import ThreadMenu from './ThreadMenu';
 import AlbertText from './AlbertText';
@@ -40,6 +40,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
   const [copied, setCopied] = React.useState(false);
   const [search, setSearch] = React.useState('');
   const [showSearch, setShowSearch] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(false);
   const isOverview = !active || active === 'overview';
   const scopeLabel = SECTION_LABELS[active] || 'all things Ask Albert';
   const shown = search.trim() ? messages.filter((m) => (m.text || '').toLowerCase().includes(search.trim().toLowerCase())) : messages;
@@ -50,7 +51,6 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
     if (!txt) return;
     try { navigator.clipboard.writeText(txt); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) { /* noop */ }
   };
-  const exportPdf = () => { downloadChatPdf(messages, 'Ask Albert chat'); };
   React.useEffect(() => {
     if (!rateUntil) return;
     const id = setInterval(() => {
@@ -119,7 +119,9 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
       )}
       {/* Panel */}
       {open && (
-        <div className="fixed bottom-5 right-5 z-50 flex h-[540px] w-[92vw] max-w-[400px] flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/50 ring-1 ring-slate-800">
+        <div className={expanded
+          ? 'fixed inset-0 z-50 flex flex-col overflow-hidden border border-slate-700 bg-slate-900 shadow-2xl sm:inset-3 sm:rounded-2xl'
+          : 'fixed bottom-5 right-5 z-50 flex h-[540px] w-[92vw] max-w-[400px] flex-col overflow-hidden rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl shadow-black/50 ring-1 ring-slate-800'}>
           <div className="flex items-center gap-2.5 border-b border-slate-800 bg-slate-950/60 px-4 py-3">
             <img src="/albert.png" alt="Albert" className="h-10 w-10 rounded-full object-cover ring-2 ring-sky-500/40" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
             <div className="min-w-0 flex-1">
@@ -129,12 +131,11 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
             {messages.length > 0 && (
               <>
                 <button onClick={() => setShowSearch((v) => !v)} title="Search this chat" className={`rounded-lg p-1.5 hover:bg-slate-800 hover:text-slate-200 ${showSearch ? 'text-sky-400' : 'text-slate-400'}`}><Search className="h-4 w-4" /></button>
-                <button onClick={exportPdf} title="Download as PDF" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><FileDown className="h-4 w-4" /></button>
                 <button onClick={copyAll} title="Copy whole conversation" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200">{copied ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}</button>
               </>
             )}
             <ThreadMenu compact threads={threads} activeId={threadId} title="" onSwitch={switchThread} onNew={newThread} onRename={renameThread} onDelete={deleteThread} />
-            {onExpand && <button onClick={() => { setOpen(false); onExpand(); }} title="Open full chat" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><Maximize2 className="h-4 w-4" /></button>}
+            <button onClick={() => setExpanded((v) => !v)} title={expanded ? 'Exit full screen' : 'Full screen'} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200">{expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}</button>
             <button onClick={() => setOpen(false)} title="Close" className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-200"><X className="h-4 w-4" /></button>
           </div>
           <div className="flex-1 space-y-3 overflow-y-auto p-4">
@@ -164,7 +165,7 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
                 <div className={`max-w-[85%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed ${m.role === 'user' ? 'whitespace-pre-wrap bg-sky-500/15 text-sky-50 ring-1 ring-sky-500/25' : 'bg-slate-950/60 text-slate-200 ring-1 ring-slate-800'}`}>
                   {m.role === 'assistant' ? <><AlbertText text={m.text} />{m.error && m.retry ? <button onClick={() => send(m.retry)} disabled={loading} className="mt-2 flex items-center gap-1.5 rounded-full border border-sky-500/40 bg-sky-500/10 px-3 py-1 text-[11px] font-semibold text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-50"><RefreshCw className="h-3 w-3" />Retry</button> : m.basket_draft ? <BasketChatCard draft={m.basket_draft} pid={pid} /> : m.basket_rebalance ? <BasketRebalanceCard rebalance={m.basket_rebalance} /> : m.basket_close ? <BasketCloseCard close={m.basket_close} /> : m.mandate_change ? <MandateChangeCard change={m.mandate_change} pid={pid} /> : <AlbertReplyMeta text={m.text} sources={m.sources} symbol={symbol} pid={pid} />}</> : m.text}
                 </div>
-                {!m.error && (m.text || '').trim() && <CopyButton text={m.text} className="opacity-0 group-hover:opacity-100" />}
+                {!m.error && (m.text || '').trim() && <CopyButton text={m.text} className="shrink-0 self-center text-slate-500 hover:text-slate-200" />}
               </div>
             ))}
             {loading && (
