@@ -114,6 +114,35 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Mandate Tuning Chat — Albert proposes an Apply/Cancel mandate-change card from a chat request"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/components/MandateChangeCard.js, app/components/FloatingAlbert.js, app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Phase 4 of chat enhancements (the user's confirmed choices: always Apply/Cancel, all mandate fields).
+          BACKEND: /v1/chat now detects a mandate-change intent (_is_mandate_change_request — mandate noun + change
+          verb; pure questions fall through). _build_mandate_change(pid, message) calls Gemini (temp 0, JSON-only
+          system prompt) to turn the request into a validated patch, merges it into the CURRENT mandate to form a
+          full 'proposed' mandate, and returns a 'mandate_change' card {current, proposed, changes:[{field,label,
+          from,to}]}. Coin lists return the FULL final list (add/remove applied); numbers clamped to the same bounds
+          as POST /api/v1/albert/mandate. If no concrete change is extracted, Albert replies asking for a specific
+          instruction (no card). Albert NEVER auto-applies.
+          FRONTEND: new MandateChangeCard.js renders the diff (from → to per field) with Apply (POST
+          /api/v1/albert/mandate with the full proposed mandate) / Cancel; wired into BOTH chat views (floating
+          widget + full section) in the assistant-message render chain, and mandate_change is carried on the
+          assistant message from the /v1/chat response.
+          VERIFIED end-to-end (screenshot): 'add SOL and LINK to my approved coins and cap my max drawdown at 20%'
+          -> card rendered (Approved coins (none)->SOL,LINK; Max drawdown -> 20.0%) -> tapped Apply -> 'Mandate
+          updated' badge -> backend GET /mandate confirmed approved_coins=[SOL,LINK], max_drawdown_pct=20.0. Also
+          confirmed a second phrasing ('exclude DOGE and set risk tolerance to aggressive') produced a card. Test
+          user's mandate + test threads reset afterwards. Targeted checks only, per the credit-efficient policy.
+
   - task: "Chat enhancements — Search, PDF Export, Multiple Threads (Mandate Tuning deferred)"
     implemented: true
     working: true

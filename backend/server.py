@@ -7422,6 +7422,24 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
     if not (LLM_READY_KEY and _HAS_LLM):
         return {'error': 'llm_unconfigured',
                 'text': 'The Ask Quant chat model is not configured on this server.'}
+    # Mandate tuning from chat: if the user asks Albert to CHANGE their risk/mandate
+    # settings, propose a diff card (Apply/Cancel) — Albert never auto-applies.
+    try:
+        if _is_mandate_change_request(message):
+            mc = _build_mandate_change(pid, message)
+            if mc and mc.get('changes'):
+                lines = '\n'.join(f"• {c['label']}: {c['from']} → {c['to']}" for c in mc['changes'])
+                txt = ("Here's the mandate change I understood from that:\n\n" + lines
+                       + "\n\nReview it below and tap **Apply** to update your mandate, or **Cancel** to leave it as-is. "
+                       "I only adjust your inputs — I never change the engine's logic.")
+                return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
+                        'text': txt, 'mandate_change': mc}
+            return {'session_id': session_id, 'sources': [], 'model': _model_for('strategy'),
+                    'text': ("I couldn't pin down a concrete mandate change from that. Try something specific like "
+                             "'add SOL and LINK to my approved coins', 'cap my max drawdown at 20%', "
+                             "'exclude DOGE', or 'set my risk tolerance to aggressive'.")}
+    except Exception:  # noqa
+        traceback.print_exc()
     # Basket-from-chat: if the user asks Albert to BUILD a multi-coin basket, draft it
     # inline and return a save-able card (the chat UI renders a "Save & track" button).
     # Status questions ("how are my baskets doing?") fall through to normal chat.
@@ -7690,6 +7708,153 @@ def albert_save_mandate(payload: dict = Body(...)):
     mandate_col.update_one({'_id': pid},
                            {'$set': {**m, 'updated_at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
     return {'mandate': m, 'complete': _mandate_complete(m)}
+
+
+# ---- Mandate tuning from chat -----------------------------------------------
+_MANDATE_NOUNS = (
+    'mandate', 'approved coin', 'excluded coin', 'exclude', 'whitelist', 'blacklist',
+    'risk cap', 'drawdown', 'reserve', 'allocation', 'allocat', 'position size',
+    'position-size', 'risk tolerance', 'time horizon', 'leverage', 'trade risk',
+    'risk setting', 'risk limit', 'approved list', 'coin list',
+)
+_MANDATE_VERBS = (
+    'set ', 'change', 'update', 'adjust', 'add ', 'remove', 'allow', 'ban ', 'block',
+    'exclude', 'include', 'limit', 'cap ', ' cap', 'increase', 'decrease', 'raise',
+    'lower', 'bump', 'tighten', 'loosen', 'enable', 'disable', 'turn on', 'turn off',
+    'approve', 'restrict', 'max ',
+)
+
+
+def _is_mandate_change_request(msg):
+    """Detect a request to CHANGE the user's mandate/risk settings from chat
+    (e.g. 'add SOL to my approved coins', 'cap my drawdown at 20%',
+    'exclude DOGE', 'set risk tolerance to aggressive'). Pure questions
+    ('what's my drawdown limit?') have no change-verb and fall through."""
+    m = (msg or '').lower()
+    if not any(n in m for n in _MANDATE_NOUNS):
+        return False
+    return any(v in m for v in _MANDATE_VERBS)
+
+
+_MANDATE_EXTRACT_SYS = (
+    "You convert a user's plain-English request into a JSON patch for their crypto trading MANDATE (risk/settings "
+    "inputs; NOT engine logic). You are given the CURRENT mandate and the request. Return ONLY strict minified JSON "
+    "with the fields that should CHANGE — omit unchanged fields; return {} if nothing should change. "
+    "Allowed fields & types: goal(string), risk_tolerance(one of 'conservative','moderate','aggressive'), "
+    "time_horizon(string e.g. 'short','medium','long'), max_drawdown_pct(number 1-90), reserve_pct(number 0-100), "
+    "approved_coins(array of UPPERCASE ticker strings), excluded_coins(array of UPPERCASE tickers), "
+    "max_alloc_pct(object ticker->number), max_trade_risk_pct(number 0.1-100), leverage_enabled(boolean), "
+    "preferred_strategies(array of strings). For approved_coins/excluded_coins return the FULL FINAL list after "
+    "applying the request to the current list (add/remove as asked) — never a partial delta. Numbers only, no % signs. "
+    "No commentary, no code fences — JSON object only."
+)
+
+
+def _coin_list(v):
+    out = []
+    for c in (v or []):
+        s = str(c).upper().strip()[:8]
+        if s and s not in out:
+            out.append(s)
+    return out[:100]
+
+
+def _humanize_mandate_changes(cur, prop):
+    changes = []
+    fl = lambda x: ', '.join(x) if x else '(none)'  # noqa: E731
+    for key, label in [('approved_coins', 'Approved coins'), ('excluded_coins', 'Excluded coins'),
+                       ('preferred_strategies', 'Preferred strategies')]:
+        a = [str(x) for x in (cur.get(key) or [])]
+        b = [str(x) for x in (prop.get(key) or [])]
+        if sorted(a) != sorted(b):
+            changes.append({'field': key, 'label': label, 'from': fl(a), 'to': fl(b)})
+    for key, label in [('max_drawdown_pct', 'Max drawdown'), ('reserve_pct', 'USDC reserve'),
+                       ('max_trade_risk_pct', 'Max trade risk')]:
+        a, b = cur.get(key), prop.get(key)
+        if (a if a is not None else None) != (b if b is not None else None):
+            changes.append({'field': key, 'label': label,
+                            'from': (f"{a}%" if a is not None else '—'), 'to': (f"{b}%" if b is not None else '—')})
+    for key, label in [('risk_tolerance', 'Risk tolerance'), ('time_horizon', 'Time horizon'), ('goal', 'Goal')]:
+        a, b = (cur.get(key) or ''), (prop.get(key) or '')
+        if a != b:
+            changes.append({'field': key, 'label': label, 'from': a or '—', 'to': b or '—'})
+    if bool(cur.get('leverage_enabled')) != bool(prop.get('leverage_enabled')):
+        changes.append({'field': 'leverage_enabled', 'label': 'Leverage',
+                        'from': 'On' if cur.get('leverage_enabled') else 'Off',
+                        'to': 'On' if prop.get('leverage_enabled') else 'Off'})
+    if (cur.get('max_alloc_pct') or {}) != (prop.get('max_alloc_pct') or {}):
+        changes.append({'field': 'max_alloc_pct', 'label': 'Per-coin allocation caps',
+                        'from': fl([f"{k} {v}%" for k, v in (cur.get('max_alloc_pct') or {}).items()]),
+                        'to': fl([f"{k} {v}%" for k, v in (prop.get('max_alloc_pct') or {}).items()])})
+    return changes
+
+
+def _build_mandate_change(pid, message):
+    """Ask the LLM to turn a plain-English request into a mandate patch, merge it
+    into the current mandate (with validation), and return a proposed change card.
+    Returns None if nothing changes or extraction fails."""
+    cur = _get_mandate(pid)
+    prompt = ('CURRENT mandate JSON:\n' + json.dumps(cur, default=str)
+              + '\n\nUser request:\n' + message + '\n\nReturn the JSON patch now.')
+    try:
+        def _call():
+            async def _go():
+                chat = (LlmChat(api_key=LLM_READY_KEY, session_id=f'mandate-{pid}-{uuid.uuid4().hex[:8]}',
+                                system_message=_MANDATE_EXTRACT_SYS)
+                        .with_model('gemini', _model_for('chat_standard')).with_params(temperature=0.0, max_tokens=700, thinking_budget=0))
+                return await chat.send_message(UserMessage(text=prompt))
+            return asyncio.run(_go())
+        reply = _LLM_POOL.submit(_call).result(timeout=40)
+        raw = reply.strip() if isinstance(reply, str) else (getattr(reply, 'content', None) or getattr(reply, 'text', None) or '')
+        raw = raw.strip()
+        if raw.startswith('```'):
+            raw = raw.strip('`')
+            raw = raw[raw.find('{'):raw.rfind('}') + 1] if '{' in raw else raw
+        else:
+            raw = raw[raw.find('{'):raw.rfind('}') + 1] if '{' in raw else raw
+        patch = json.loads(raw)
+    except Exception:  # noqa
+        traceback.print_exc()
+        return None
+    if not isinstance(patch, dict) or not patch:
+        return None
+
+    def _pct(v, lo, hi):
+        try:
+            return round(max(lo, min(hi, float(v))), 2)
+        except Exception:  # noqa
+            return None
+    proposed = dict(cur)
+    if 'goal' in patch: proposed['goal'] = str(patch['goal'] or '')[:200]
+    if 'risk_tolerance' in patch:
+        rt = str(patch['risk_tolerance'] or '').lower().strip()
+        if rt in ('conservative', 'moderate', 'aggressive'): proposed['risk_tolerance'] = rt
+    if 'time_horizon' in patch: proposed['time_horizon'] = str(patch['time_horizon'] or '')[:30]
+    if 'max_drawdown_pct' in patch:
+        p = _pct(patch['max_drawdown_pct'], 1, 90)
+        if p is not None: proposed['max_drawdown_pct'] = p
+    if 'reserve_pct' in patch:
+        p = _pct(patch['reserve_pct'], 0, 100)
+        if p is not None: proposed['reserve_pct'] = p
+    if 'max_trade_risk_pct' in patch:
+        p = _pct(patch['max_trade_risk_pct'], 0.1, 100)
+        if p is not None: proposed['max_trade_risk_pct'] = p
+    if 'approved_coins' in patch: proposed['approved_coins'] = _coin_list(patch['approved_coins'])
+    if 'excluded_coins' in patch: proposed['excluded_coins'] = _coin_list(patch['excluded_coins'])
+    if 'leverage_enabled' in patch: proposed['leverage_enabled'] = bool(patch['leverage_enabled'])
+    if 'preferred_strategies' in patch:
+        proposed['preferred_strategies'] = [str(s)[:30] for s in (patch['preferred_strategies'] or []) if s][:12]
+    if 'max_alloc_pct' in patch and isinstance(patch['max_alloc_pct'], dict):
+        mac = {}
+        for k, v in patch['max_alloc_pct'].items():
+            p = _pct(v, 0, 100)
+            if p is not None: mac[str(k).upper()[:8]] = p
+        proposed['max_alloc_pct'] = mac
+    changes = _humanize_mandate_changes(cur, proposed)
+    if not changes:
+        return None
+    return {'current': cur, 'proposed': proposed, 'changes': changes}
+
 
 
 def _portfolio_summary(pid):
