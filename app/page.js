@@ -38,6 +38,7 @@ import BasketChatCard from './components/BasketChatCard';
 import BasketRebalanceCard from './components/BasketRebalanceCard';
 import BasketCloseCard from './components/BasketCloseCard';
 import MandateChangeCard from './components/MandateChangeCard';
+import MicButton from './components/MicButton';
 import PortfolioPanel from './components/PortfolioPanel';
 import AlbertTrackRecord from './components/AlbertTrackRecord';
 import AlertManager from './components/AlertManager';
@@ -2443,6 +2444,7 @@ function AskQuantSection({ d }) {
               placeholder="Ask Albert: is it time to buy or sell? entries/exits, strategy, macro, cycles…"
               className="max-h-32 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:border-sky-500/50 focus:outline-none"
             />
+            <MicButton value={input} onChange={setInput} disabled={loading || rateSecondsLeft > 0} />
             <Button onClick={() => send()} disabled={loading || !input.trim() || rateSecondsLeft > 0} className="gap-1.5 bg-sky-500 hover:bg-sky-400"><Send className="h-4 w-4" />Send</Button>
           </div>
           <p className="mt-2 text-center text-[10px] text-slate-600">Albert blends the live Ask Albert dashboard with real-time web search · powerful, but markets are uncertain — always do your own research.</p>

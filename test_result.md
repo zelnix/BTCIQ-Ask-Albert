@@ -114,6 +114,27 @@ user_problem_statement: |
   NOTE: Binance is geo-blocked from this server; Kraken is primary, Coinbase fallback (both via ccxt).
 
 backend:
+  - task: "Voice Ask — mic button to speak questions to Albert (Web Speech API)"
+    implemented: true
+    working: true
+    file: "app/components/MicButton.js, app/components/FloatingAlbert.js, app/page.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Added a mic button to both chat inputs (floating widget + full Ask section) using the browser's built-in
+          Web Speech API (SpeechRecognition/webkitSpeechRecognition) — no backend, no API key. New MicButton.js:
+          feature-detects support (auto-hides/returns null when unsupported, e.g. Safari), tap to start/stop, live
+          interim transcription appended to the existing input (captures the current text as a base so speech adds
+          to it), pulsing red mic while listening, graceful onerror/onend handling. Disabled while a request is in
+          flight or rate-limited. VERIFIED (screenshot): browser SpeechRecognition supported=True, mic renders in the
+          chat input between the textarea and Send, no crash. Actual speech-to-text needs a real microphone (not
+          available in headless automation) but integration + feature-detection confirmed. Frontend-only, compiles
+          clean (200). Targeted check per credit-efficient policy.
+
   - task: "Mandate Tuning Chat — Albert proposes an Apply/Cancel mandate-change card from a chat request"
     implemented: true
     working: true

@@ -13,6 +13,7 @@ import BasketChatCard from './BasketChatCard';
 import BasketRebalanceCard from './BasketRebalanceCard';
 import BasketCloseCard from './BasketCloseCard';
 import MandateChangeCard from './MandateChangeCard';
+import MicButton from './MicButton';
 
 // Human-readable scope label per screen, so the floating chat can tell Albert
 // (and the user) which screen the conversation is grounded in.
@@ -192,11 +193,12 @@ export default function FloatingAlbert({ active, symbol, onExpand }) {
               </button>
               {deep && <span className="text-[10px] text-slate-500">Slower · more thorough</span>}
             </div>
-            <div className="flex items-end gap-2">
+            <div className="flex items-end gap-1.5">
               <textarea value={input} onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
                 rows={1} placeholder={isOverview ? 'Ask about Bitcoin…' : `Ask about ${scopeLabel}…`}
                 className="max-h-24 flex-1 resize-none rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-[13px] text-slate-100 placeholder-slate-500 focus:border-sky-500/50 focus:outline-none" />
+              <MicButton value={input} onChange={setInput} disabled={loading || rateSecondsLeft > 0} />
               <Button onClick={() => send()} disabled={loading || !input.trim() || rateSecondsLeft > 0} size="sm" className="bg-sky-500 hover:bg-sky-400"><Send className="h-4 w-4" /></Button>
             </div>
           </div>
