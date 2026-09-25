@@ -246,14 +246,18 @@ def test_approve_blocked_while_execution_disabled(users):
     # Seed an open proposal directly (a durable proposal that a user could approve).
     prop_id = 'prop_' + uuid.uuid4().hex[:12]
     paper_proposals_col.insert_one({
-        'proposalId': prop_id, 'paperAccountId': acct_id, 'asset': 'BTC', 'side': 'BUY',
+        'proposalId': prop_id, 'paperAccountId': acct_id, 'ownerId': a_pid, 'asset': 'BTC', 'side': 'BUY',
         'orderType': 'MARKET', 'notionalValue': '1000.00', 'referencePrice': '60000.00',
+        'decisionSnapshotId': 'snapM1', 'version': 0,
         'status': 'CREATED', 'createdAt': datetime.datetime.utcnow().isoformat(),
         'expiresAt': (datetime.datetime.utcnow() + datetime.timedelta(minutes=30)).isoformat(),
         'paperOnly': True})
-    # Approving must be refused with 503 because execution is disabled.
+    # Approving must be refused with 503 because execution is disabled (M2 contract:
+    # the required approval fields are supplied so we reach the execution-flag gate).
     r = requests.post(BASE + f'/api/v1/albert/paper/proposals/{prop_id}/approve',
-                      headers=_h(a_tok), json={})
+                      headers=_h(a_tok),
+                      json={'expectedProposalVersion': 0, 'decisionSnapshotId': 'snapM1',
+                            'idempotencyKey': 'm1key'})
     assert r.status_code == 503, r.text
     # Cancelling (no economic effect) is still allowed.
     rc = requests.post(BASE + f'/api/v1/albert/paper/proposals/{prop_id}/cancel',

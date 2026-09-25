@@ -13,6 +13,7 @@ Exposed under /api/v1/* and proxied by the Next.js /api layer.
 import os
 import re
 import time
+from decimal import Decimal
 import uuid
 import math
 import json
@@ -6998,209 +6999,248 @@ def albert_diagnostics_report(run_id: str, payload: dict = Body(default={}),
 # conservative fills (spread+slippage+fee); append-only ledger; stale data pauses
 # entries. Paper results are never conflated with backtests or real portfolios.
 PAPER_ENGINE_VERSION = 'paper-bot-v1.0.0'
-PAPER_EXEC_PROFILE = {'executionProfileId': 'ep_conservative_v1', 'feeBps': 40,
-                      'spreadBps': 5, 'slippageBps': 8, 'model': 'conservative'}
-PAPER_MAX_ALLOC_PCT = 50.0        # mandate: at most 50% of equity in one position
-PAPER_DD_BREAKER_PCT = -20.0      # hard stop: pause entries past this drawdown
-PAPER_PROPOSAL_TTL_MIN = 30
+# ===================== Paper Trading — Trustworthy Core (M2) =====================
+# Simulated paper trading ONLY (no exchange creds, no live orders, no real money).
+# Actions come solely from immutable canonical decisions; money is Decimal-exact;
+# approvals are single-document atomic + idempotent. Execution stays OFF in
+# deployment (PAPER_EXECUTION_ENABLED); the path is exercised under isolated test config.
+from albert.paper import core as _paper_core  # noqa: E402
+
+PAPER_EXEC_PROFILE = {'executionProfileId': _paper_core.EXEC_PROFILE['executionProfileId'],
+                      'feeBps': int(_paper_core.EXEC_PROFILE['feeBps']),
+                      'spreadBps': int(_paper_core.EXEC_PROFILE['spreadBps']),
+                      'slippageBps': int(_paper_core.EXEC_PROFILE['slippageBps']),
+                      'model': _paper_core.EXEC_PROFILE['model']}
+PAPER_PROPOSAL_TTL_MIN = _paper_core.PROPOSAL_TTL_MIN
 
 
 def _paper_btc_mark():
+    """Current BTC mark as an exact Decimal (or None) + freshness."""
     try:
         run = runs_col.find_one(sort=[('created_at', -1)]) or {}
         px = _num((run.get('ticker') or {}).get('price')) or _num(run.get('last_close'))
         age = _md_iso_age_hours(run.get('created_at') or run.get('as_of'))
         fresh = bool(age is not None and age <= 48)
-        return px, fresh, run.get('created_at')
+        return (_paper_core.D(px) if px else None), fresh, run.get('created_at')
     except Exception:  # noqa
         return None, False, None
 
 
 def _paper_ledger_add(acct_id, event_type, entity_type, entity_id, amount, currency, note=''):
+    """Append a NON-ECONOMIC audit note (mode changes, observations, lifecycle,
+    proposal lifecycle) to the account's embedded ledger. All ECONOMIC ledger
+    entries (fills) are written atomically inside the account doc by core.*."""
     try:
-        last = paper_ledger_col.find_one({'paperAccountId': acct_id}, sort=[('accountSequence', -1)])
-        seq = ((last or {}).get('accountSequence') or 0) + 1
-        paper_ledger_col.insert_one({
-            'ledgerEventId': 'ple_' + uuid.uuid4().hex[:14], 'paperAccountId': acct_id,
-            'accountSequence': seq, 'eventType': event_type, 'entityType': entity_type,
-            'entityId': entity_id, 'amount': str(round(amount, 2)) if amount is not None else None,
-            'currency': currency, 'note': note,
-            'effectiveAt': datetime.datetime.utcnow().isoformat(),
-            'recordedAt': datetime.datetime.utcnow().isoformat()})
+        paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$push': {'ledger': {
+            'ledgerEventId': 'ple_' + uuid.uuid4().hex[:14], 'eventType': event_type,
+            'entityType': entity_type, 'entityId': entity_id,
+            'amount': _paper_core.to128(amount) if amount is not None else None,
+            'currency': currency, 'note': note, 'nonEconomic': True,
+            'recordedAt': datetime.datetime.utcnow().isoformat()}}})
     except Exception:  # noqa
         traceback.print_exc()
 
 
-def _paper_positions(acct_id):
-    return list(paper_positions_col.find({'paperAccountId': acct_id, 'status': 'OPEN'}, {'_id': 0}))
+def _paper_positions(acct):
+    """Open BTC lots from the embedded account state (accepts an id or a doc)."""
+    if isinstance(acct, str):
+        acct = paper_accounts_col.find_one({'paperAccountId': acct}) or {}
+    return [dict(l) for l in (acct.get('lots') or [])
+            if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0]
 
 
 def _paper_equity(acct):
-    acct_id = acct['paperAccountId']
+    """Public equity view backed by exact-Decimal core valuation. Persists the
+    high-water mark ONLY from a complete, verified valuation."""
     px, fresh, _ = _paper_btc_mark()
-    cash = _num(acct.get('cash')) or 0.0
-    unreal = 0.0
-    mark_status = 'CURRENT' if fresh else 'STALE'
-    pos_val = 0.0
-    for p in _paper_positions(acct_id):
-        if p.get('asset') == 'BTC' and px:
-            qty = _num(p.get('netQuantity')) or 0
-            pos_val += qty * px
-            unreal += qty * (px - (_num(p.get('averageEntryPrice')) or 0))
-    equity = cash + pos_val
-    start = _num(acct.get('startingCash')) or equity or 1
-    dd = min(0.0, (equity / start - 1.0) * 100.0)
-    realized = _num(acct.get('realizedPnl')) or 0.0
-    fees = _num(acct.get('feesPaid')) or 0.0
-    return {'value': str(round(equity, 2)), 'cash': str(round(cash, 2)),
-            'protectedReserve': '0.00', 'deployableCash': str(round(cash, 2)),
-            'realizedPnl': str(round(realized, 2)), 'unrealizedPnl': str(round(unreal, 2)),
-            'fees': str(round(fees, 2)), 'drawdownPct': str(round(dd, 2)),
-            'markStatus': mark_status, '_equity': equity, '_dd': dd, '_px': px, '_fresh': fresh}
+    info = _paper_core.compute_equity(acct, px, fresh)
+    if info['available'] and info['equity'] is not None:
+        _paper_core.update_high_water(paper_accounts_col, acct['paperAccountId'], acct['ownerId'], info['equity'])
+
+    def _s(v, q=_paper_core.CASH_Q):
+        return _paper_core.dstr(v, q) if v is not None else None
+
+    return {'available': info['available'], 'markStatus': info['markStatus'],
+            'value': info['equityStr'], 'cash': _s(info['cash']),
+            'protectedReserve': _s(info['protectedReserve']),
+            'deployableCash': _s(info['deployableCash']),
+            'realizedPnl': _s(info['realizedPnl']), 'fees': _s(info['fees']),
+            'unrealizedPnl': _s(info['unrealized']),
+            'drawdownPct': _s(info['drawdownPct'], _paper_core.PCT_Q),
+            'highWater': _s(info['highWater']),
+            '_fresh': fresh, '_px': info['markPx'], '_dd': info['drawdownPct'],
+            '_equity': info['equity']}
 
 
-def _paper_desired_action():
-    """Deterministic desired action for BTC from the SWING market-driver read."""
-    md = _md_cached('SWING')
-    posture = md.get('marketPosture', '')
-    fresh_ok = md.get('dataQuality') == 'VERIFIED' and (md.get('confidence') or 0) >= 0.4
-    if 'BULLISH' in posture:
-        return 'BUY', md, fresh_ok
-    if 'BEARISH' in posture:
-        return 'SELL', md, fresh_ok
-    return 'HOLD', md, fresh_ok
+def _paper_canonical_decision(pid):
+    """Fetch the CURRENT immutable canonical BTC decision snapshot for this owner.
+    Market Driver Intelligence is NOT consulted here — it is evidence only and can
+    never manufacture an action. Returns None (fail CLOSED) when the decision is
+    absent, mutable, incomplete, unsupported or its ids/hash are missing."""
+    try:
+        snap = _albert_decisions(pid)
+        try:
+            _decision_history_repo.reconcile(pid, snap)  # stabilise ids
+        except Exception:  # noqa
+            pass
+        env = _decision_history_repo.get_current(pid, 'BTC')
+    except Exception:  # noqa
+        traceback.print_exc()
+        return None
+    if not env:
+        return None
+    action = env.get('call') or env.get('action')
+    did = env.get('decisionId'); sid = env.get('snapshotId')
+    h = env.get('decisionInputsHash'); dt = env.get('marketDataTimestamp')
+    ev = env.get('engineVersion')
+    if not (did and sid and h and dt and ev):
+        return None  # incomplete identity -> fail closed
+    try:
+        age_h = _md_iso_age_hours(dt)
+        age_min = (age_h * 60.0) if age_h is not None else None
+    except Exception:  # noqa
+        age_min = None
+    fresh = age_min is not None and age_min <= _paper_core.DECISION_TTL_MIN
+    try:
+        expires = (datetime.datetime.fromisoformat(dt)
+                   + datetime.timedelta(minutes=_paper_core.DECISION_TTL_MIN)).isoformat()
+    except Exception:  # noqa
+        expires = None
+    mc = env.get('mandateChecks') or {}
+    risk_verdict = 'ALLOW' if (env.get('eligible') and mc.get('withinCap')
+                               and mc.get('withinRiskBudget') and not mc.get('excluded')) else 'BLOCK'
+    return {
+        'asset': 'BTC', 'action': action, 'actionable': action in ('BUY', 'SELL'),
+        'decisionSnapshotId': sid, 'decisionId': did, 'decisionInputsHash': h,
+        'engineVersion': ev, 'ruleVersion': ev,
+        'mandateVersion': env.get('mandateVersion'), 'portfolioVersion': env.get('portfolioVersion'),
+        'regimeSnapshotId': env.get('regimeSnapshotId'),
+        'currentPrice': env.get('currentPrice'), 'invalidationPrice': env.get('invalidation'),
+        'marketSnapshot': {'price': env.get('currentPrice'), 'ts': dt,
+                           'regimeSnapshotId': env.get('regimeSnapshotId')},
+        'mandateChecks': mc, 'eligible': bool(env.get('eligible')), 'riskVerdict': risk_verdict,
+        'recommendedDeployNowUsd': env.get('recommendedDeployNowUsd'),
+        'sellPlan': env.get('sellPlan'), 'recommendedDeltaUsd': env.get('recommendedDeltaUsd'),
+        'decisionTime': dt, 'availableAt': dt, 'expiresAt': expires, 'fresh': fresh,
+    }
 
 
-def _paper_simulate_fill(side, ref_px, notional):
-    p = PAPER_EXEC_PROFILE
-    slip = (p['spreadBps'] + p['slippageBps']) / 1e4
-    fill_px = ref_px * (1 + slip) if side == 'BUY' else ref_px * (1 - slip)
-    fee = notional * p['feeBps'] / 1e4
-    return fill_px, fee
-
-
-def _paper_execute(acct, side, notional, source='autopilot', decision=None):
-    acct_id = acct['paperAccountId']
-    px, fresh, _ = _paper_btc_mark()
-    if not px or not fresh:
-        return None, 'MARKET_DATA_STALE'
-    cash = _num(acct.get('cash')) or 0.0
-    if side == 'BUY':
-        notional = min(notional, cash)
-        if notional < 10:
-            return None, 'INSUFFICIENT_CASH'
-        fill_px, fee = _paper_simulate_fill('BUY', px, notional)
-        qty = (notional - fee) / fill_px
-        pos = paper_positions_col.find_one({'paperAccountId': acct_id, 'asset': 'BTC', 'status': 'OPEN'})
-        if pos:
-            oqty = _num(pos['netQuantity']); ocb = _num(pos['costBasis'])
-            nqty = oqty + qty; ncb = ocb + notional
-            paper_positions_col.update_one({'paperPositionId': pos['paperPositionId']}, {'$set': {
-                'netQuantity': nqty, 'costBasis': ncb, 'averageEntryPrice': ncb / nqty if nqty else 0,
-                'positionVersion': (pos.get('positionVersion') or 0) + 1}})
-            pid_pos = pos['paperPositionId']
-        else:
-            pid_pos = 'pp_' + uuid.uuid4().hex[:12]
-            paper_positions_col.insert_one({
-                'paperPositionId': pid_pos, 'paperAccountId': acct_id, 'asset': 'BTC', 'status': 'OPEN',
-                'netQuantity': qty, 'averageEntryPrice': fill_px, 'costBasis': notional,
-                'realizedPnl': 0.0, 'feesPaid': fee, 'openedAt': datetime.datetime.utcnow().isoformat(),
-                'entryDecisionSnapshotId': (decision or {}).get('driverChainId'),
-                'currentInvalidationPrice': round(fill_px * 0.9, 2), 'positionVersion': 1})
-        paper_accounts_col.update_one({'paperAccountId': acct_id}, {
-            '$set': {'cash': cash - notional},
-            '$inc': {'feesPaid': fee}})
-        _paper_ledger_add(acct_id, 'FILL', 'position', pid_pos, -notional, acct.get('baseCurrency', 'USDC'),
-                          f"BUY {round(qty, 6)} BTC @ {round(fill_px, 2)} (fee {round(fee, 2)}) · {source}")
-        return {'side': 'BUY', 'qty': qty, 'fillPrice': fill_px, 'fee': fee, 'positionId': pid_pos}, None
-    else:  # SELL / close BTC
-        pos = paper_positions_col.find_one({'paperAccountId': acct_id, 'asset': 'BTC', 'status': 'OPEN'})
-        if not pos:
-            return None, 'NO_POSITION'
-        qty = _num(pos['netQuantity'])
-        gross = qty * px
-        fill_px, fee = _paper_simulate_fill('SELL', px, gross)
-        proceeds = qty * fill_px - fee
-        realized = proceeds - _num(pos['costBasis'])
-        paper_positions_col.update_one({'paperPositionId': pos['paperPositionId']}, {'$set': {
-            'status': 'CLOSED', 'closedAt': datetime.datetime.utcnow().isoformat(),
-            'netQuantity': 0, 'realizedPnl': realized,
-            'exitPrice': fill_px, 'positionVersion': (pos.get('positionVersion') or 0) + 1}})
-        paper_accounts_col.update_one({'paperAccountId': acct_id}, {
-            '$set': {'cash': cash + proceeds}, '$inc': {'feesPaid': fee, 'realizedPnl': realized}})
-        _paper_ledger_add(acct_id, 'FILL', 'position', pos['paperPositionId'], proceeds,
-                          acct.get('baseCurrency', 'USDC'),
-                          f"SELL {round(qty, 6)} BTC @ {round(fill_px, 2)} (fee {round(fee, 2)}, PnL {round(realized, 2)}) · {source}")
-        return {'side': 'SELL', 'qty': qty, 'fillPrice': fill_px, 'fee': fee, 'realized': realized}, None
+def _paper_proposal_public(prop):
+    return {k: v for k, v in (prop or {}).items() if k != '_id'}
 
 
 def _paper_tick(acct):
-    """Advance one paper account: gate on state/freshness/mandate, then observe /
-    propose / auto-execute per mode. Idempotent-ish per run (one open proposal max)."""
+    """Advance one paper account: verified valuation + high-water + breaker, then
+    OBSERVE/APPROVAL only. Canonical decisions drive everything; WAIT/HOLD create
+    nothing; AUTOPILOT and any other mode do nothing (disabled in M2)."""
     if acct.get('runtimeState') != 'RUNNING' or acct.get('archivedAt'):
         return
-    eq = _paper_equity(acct)
-    # Drawdown circuit breaker.
-    if eq['_dd'] <= PAPER_DD_BREAKER_PCT:
-        paper_accounts_col.update_one({'paperAccountId': acct['paperAccountId']},
-                                      {'$set': {'runtimeState': 'PAUSED_RISK_BREAKER'}})
-        _paper_ledger_add(acct['paperAccountId'], 'RISK_BREAKER', 'account', acct['paperAccountId'],
-                          None, None, f"Drawdown {round(eq['_dd'], 1)}% breached limit — entries paused.")
-        return
-    action, decision, fresh_ok = _paper_desired_action()
-    if not eq['_fresh'] or not fresh_ok:
-        return  # stale data -> no entries (conservative)
-    acct_id = acct['paperAccountId']
-    has_pos = bool(_paper_positions(acct_id))
-    # Mandate: only BUY when flat; only SELL when holding.
-    if action == 'BUY' and has_pos:
-        return
-    if action == 'SELL' and not has_pos:
-        return
-    if action == 'HOLD':
-        return
-    notional = min((_num(acct.get('cash')) or 0) * PAPER_MAX_ALLOC_PCT / 100.0, eq['_equity'] * PAPER_MAX_ALLOC_PCT / 100.0) if action == 'BUY' else None
     mode = acct.get('mode')
-    if mode == 'OBSERVE':
-        _paper_ledger_add(acct_id, 'OBSERVED', 'decision', decision.get('driverChainId'), None, None,
-                          f"Observed {action} signal ({decision.get('marketPosture')}); observe-only mode.")
+    if mode not in ('OBSERVE', 'APPROVAL_REQUIRED'):
+        return  # PAPER_AUTOPILOT / live / discretionary are disabled in M2
+    pid = acct['ownerId']; acct_id = acct['paperAccountId']
+    px, fresh, _ = _paper_btc_mark()
+    info = _paper_core.compute_equity(acct, px, fresh)
+    mandate = _albert_deps.get_mandate(pid) or {}
+    if info['available'] and info['equity'] is not None:
+        _paper_core.update_high_water(paper_accounts_col, acct_id, pid, info['equity'])
+        max_dd = _paper_core.D(mandate.get('max_drawdown_pct'))
+        if max_dd is not None and info['drawdownPct'] is not None and info['drawdownPct'] <= (-max_dd):
+            paper_accounts_col.update_one({'paperAccountId': acct_id},
+                                          {'$set': {'runtimeState': 'PAUSED_RISK_BREAKER'}})
+            _paper_ledger_add(acct_id, 'RISK_BREAKER', 'account', acct_id, None, None,
+                              'Drawdown %s%% breached your limit — entries paused.'
+                              % _paper_core.dstr(info['drawdownPct'], _paper_core.PCT_Q))
+            return
+    canonical = _paper_canonical_decision(pid)
+    if not canonical:
+        return  # fail closed
+    if not canonical['actionable']:
+        if mode == 'OBSERVE':
+            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', canonical['decisionSnapshotId'], None, None,
+                              'Observed %s — observe-only mode (no entry).' % canonical['action'])
         return
-    if mode == 'APPROVAL_REQUIRED':
+    # refresh acct for embedded-state gate evaluation
+    acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+    if canonical['action'] == 'BUY':
+        if mode == 'OBSERVE':
+            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', canonical['decisionSnapshotId'], None, None,
+                              'Observed BUY signal — observe-only mode.')
+            return
+        has_open = bool(paper_proposals_col.find_one({'paperAccountId': acct_id, 'status': 'CREATED'}))
+        if has_open:
+            return  # duplicate-intent protection: one open proposal at a time
+        sizing = _paper_core.run_entry_gates(acct=acct, canonical=canonical, mark_px=px, mark_fresh=fresh,
+                                             mandate=mandate, equity_info=info, has_open_intent=False)
+        if sizing.get('reject'):
+            return
+        _paper_make_proposal(acct_id, pid, 'BUY', canonical, sizing)
+    elif canonical['action'] == 'SELL':
+        if mode == 'OBSERVE':
+            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', canonical['decisionSnapshotId'], None, None,
+                              'Observed SELL signal — observe-only mode.')
+            return
         if paper_proposals_col.find_one({'paperAccountId': acct_id, 'status': 'CREATED'}):
             return
-        px = eq['_px']
-        est_notional = notional if action == 'BUY' else (_num((_paper_positions(acct_id)[0]).get('netQuantity')) or 0) * px
-        _, fee = _paper_simulate_fill(action, px, est_notional or 0)
-        prop = {
-            'proposalId': 'prop_' + uuid.uuid4().hex[:12], 'paperAccountId': acct_id,
-            'decisionSnapshotId': decision.get('driverChainId'), 'asset': 'BTC',
-            'side': action, 'orderType': 'MARKET', 'quantityRequested': None,
-            'notionalValue': str(round(est_notional or 0, 2)), 'estimatedFees': str(round(fee, 2)),
-            'estimatedSlippage': str(round((est_notional or 0) * (PAPER_EXEC_PROFILE['spreadBps'] + PAPER_EXEC_PROFILE['slippageBps']) / 1e4, 2)),
-            'referencePrice': str(round(px, 2)),
-            'reason': decision.get('explanation', '')[:400],
-            'invalidationPrice': str(round(px * 0.9, 2)) if action == 'BUY' else None,
-            'status': 'CREATED', 'createdAt': datetime.datetime.utcnow().isoformat(),
-            'expiresAt': (datetime.datetime.utcnow() + datetime.timedelta(minutes=PAPER_PROPOSAL_TTL_MIN)).isoformat(),
-            'expectedProposalVersion': 0, 'paperOnly': True}
-        paper_proposals_col.insert_one(dict(prop))
-        _paper_ledger_add(acct_id, 'PROPOSAL_CREATED', 'proposal', prop['proposalId'], None, None,
-                          f"Proposed {action} BTC — awaiting your approval.")
-        return
-    if mode == 'PAPER_AUTOPILOT':
-        if not (PAPER_EXECUTION_ENABLED and PAPER_AUTOPILOT_ENABLED):
-            _paper_ledger_add(acct_id, 'EXEC_DISABLED', 'account', acct_id, None, None,
-                              'Autopilot is disabled during remediation — no simulated trade executed.')
+        sizing = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh, canonical=canonical)
+        if sizing.get('reject'):
             return
-        res, err = _paper_execute(acct, action, notional or 0, source='autopilot', decision=decision)
-        if err and err not in ('NO_POSITION', 'INSUFFICIENT_CASH'):
-            _paper_ledger_add(acct_id, 'EXEC_SKIPPED', 'account', acct_id, None, None, f"Autopilot skipped: {err}.")
+        _paper_make_proposal(acct_id, pid, 'SELL', canonical, sizing)
+
+
+def _paper_make_proposal(acct_id, pid, side, canonical, sizing):
+    """Create ONE proposal immutably bound to the canonical decision snapshot."""
+    if side == 'BUY':
+        notional = _paper_core.dstr(sizing['notional'])
+        qprev = _paper_core.qty_dstr(sizing['qty'])
+    else:
+        notional = _paper_core.dstr(_paper_core.q_cash(sizing['qty'] * sizing['fillPx']))
+        qprev = _paper_core.qty_dstr(sizing['qty'])
+    prop = {
+        'proposalId': 'prop_' + uuid.uuid4().hex[:12], 'paperAccountId': acct_id, 'ownerId': pid,
+        'asset': 'BTC', 'side': side, 'orderType': 'MARKET',
+        'decisionSnapshotId': canonical['decisionSnapshotId'], 'decisionId': canonical['decisionId'],
+        'decisionInputsHash': canonical['decisionInputsHash'], 'engineVersion': canonical['engineVersion'],
+        'mandateVersion': canonical['mandateVersion'], 'version': 0,
+        'notionalValue': notional, 'quantityPreview': qprev,
+        'estimatedFees': _paper_core.dstr(sizing['fee']),
+        'referencePrice': _paper_core.dstr(sizing['fillPx']),
+        'invalidationPrice': (_paper_core.dstr(_paper_core.q_price(canonical['invalidationPrice']))
+                              if canonical.get('invalidationPrice') else None),
+        'gateTrace': sizing['trace'],
+        'reason': 'Canonical %s decision (engine %s).' % (side, canonical['engineVersion']),
+        'status': 'CREATED', 'createdAt': datetime.datetime.utcnow().isoformat(),
+        'expiresAt': canonical.get('expiresAt') or (datetime.datetime.utcnow()
+                     + datetime.timedelta(minutes=PAPER_PROPOSAL_TTL_MIN)).isoformat(),
+        'paperOnly': True}
+    paper_proposals_col.insert_one(dict(prop))
+    _paper_ledger_add(acct_id, 'PROPOSAL_CREATED', 'proposal', prop['proposalId'], None, None,
+                      'Proposed %s BTC — awaiting your approval.' % side)
+    return prop
+
+
+def _paper_jsonify(obj):
+    """Recursively convert Decimal128/Decimal to strings so embedded economic
+    docs are JSON-serialisable in API responses."""
+    from bson.decimal128 import Decimal128 as _D128
+    if isinstance(obj, list):
+        return [_paper_jsonify(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _paper_jsonify(v) for k, v in obj.items() if k != '_id'}
+    if isinstance(obj, _D128):
+        return str(obj.to_decimal())
+    if isinstance(obj, Decimal):
+        return str(obj)
+    return obj
 
 
 def _paper_acct_public(acct):
-    return {k: acct.get(k) for k in ('paperAccountId', 'ownerId', 'name', 'baseCurrency', 'startingCash',
+    startc = acct.get('startingCash')
+    return {k: acct.get(k) for k in ('paperAccountId', 'ownerId', 'name', 'baseCurrency',
                                      'mode', 'runtimeState', 'mandateId', 'mandateVersion',
-                                     'executionProfileId', 'createdAt', 'archivedAt')} | {'paperOnly': True}
+                                     'executionProfileId', 'createdAt', 'archivedAt', 'version')} | {
+        'startingCash': _paper_core.dstr(startc) if startc is not None else None,
+        'paperOnly': True}
 
 
 def _paper_get(acct_id, pid):
@@ -7214,21 +7254,27 @@ def _paper_get(acct_id, pid):
 def paper_create_account(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     pid = owner_pid(user)
     mode = payload.get('mode', 'APPROVAL_REQUIRED')
-    if mode not in ('OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT'):
-        raise HTTPException(status_code=422, detail='Invalid mode.')
-    start = _num(payload.get('startingCash')) or 100000.0
+    # M2 mode boundary: only OBSERVE + APPROVAL_REQUIRED. AUTOPILOT is disabled.
+    if mode not in ('OBSERVE', 'APPROVAL_REQUIRED'):
+        raise HTTPException(status_code=422, detail='Only OBSERVE and APPROVAL_REQUIRED are available.')
+    start = _paper_core.q_cash(payload.get('startingCash')) or Decimal('100000.00')
+    try:
+        mandate = _albert_deps.get_mandate(pid) or {}
+    except Exception:  # noqa
+        mandate = {}
+    reserve_pct = _paper_core.D(mandate.get('reserve_pct')) or Decimal('0')
+    econ = _paper_core.new_account_economics(start, reserve_pct)
     acct = {
         'paperAccountId': 'pa_' + uuid.uuid4().hex[:12], 'ownerId': pid,
         'name': (payload.get('name') or 'BTC Forward Test')[:60],
         'baseCurrency': (payload.get('baseCurrency') or 'USDC')[:8],
-        'startingCash': str(round(start, 2)), 'cash': start, 'mode': mode,
-        'runtimeState': 'RUNNING', 'mandateId': payload.get('mandateId', 'default'),
+        'mode': mode, 'runtimeState': 'RUNNING', 'mandateId': payload.get('mandateId', 'default'),
         'mandateVersion': 0, 'executionProfileId': PAPER_EXEC_PROFILE['executionProfileId'],
-        'realizedPnl': 0.0, 'feesPaid': 0.0, 'version': 0,
-        'createdAt': datetime.datetime.utcnow().isoformat(), 'archivedAt': None}
+        'version': 0, 'createdAt': datetime.datetime.utcnow().isoformat(), 'archivedAt': None,
+        **econ}
     paper_accounts_col.insert_one(dict(acct))
     _paper_ledger_add(acct['paperAccountId'], 'ACCOUNT_OPENED', 'account', acct['paperAccountId'],
-                      start, acct['baseCurrency'], f"Opened paper account in {mode} mode.")
+                      start, acct['baseCurrency'], 'Opened paper account in %s mode.' % mode)
     return {'status': 'ready', **_paper_acct_public(acct)}
 
 
@@ -7238,8 +7284,8 @@ def paper_list_accounts(user: dict = Depends(get_current_user)):
     out = []
     for a in paper_accounts_col.find({'ownerId': pid}).sort('createdAt', -1):
         eq = _paper_equity(a)
-        out.append({**_paper_acct_public(a), 'equity': eq['value'], 'drawdownPct': eq['drawdownPct'],
-                    'openPositions': len(_paper_positions(a['paperAccountId']))})
+        out.append({**_paper_acct_public(a), 'equity': eq['value'], 'equityAvailable': eq['available'],
+                    'drawdownPct': eq['drawdownPct'], 'openPositions': len(_paper_positions(a))})
     return {'status': 'ready', 'accounts': out}
 
 
@@ -7252,23 +7298,34 @@ def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
     _paper_tick(a)
     a = paper_accounts_col.find_one({'paperAccountId': acct_id})  # refresh post-tick
     eq = _paper_equity(a)
+    px = eq['_px']
     positions = []
-    for p in _paper_positions(acct_id):
-        qty = _num(p.get('netQuantity')) or 0
-        positions.append({**p, 'currentPrice': str(round(eq['_px'], 2)) if eq['_px'] else None,
-                          'unrealizedPnl': str(round(qty * ((eq['_px'] or 0) - (_num(p.get('averageEntryPrice')) or 0)), 2))})
-    proposals = list(paper_proposals_col.find({'paperAccountId': acct_id, 'status': 'CREATED'}, {'_id': 0}))
-    activity = list(paper_ledger_col.find({'paperAccountId': acct_id}, {'_id': 0}).sort('accountSequence', -1).limit(20))
-    closed = list(paper_positions_col.find({'paperAccountId': acct_id, 'status': 'CLOSED'}, {'_id': 0}))
-    wins = sum(1 for c in closed if (_num(c.get('realizedPnl')) or 0) > 0)
+    for p in _paper_positions(a):
+        qty = _paper_core.D(p.get('qty')) or Decimal('0')
+        avg = _paper_core.D(p.get('avgEntry')) or Decimal('0')
+        upnl = (qty * (px - avg)) if (px is not None and eq['_fresh']) else None
+        positions.append({
+            'paperPositionId': p.get('lotId'), 'asset': 'BTC',
+            'netQuantity': _paper_core.qty_dstr(qty), 'averageEntryPrice': _paper_core.dstr(avg),
+            'costBasis': _paper_core.dstr(p.get('costBasis')),
+            'entryDecisionSnapshotId': p.get('entryDecisionSnapshotId'),
+            'invalidationPrice': _paper_core.dstr(p.get('invalidationPrice')) if p.get('invalidationPrice') is not None else None,
+            'currentPrice': _paper_core.dstr(px) if (px is not None and eq['_fresh']) else None,
+            'unrealizedPnl': _paper_core.dstr(upnl) if upnl is not None else None})
+    proposals = [_paper_proposal_public(pr) for pr in
+                 paper_proposals_col.find({'paperAccountId': acct_id, 'status': 'CREATED'}, {'_id': 0})]
+    activity = sorted((a.get('ledger') or []), key=lambda e: e.get('recordedAt') or e.get('effectiveAt') or '',
+                      reverse=True)[:20]
+    activity = _paper_jsonify(activity)
+    closed = a.get('closedLots') or []
+    wins = sum(1 for c in closed if (_paper_core.D(c.get('realizedPnl')) or 0) > 0)
     eqc = {k: v for k, v in eq.items() if not k.startswith('_')}
-    # Truthful integrity: there is NO durable worker or reconciliation process in
-    # this build, so the account is never labelled HEALTHY and lastReconciledAt is
-    # null (reconciliation did not actually run). Execution is disabled by flag.
     if not PAPER_EXECUTION_ENABLED:
         pause_reason = 'PAPER_EXECUTION_DISABLED_PENDING_REMEDIATION'
-    elif not eq['_fresh']:
-        pause_reason = 'STALE_MARKS'
+    elif not eq['available']:
+        pause_reason = 'EQUITY_UNAVAILABLE'
+    elif a.get('runtimeState') == 'PAUSED_RISK_BREAKER':
+        pause_reason = 'DRAWDOWN_BREAKER'
     else:
         pause_reason = None
     return {'status': 'ready', 'paperOnly': True, 'asOf': datetime.datetime.utcnow().isoformat(),
@@ -7279,7 +7336,8 @@ def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
                             'realizedPnl': eqc['realizedPnl'], 'fees': eqc['fees']},
             'assumptions': PAPER_EXEC_PROFILE,
             'integrity': {'status': 'LIMITED_NO_WORKER',
-                          'marketData': 'CURRENT' if eq['_fresh'] else 'STALE',
+                          'marketData': eq['markStatus'],
+                          'equityAvailable': eq['available'],
                           'executionWorker': 'NONE',
                           'reconciliation': 'NONE',
                           'lastReconciledAt': None,
@@ -7294,15 +7352,12 @@ def paper_set_mode(acct_id: str, payload: dict = Body(...), user: dict = Depends
     if not a:
         raise HTTPException(status_code=404, detail='No such paper account.')
     mode = payload.get('mode')
-    if mode not in ('OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT'):
-        raise HTTPException(status_code=422, detail='Invalid mode.')
+    if mode not in ('OBSERVE', 'APPROVAL_REQUIRED'):
+        raise HTTPException(status_code=422, detail='Only OBSERVE and APPROVAL_REQUIRED are available.')
     paper_accounts_col.update_one({'paperAccountId': acct_id},
                                   {'$set': {'mode': mode}, '$inc': {'version': 1}})
     _paper_ledger_add(acct_id, 'MODE_CHANGED', 'account', acct_id, None, None, f"Mode set to {mode}.")
-    note = None
-    if mode == 'PAPER_AUTOPILOT' and not (PAPER_EXECUTION_ENABLED and PAPER_AUTOPILOT_ENABLED):
-        note = 'Autopilot is disabled during remediation — no simulated trades will be placed.'
-    return {'status': 'ready', 'mode': mode, 'note': note}
+    return {'status': 'ready', 'mode': mode}
 
 
 @app.post('/api/v1/albert/paper/accounts/{acct_id}/{cmd}')
@@ -7355,40 +7410,86 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
         paper_proposals_col.update_one({'proposalId': proposal_id}, {'$set': {'status': 'CANCELLED_BY_USER'}})
         _paper_ledger_add(a['paperAccountId'], 'PROPOSAL_CANCELLED', 'proposal', proposal_id, None, None, 'You skipped this paper trade.')
         return {'status': 'ready', 'proposalStatus': 'CANCELLED_BY_USER'}
-    # Approve -> simulated EXECUTION. Disabled by feature flag for the whole
-    # remediation (the atomic accounting core is not yet built + accepted).
+
+    # -------------------------- APPROVE (simulated execution) --------------------------
+    # Client must supply expectedProposalVersion + decisionSnapshotId + idempotencyKey.
+    # Client CANNOT supply/edit quantity, price, invalidation or targets — all such
+    # economic fields are recomputed atomically from the canonical decision.
+    body = payload or {}
+    expected_version = body.get('expectedProposalVersion')
+    client_sid = body.get('decisionSnapshotId')
+    idem_key = str(body.get('idempotencyKey') or '').strip()
+    if expected_version is None or client_sid is None or not idem_key:
+        raise HTTPException(status_code=422,
+                            detail='expectedProposalVersion, decisionSnapshotId and idempotencyKey are required.')
+    if int(expected_version) != int(prop.get('version') or 0):
+        raise HTTPException(status_code=409, detail='This proposal changed — reload and try again.')
+    if client_sid != prop.get('decisionSnapshotId'):
+        raise HTTPException(status_code=409, detail='Decision snapshot mismatch.')
+
+    # Execution stays OFF in deployment (single flag). Idempotent replays still
+    # return the stored result even when disabled? No — disabled means no effect at all.
     if not PAPER_EXECUTION_ENABLED:
         raise HTTPException(status_code=503, detail=PAPER_EXEC_DISABLED_MSG)
-    action, decision, fresh_ok = _paper_desired_action()
-    if not fresh_ok or action != prop['side']:
-        paper_proposals_col.update_one({'proposalId': proposal_id}, {'$set': {'status': 'REJECTED_ON_REVALIDATION'}})
+
+    # Revalidate against the CURRENT canonical decision. A mandate/decision change
+    # mints a NEW snapshotId -> mismatch -> reject (fail closed).
+    canonical = _paper_canonical_decision(pid)
+    if not _paper_core.revalidate_ok(canonical, prop['side'], prop.get('decisionSnapshotId')):
+        paper_proposals_col.update_one({'proposalId': proposal_id, 'status': 'CREATED'},
+                                       {'$set': {'status': 'REJECTED_ON_REVALIDATION'}})
         _paper_ledger_add(a['paperAccountId'], 'PROPOSAL_REVALIDATION_FAILED', 'proposal', proposal_id, None, None,
-                          'The signal changed or data went stale on revalidation — not executed.')
+                          'The decision changed or went stale on revalidation — not executed.')
         return {'status': 'ready', 'proposalStatus': 'REJECTED_ON_REVALIDATION',
-                'message': 'The signal changed on a fresh check — paper trade not placed.'}
-    notional = _num(prop.get('notionalValue')) or 0
-    res, err = _paper_execute(a, prop['side'], notional, source='approval', decision=decision)
+                'message': 'The decision changed on a fresh check — paper trade not placed.'}
+
+    px, fresh, _ = _paper_btc_mark()
+    info = _paper_core.compute_equity(a, px, fresh)
+    mandate = _albert_deps.get_mandate(pid) or {}
+    if prop['side'] == 'BUY':
+        sizing = _paper_core.run_entry_gates(acct=a, canonical=canonical, mark_px=px, mark_fresh=fresh,
+                                             mandate=mandate, equity_info=info, has_open_intent=False)
+        if sizing.get('reject'):
+            raise HTTPException(status_code=409, detail='Gate rejected: %s.' % sizing['reject'])
+        result, err, code = _paper_core.apply_buy_atomic(
+            paper_accounts_col, a['paperAccountId'], pid, a.get('version'),
+            idem_key, proposal_id, sizing, canonical, base_currency=a.get('baseCurrency', 'USDC'))
+    else:  # SELL
+        sizing = _paper_core.run_exit_gates(acct=a, mark_px=px, mark_fresh=fresh, canonical=canonical)
+        if sizing.get('reject'):
+            raise HTTPException(status_code=409, detail='Gate rejected: %s.' % sizing['reject'])
+        result, err, code = _paper_core.apply_sell_atomic(
+            paper_accounts_col, a['paperAccountId'], pid, sizing, source='approval',
+            idem_key=idem_key, proposal_id=proposal_id, canonical=canonical)
     if err:
-        raise HTTPException(status_code=409, detail=f'Could not execute: {err}.')
-    paper_proposals_col.update_one({'proposalId': proposal_id},
-                                   {'$set': {'status': 'APPROVED', 'approvedAt': datetime.datetime.utcnow().isoformat()}})
-    return {'status': 'ready', 'proposalStatus': 'APPROVED', 'fill': {k: (round(v, 4) if isinstance(v, float) else v) for k, v in (res or {}).items()}}
+        raise HTTPException(status_code=code, detail='Could not execute: %s.' % err)
+    # Mirror proposal status (non-authoritative; the account doc is the source of truth).
+    paper_proposals_col.update_one({'proposalId': proposal_id, 'status': 'CREATED'},
+                                   {'$set': {'status': 'APPROVED', 'approvedAt': datetime.datetime.utcnow().isoformat()},
+                                    '$inc': {'version': 1}})
+    return {'status': 'ready', 'proposalStatus': 'APPROVED', 'fill': result}
 
 
 @app.post('/api/v1/albert/paper/positions/{position_id}/close')
 def paper_close_position(position_id: str, payload: dict = Body(default={}),
                          user: dict = Depends(get_current_user)):
-    pos = paper_positions_col.find_one({'paperPositionId': position_id})
     pid = owner_pid(user)
-    a = _paper_get(pos['paperAccountId'], pid) if pos else None
-    if not pos or not a or pos.get('status') != 'OPEN':
+    # Position ids live in the embedded lots (lotId). Resolve owner-scoped.
+    a = paper_accounts_col.find_one({'ownerId': pid, 'lots.lotId': position_id})
+    if not a:
         raise HTTPException(status_code=404, detail='No open position.')
     if not PAPER_EXECUTION_ENABLED:
         raise HTTPException(status_code=503, detail=PAPER_EXEC_DISABLED_MSG)
-    res, err = _paper_execute(a, 'SELL', 0, source='manual_close')
+    px, fresh, _ = _paper_btc_mark()
+    sizing = _paper_core.run_exit_gates(acct=a, mark_px=px, mark_fresh=fresh, full=True)
+    if sizing.get('reject'):
+        raise HTTPException(status_code=409, detail='Could not close: %s.' % sizing['reject'])
+    idem_key = str((payload or {}).get('idempotencyKey') or ('close_' + position_id))
+    result, err, code = _paper_core.apply_sell_atomic(
+        paper_accounts_col, a['paperAccountId'], pid, sizing, source='manual_close', idem_key=idem_key)
     if err:
-        raise HTTPException(status_code=409, detail=f'Could not close: {err}.')
-    return {'status': 'ready', 'closed': {k: (round(v, 4) if isinstance(v, float) else v) for k, v in (res or {}).items()}}
+        raise HTTPException(status_code=code, detail='Could not close: %s.' % err)
+    return {'status': 'ready', 'closed': result}
 
 
 @app.get('/api/v1/albert/paper/accounts/{acct_id}/trade-log')
@@ -7396,20 +7497,22 @@ def paper_trade_log(acct_id: str, user: dict = Depends(get_current_user)):
     a = _paper_get(acct_id, owner_pid(user))
     if not a:
         raise HTTPException(status_code=404, detail='No such account.')
-    closed = list(paper_positions_col.find({'paperAccountId': acct_id, 'status': 'CLOSED'}, {'_id': 0}).sort('closedAt', -1))
-    return {'status': 'ready', 'paperOnly': True, 'trades': closed}
+    closed = sorted((a.get('closedLots') or []), key=lambda c: c.get('closedAt') or '', reverse=True)
+    return {'status': 'ready', 'paperOnly': True, 'trades': _paper_jsonify(closed)}
 
 
 @app.get('/api/v1/albert/paper/trades/{position_id}/evidence')
 def paper_trade_evidence(position_id: str, user: dict = Depends(get_current_user)):
-    pos = paper_positions_col.find_one({'paperPositionId': position_id}, {'_id': 0})
-    a = _paper_get(pos['paperAccountId'], owner_pid(user)) if pos else None
-    if not pos or not a:
+    pid = owner_pid(user)
+    a = paper_accounts_col.find_one({'ownerId': pid,
+                                     '$or': [{'lots.lotId': position_id}, {'closedLots.lotId': position_id}]})
+    if not a:
         raise HTTPException(status_code=404, detail='No such trade.')
-    fills = list(paper_ledger_col.find({'paperAccountId': pos['paperAccountId'], 'entityId': position_id}, {'_id': 0}).sort('accountSequence', 1))
-    return {'status': 'ready', 'paperOnly': True, 'position': pos,
-            'decisionSnapshotId': pos.get('entryDecisionSnapshotId'),
-            'executionProfile': PAPER_EXEC_PROFILE, 'ledger': fills,
+    pos = next((l for l in (a.get('lots') or []) + (a.get('closedLots') or []) if l.get('lotId') == position_id), None)
+    fills = [e for e in (a.get('ledger') or []) if e.get('entityId') == position_id]
+    return {'status': 'ready', 'paperOnly': True, 'position': _paper_jsonify(pos),
+            'decisionSnapshotId': (pos or {}).get('entryDecisionSnapshotId'),
+            'executionProfile': PAPER_EXEC_PROFILE, 'ledger': _paper_jsonify(fills),
             'note': 'Paper simulation evidence — not a live exchange fill.'}
 
 

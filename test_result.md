@@ -11880,3 +11880,51 @@ agent_communication:
 # NOTE: No frontend rewrite required for M1 — components call same-origin /api (session cookie auto-sent)
 #   and already degrade gracefully on non-200. Unauthenticated use of these routes now correctly 401s.
 
+
+#====================================================================================================
+# Ask-Albert Code Review Remediation — MILESTONE 2: TRUSTWORTHY PAPER CORE (backend)
+#====================================================================================================
+# agent: main | status: IMPLEMENTED + self-tested (M1 19/19 + M2 27/27 pytest). Awaiting review before M3.
+#
+# New module: backend/albert/paper/core.py (pure + DB-atomic, unit-testable in isolation)
+#   - Decimal-only math; MongoDB Decimal128 storage; API values serialised as decimal strings.
+#   - canonical binding helpers, ordered gates (run_entry_gates / run_exit_gates), sizing (reduce-only),
+#     compute_equity (honest missing/stale + high-water), apply_buy_atomic / apply_sell_atomic
+#     (single-document CAS + idempotency), update_high_water ($max), revalidate_ok.
+#
+# server.py wiring (paper engine section):
+#   - _paper_desired_action / _paper_simulate_fill / _paper_execute REMOVED (Market-Driver->BUY/SELL
+#     shortcut and fabricated price*0.9 invalidation gone). Market Drivers are evidence only.
+#   - _paper_canonical_decision(pid): fetches the CURRENT immutable canonical BTC snapshot via the
+#     decision engine + decision_history repo (stable decisionId/snapshotId, engineVersion, mandate/
+#     portfolio/regime versions, decisionInputsHash, invalidation, expiry). Fails CLOSED on missing/
+#     mutable/incomplete/unsupported/stale. WAIT/HOLD are non-actionable (create nothing).
+#   - Account economics now embedded (cash/lots/ledger/idemKeys/consumedProposals/appliedApprovals/
+#     accountSequence/highWaterEquity) as Decimal128 -> the single-doc atomic boundary.
+#   - Proposals bound to the canonical snapshot (decisionSnapshotId/decisionId/hash/engineVersion/
+#     mandateVersion + gate trace). Approve requires expectedProposalVersion + decisionSnapshotId +
+#     idempotencyKey; client cannot supply/edit qty/price/invalidation (recomputed server-side).
+#     Approve revalidates against the current canonical (mandate change -> new snapshot -> reject).
+#   - Mode boundary: only OBSERVE + APPROVAL_REQUIRED (create + set-mode reject PAPER_AUTOPILOT 422).
+#   - Execution stays OFF in deployment (PAPER_EXECUTION_ENABLED / PAPER_AUTOPILOT_ENABLED False):
+#     approve/close return 503; autopilot never fills. Dashboard integrity never HEALTHY; equity honest.
+#
+# Tests:
+#   backend/tests/test_m2_paper_core.py (NEW, 27 tests): market-drivers-cannot-manufacture-actions;
+#     only-canonical-BUY passes; WAIT/HOLD/SELL cannot create entry; excluded/incomplete-mandate/
+#     reserve/allocation-cap/drawdown/stale gate rejects; sizing reduces-never-enlarges; no float drift
+#     over many fills (cash+costBasis reconciles exactly); missing/stale price never zero equity;
+#     high-water survives reload + never resets ($max); atomic buy applies once + balanced ledger;
+#     idempotent retry (same key -> one effect); concurrent double-tap (threads) -> exactly one effect;
+#     different keys same proposal -> ALREADY_CONSUMED 409; sell reduce-only + exact realised PnL;
+#     revalidate_ok predicate (mandate-change/stale/side-mismatch reject); HTTP boundary: AUTOPILOT
+#     rejected on create + set-mode (422), dashboard executionEnabled/autopilotEnabled False, approve
+#     requires body (422), approve blocked 503 (client economic fields ignored), expired proposal 409.
+#   Command: cd /app/backend && python -m pytest tests/test_m2_paper_core.py tests/test_m1_containment.py -q
+#   Result: 46 passed (M2 27 + M1 19). Fixed a real bug: Decimal('0') is falsy -> a 0% allocation cap
+#     was silently treated as 100%; gates now default caps only when the value is None.
+#
+# Deferred to M3 (acceptance): consolidated regression, production frontend build + FE polish (approve
+#   UX now needs the new body fields / disabled-execution messaging), code review, ledger-replay report.
+# Execution + Autopilot remain OFF pending M1-M3 pass + explicit ACCEPT.
+
