@@ -8376,21 +8376,22 @@ def _sop_select_account(pid, requested=None):
 
 
 def _sop_strategies(pid):
-    """Owner-scoped strategy summary (read-only). Best-effort over the existing store."""
+    """Owner-scoped strategy summary (read-only). Prefers the M-D Studio contracts."""
     active, drafts, attention = [], [], []
     try:
-        for s in strategies_col.find({'owner': pid}, {'_id': 0}).sort('created_at', -1).limit(60):
-            item = {'id': s.get('id'), 'name': s.get('name') or s.get('title') or 'Untitled strategy',
-                    'symbol': s.get('symbol'), 'assets': s.get('assets') or s.get('legs'),
-                    'status': s.get('status'), 'kind': s.get('kind'),
-                    'version': s.get('version'), 'createdAt': s.get('created_at'),
-                    'updatedAt': s.get('updated_at')}
-            st = (s.get('status') or '').lower()
-            if st in ('active', 'paper_active', 'paper_assigned', 'reviewed'):
+        for s in strategy_contracts_col.find({'ownerId': pid, 'latest': True}).sort('updatedAt', -1):
+            item = {'id': s.get('strategyId'), 'name': s.get('name') or 'Untitled strategy',
+                    'assets': (s.get('contract') or {}).get('assets'),
+                    'status': s.get('status'), 'version': s.get('version'),
+                    'contractHash': s.get('contractHash'),
+                    'assignedPaperAccountId': s.get('assignedPaperAccountId'),
+                    'createdAt': s.get('createdAt'), 'updatedAt': s.get('updatedAt')}
+            st = (s.get('status') or '')
+            if st in ('PAPER_ASSIGNED', 'PAPER_ACTIVE', 'REVIEWED'):
                 active.append(item)
-            elif st in ('draft', 'backtested'):
+            elif st in ('DRAFT', 'PAUSED'):
                 drafts.append(item)
-            if s.get('needsReview') or st == 'needs_review':
+            if st == 'PAUSED':
                 attention.append(item)
     except Exception:  # noqa
         traceback.print_exc()
@@ -10679,6 +10680,402 @@ def albert_ask_evidence(type: str = '', id: str = '', user: dict = Depends(get_c
     return {'status': 'ready', 'type': type, 'id': id, 'data': dto,
             'asOf': meta.get('asOf'), 'freshness': meta.get('freshness'),
             'sourceId': meta.get('sourceId'), 'deepLink': meta.get('deepLink'), 'paperOnly': True}
+
+
+# =====================================================================
+# M-D: STRATEGY STUDIO — deterministic, immutable, versioned strategy contracts.
+# Albert may CONVERSATIONALLY draft a strategy, but ONLY the server validator can
+# create the authoritative, hashed contract. Every mutation is authenticated
+# (owner from session; client pid/ownerId ignored), requires explicit confirmation
+# + an idempotency key, and obeys a strict lifecycle state machine. Assigning a
+# contract makes it available to the paper engine but NEVER creates a trade (M-E).
+# =====================================================================
+from albert.engine.hashing import short_hash as _studio_short_hash  # noqa: E402
+
+strategy_contracts_col = db['strategy_contracts']
+strategy_backtests_col = db['strategy_backtests']
+studio_idem_col = db['studio_idem']
+
+STUDIO_SUPPORTED = {'BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'DOT', 'LTC',
+                    'MATIC', 'ATOM', 'NEAR', 'FIL', 'APT', 'ARB', 'OP', 'INJ', 'SUI', 'TIA', 'BNB', 'TRX'}
+STUDIO_MAX_LEGS = 8
+STUDIO_BACKTEST_VERSION = 'studio-bt-v1'
+STUDIO_TRANSITIONS = {
+    'REVIEWED': {'assign': 'PAPER_ASSIGNED', 'archive': 'ARCHIVED'},
+    'PAPER_ASSIGNED': {'activate': 'PAPER_ACTIVE', 'unassign': 'REVIEWED', 'archive': 'ARCHIVED'},
+    'PAPER_ACTIVE': {'pause': 'PAUSED', 'close': 'PAPER_ASSIGNED'},
+    'PAUSED': {'activate': 'PAPER_ACTIVE', 'close': 'PAPER_ASSIGNED', 'archive': 'ARCHIVED'},
+    'ARCHIVED': {},
+}
+
+
+def _studio_canonical(draft):
+    """Deterministic canonical projection of a strategy draft (economic fields only —
+    no ids/timestamps/prose). Same inputs -> same contract -> same hash."""
+    assets = []
+    for a in (draft.get('assets') or []):
+        sym = str(a.get('symbol') or a.get('asset') or '').upper().strip()
+        if not sym:
+            continue
+        try:
+            w = round(float(a.get('weightPct', a.get('weight', 0))), 4)
+        except Exception:  # noqa
+            w = 0.0
+        assets.append({'symbol': sym, 'weightPct': w})
+    assets.sort(key=lambda x: x['symbol'])  # order-independent canonicalisation
+
+    def _f(v, d=None):
+        try:
+            return round(float(v), 4)
+        except Exception:  # noqa
+            return d
+    return {
+        'assets': assets,
+        'timeframe': str(draft.get('timeframe') or '').strip()[:20] or 'swing',
+        'entryRules': str(draft.get('entryRules') or '').strip()[:1000],
+        'exitRules': str(draft.get('exitRules') or '').strip()[:1000],
+        'profitTaking': str(draft.get('profitTaking') or '').strip()[:1000],
+        'invalidation': str(draft.get('invalidation') or '').strip()[:1000],
+        'sizing': str(draft.get('sizing') or '').strip()[:500],
+        'reservePct': _f(draft.get('reservePct'), 0.0),
+        'maxDrawdownPct': _f(draft.get('maxDrawdownPct')),
+        'riskLimits': {
+            'maxPositions': int(draft.get('riskLimits', {}).get('maxPositions', len(assets)) or len(assets)),
+            'maxTradeRiskPct': _f((draft.get('riskLimits') or {}).get('maxTradeRiskPct'), 2.0),
+            'stopLossPct': _f((draft.get('riskLimits') or {}).get('stopLossPct')),
+        },
+    }
+
+
+def _studio_validate(draft, pid, account=None):
+    """Server-side validation (fail-closed). Returns (contract, contractHash, errors)."""
+    c = _studio_canonical(draft)
+    errors = []
+    m = _get_mandate(pid)
+    excluded = {str(x).upper() for x in (m.get('excluded_coins') or [])}
+    approved = {str(x).upper() for x in (m.get('approved_coins') or [])}
+    if not c['assets']:
+        errors.append('At least one asset is required.')
+    if len(c['assets']) > STUDIO_MAX_LEGS:
+        errors.append(f'Too many assets ({len(c["assets"])}); the limit is {STUDIO_MAX_LEGS}.')
+    for a in c['assets']:
+        if a['symbol'] not in STUDIO_SUPPORTED:
+            errors.append(f'{a["symbol"]} is not a supported asset.')
+        if a['symbol'] in excluded:
+            errors.append(f'{a["symbol"]} is on your excluded list.')
+        if a['weightPct'] <= 0:
+            errors.append(f'{a["symbol"]} must have a positive weight.')
+    total = round(sum(a['weightPct'] for a in c['assets']), 2)
+    if c['assets'] and abs(total - 100.0) > 0.5:
+        errors.append(f'Asset weights must sum to 100% (currently {total}%).')
+    if c['riskLimits']['maxPositions'] > STUDIO_MAX_LEGS:
+        errors.append('maxPositions exceeds the portfolio limit.')
+    if c['reservePct'] is not None and (c['reservePct'] < 0 or c['reservePct'] > 100):
+        errors.append('reservePct must be between 0 and 100.')
+    # paper-account compatibility (assignment time)
+    if account is not None:
+        acct_excl = excluded
+        for a in c['assets']:
+            if a['symbol'] in acct_excl:
+                errors.append(f'{a["symbol"]} conflicts with the account mandate exclusions.')
+        if approved:
+            for a in c['assets']:
+                if a['symbol'] not in approved:
+                    errors.append(f'{a["symbol"]} is not in the account mandate approved universe.')
+    return c, _studio_short_hash(c), errors
+
+
+def _studio_summary(c):
+    legs = ', '.join(f"{a['symbol']} {a['weightPct']:g}%" for a in c['assets'])
+    return (f"A {c['timeframe']} strategy across {legs}. "
+            f"Protected reserve {c['reservePct']:g}%. "
+            f"Max positions {c['riskLimits']['maxPositions']}. "
+            f"Exit/invalidation: {c['invalidation'] or 'per rules'}.")
+
+
+def _studio_public(doc):
+    return {k: doc.get(k) for k in ('strategyId', 'name', 'version', 'contract',
+            'contractHash', 'summary', 'createdAt', 'updatedAt', 'assignedPaperAccountId',
+            'backtestRunId', 'backtestVersion')} | {'lifecycleState': doc.get('status'), 'paperOnly': True}
+
+
+def _studio_idem(pid, key, result=None):
+    """Idempotency: first writer stores; replays return the stored result (one effect)."""
+    _id = f'{pid}:{key}'
+    if result is None:
+        row = studio_idem_col.find_one({'_id': _id})
+        return row.get('result') if row else None
+    studio_idem_col.update_one({'_id': _id}, {'$setOnInsert': {'_id': _id, 'result': result,
+                               'at': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+    return studio_idem_col.find_one({'_id': _id}).get('result')
+
+
+def _studio_get(sid, pid):
+    doc = strategy_contracts_col.find_one({'strategyId': sid})
+    if not doc or doc.get('ownerId') != pid:
+        return None
+    return doc
+
+
+# ---- deterministic historical backtest (wired to ccxt daily candles) ----
+def _studio_daily_closes(symbol, limit=200):
+    """Deterministic daily closes for a symbol via ccxt (kraken -> coinbase)."""
+    for name in ('kraken', 'coinbase'):
+        try:
+            ex = getattr(ccxt, name)({'enableRateLimit': True})
+            bars = ex.fetch_ohlcv(f'{symbol}/USD', timeframe='1d', limit=limit)
+            if bars and len(bars) > 30:
+                # Drop the last (still-forming) daily candle so results are deterministic
+                # within a UTC day (intraday close updates cannot change a completed backtest).
+                return [(int(b[0]), float(b[4])) for b in bars[:-1]]
+        except Exception:  # noqa
+            continue
+    return None
+
+
+def _studio_backtest(contract):
+    """Deterministic buy-and-hold-to-target-weights replay with monthly rebalance,
+    fees + slippage applied. Traceable: stores the candle window + a data hash."""
+    prof = _paper_profiles.AGGRESSIVE_EXPERIENCED_V1 if PAPER_MULTI_ASSET_ENABLED else {}
+    fee_bps = float(prof.get('takerFeeBps', 10)) if prof else 10.0
+    slip_bps = float(prof.get('assumedSpreadBps', 5)) if prof else 5.0
+    assets = contract['assets']
+    series = {}
+    for a in assets:
+        cl = _studio_daily_closes(a['symbol'])
+        if cl:
+            series[a['symbol']] = cl
+    bench = series.get('BTC') or _studio_daily_closes('BTC')
+    coverage = round(len(series) / max(1, len(assets)) * 100, 1)
+    if not series:
+        return {'error': 'NO_DATA', 'dataCoveragePct': 0.0}
+    n = min(len(v) for v in series.values())
+    n = min(n, min((len(bench) if bench else n), n))
+    syms = [a['symbol'] for a in assets if a['symbol'] in series]
+    w = {a['symbol']: a['weightPct'] / 100.0 for a in assets if a['symbol'] in series}
+    wsum = sum(w.values()) or 1.0
+    w = {k: v / wsum for k, v in w.items()}  # renormalise over available assets
+    # align to the last n candles
+    px = {s: [c[1] for c in series[s][-n:]] for s in syms}
+    equity = 100000.0
+    units = {s: (equity * w[s]) / px[s][0] for s in syms}
+    # apply entry fee+slippage once
+    cost_frac = (fee_bps + slip_bps) / 10000.0
+    equity *= (1 - cost_frac)
+    for s in syms:
+        units[s] *= (1 - cost_frac)
+    curve = []
+    peak = equity
+    max_dd = 0.0
+    rebal_every = 30
+    fees_paid = equity * cost_frac
+    for i in range(n):
+        val = sum(units[s] * px[s][i] for s in syms)
+        curve.append(round(val, 2))
+        peak = max(peak, val)
+        dd = (peak - val) / peak * 100 if peak else 0.0
+        max_dd = max(max_dd, dd)
+        if i > 0 and i % rebal_every == 0:  # deterministic monthly rebalance
+            target = {s: val * w[s] for s in syms}
+            turnover = sum(abs(target[s] - units[s] * px[s][i]) for s in syms)
+            f = turnover * cost_frac
+            fees_paid += f
+            val -= f
+            units = {s: (val * w[s]) / px[s][i] for s in syms}
+    total_ret = round((curve[-1] / 100000.0 - 1) * 100, 2)
+    bench_ret = None
+    if bench and len(bench) >= n:
+        bpx = [c[1] for c in bench[-n:]]
+        bench_ret = round((bpx[-1] / bpx[0] - 1) * 100, 2)
+    data_hash = _studio_short_hash({s: [round(x, 2) for x in px[s]] for s in syms})
+    return {
+        'backtestVersion': STUDIO_BACKTEST_VERSION, 'sampleSizeDays': n,
+        'totalReturnPct': total_ret, 'benchmarkReturnPct': bench_ret, 'benchmark': 'BTC buy-and-hold',
+        'maxDrawdownPct': round(max_dd, 2), 'feesPaidUsd': round(fees_paid, 2),
+        'feeBps': fee_bps, 'slippageBps': slip_bps, 'dataCoveragePct': coverage,
+        'assetsWithData': syms, 'finalEquity': curve[-1], 'startEquity': 100000.0,
+        'dataHash': data_hash, 'deterministic': True,
+    }
+
+
+# ---- Studio conversational draft (LLM proposes; NOT authoritative, never persists) ----
+STUDIO_DRAFT_SYSTEM = (
+    "You are Albert helping a user draft a PAPER-trading strategy. Output ONLY one JSON object, no prose, "
+    "with keys: name, timeframe, assets (array of {symbol, weightPct}), entryRules, exitRules, "
+    "profitTaking, invalidation, sizing, reservePct (number), maxDrawdownPct (number), "
+    "riskLimits ({maxPositions, maxTradeRiskPct, stopLossPct}). RULES: preserve EXACTLY the assets the "
+    "user names — never substitute BTC or drop a leg. Weights must sum to 100. Use uppercase symbols. "
+    "This is a DRAFT proposal for the user to review; you are not saving or executing anything.")
+
+
+@app.post('/api/v1/albert/studio/draft')
+def studio_draft(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    """Albert drafts a structured strategy proposal from a natural-language goal. This
+    NEVER persists or activates anything — chat alone cannot save."""
+    goal = str((payload or {}).get('goal') or '').strip()[:1500]
+    if not goal:
+        raise HTTPException(status_code=422, detail='Describe your strategy goal.')
+    draft = None
+    if LLM_READY_KEY and _HAS_LLM:
+        try:
+            chat = (LlmChat(api_key=LLM_READY_KEY, session_id='studio-' + uuid.uuid4().hex[:8],
+                            system_message=STUDIO_DRAFT_SYSTEM)
+                    .with_model('gemini', _model_for('strategy')).with_params(temperature=0.2, max_tokens=1200))
+            reply = asyncio.run(chat.send_message(UserMessage(text=goal)))
+            raw = (getattr(reply, 'text', '') or '').strip()
+            if '```' in raw:
+                raw = re.sub(r'```(?:json)?', '', raw).strip()
+            s, e = raw.find('{'), raw.rfind('}')
+            draft = json.loads(raw[s:e + 1])
+        except Exception:  # noqa
+            traceback.print_exc()
+            draft = None
+    if not draft:
+        draft = {'name': 'New strategy', 'timeframe': 'swing', 'assets': [{'symbol': 'BTC', 'weightPct': 100}],
+                 'entryRules': '', 'exitRules': '', 'profitTaking': '', 'invalidation': '',
+                 'sizing': '', 'reservePct': (_get_mandate(owner_pid(user)).get('reserve_pct') or 20),
+                 'riskLimits': {'maxPositions': 1}}
+    c, chash, errors = _studio_validate(draft, owner_pid(user))
+    return {'status': 'ready', 'draft': {**draft, 'name': draft.get('name') or 'New strategy'},
+            'contract': c, 'contractHash': chash, 'summary': _studio_summary(c),
+            'validationErrors': errors, 'note': 'DRAFT proposal — review, then Save to create the contract.'}
+
+
+@app.post('/api/v1/albert/studio/validate')
+def studio_validate_endpoint(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    """Validate an exact draft and return the canonical contract + hash for the review card."""
+    c, chash, errors = _studio_validate((payload or {}).get('draft') or payload, owner_pid(user))
+    return {'status': 'ready', 'contract': c, 'contractHash': chash,
+            'summary': _studio_summary(c), 'validationErrors': errors, 'valid': not errors}
+
+
+@app.post('/api/v1/albert/studio/save')
+def studio_save(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    """Persist the EXACT reviewed contract as an immutable version. Requires confirm +
+    idempotencyKey + expectedHash matching the reviewed contract (stale review -> reject)."""
+    pid = owner_pid(user)
+    body = payload or {}
+    if not body.get('confirm'):
+        raise HTTPException(status_code=428, detail='Explicit confirmation is required to save.')
+    idem = str(body.get('idempotencyKey') or '').strip()
+    if not idem:
+        raise HTTPException(status_code=422, detail='idempotencyKey is required.')
+    prior = _studio_idem(pid, 'save:' + idem)
+    if prior is not None:
+        return prior
+    draft = body.get('draft') or body.get('contract') or {}
+    c, chash, errors = _studio_validate(draft, pid)
+    if errors:
+        raise HTTPException(status_code=422, detail='Validation failed: ' + '; '.join(errors))
+    if body.get('expectedHash') and body['expectedHash'] != chash:
+        raise HTTPException(status_code=409, detail='This review is stale — reload and try again.')
+    now = datetime.datetime.utcnow().isoformat()
+    parent = str(body.get('strategyId') or '').strip()
+    version = 1
+    if parent and _studio_get(parent, pid):
+        version = int(_studio_get(parent, pid).get('version') or 1) + 1
+        sid = parent
+    else:
+        sid = 'st_' + uuid.uuid4().hex[:12]
+    # immutable version doc keyed by (strategyId, version)
+    doc = {'_id': f'{sid}:v{version}', 'strategyId': sid, 'ownerId': pid,
+           'name': str(body.get('name') or draft.get('name') or 'Untitled')[:80],
+           'status': 'REVIEWED', 'version': version, 'contract': c, 'contractHash': chash,
+           'summary': _studio_summary(c), 'createdAt': now, 'updatedAt': now,
+           'assignedPaperAccountId': None, 'backtestRunId': None, 'backtestVersion': None,
+           'latest': True}
+    strategy_contracts_col.update_many({'strategyId': sid}, {'$set': {'latest': False}})
+    strategy_contracts_col.insert_one(dict(doc))
+    result = {'status': 'ready', **_studio_public(doc)}
+    return _studio_idem(pid, 'save:' + idem, result)
+
+
+@app.get('/api/v1/albert/studio/strategies')
+def studio_list(user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
+    rows = [_studio_public(d) for d in strategy_contracts_col.find(
+        {'ownerId': pid, 'latest': True}).sort('updatedAt', -1)]
+    return {'status': 'ready', 'strategies': rows}
+
+
+@app.get('/api/v1/albert/studio/strategies/{sid}')
+def studio_get_one(sid: str, user: dict = Depends(get_current_user)):
+    doc = _studio_get(sid, owner_pid(user))
+    if not doc:
+        raise HTTPException(status_code=404, detail='No such strategy.')
+    bt = strategy_backtests_col.find_one({'strategyId': sid, 'contractHash': doc.get('contractHash')},
+                                         {'_id': 0}, sort=[('at', -1)])
+    return {'status': 'ready', **_studio_public(doc), 'backtest': bt}
+
+
+@app.post('/api/v1/albert/studio/strategies/{sid}/backtest')
+def studio_backtest_endpoint(sid: str, payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
+    """Deterministic backtest bound to the exact contract version + hash. The LLM never
+    manufactures these numbers — they come from the historical replay only."""
+    pid = owner_pid(user)
+    doc = _studio_get(sid, pid)
+    if not doc:
+        raise HTTPException(status_code=404, detail='No such strategy.')
+    res = _studio_backtest(doc['contract'])
+    run_id = 'bt_' + uuid.uuid4().hex[:12]
+    rec = {'_id': run_id, 'backtestRunId': run_id, 'strategyId': sid, 'ownerId': pid,
+           'strategyVersion': doc['version'], 'contractHash': doc['contractHash'],
+           'at': datetime.datetime.utcnow().isoformat(), **res}
+    strategy_backtests_col.insert_one(dict(rec))
+    strategy_contracts_col.update_one({'_id': doc['_id']},
+        {'$set': {'backtestRunId': run_id, 'backtestVersion': res.get('backtestVersion'),
+                  'updatedAt': datetime.datetime.utcnow().isoformat()}})
+    rec.pop('_id', None)
+    return {'status': 'ready', 'backtest': rec}
+
+
+@app.post('/api/v1/albert/studio/strategies/{sid}/{cmd}')
+def studio_lifecycle(sid: str, cmd: str, payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
+    """Lifecycle transitions (assign/unassign/activate/pause/close/archive). Owner-scoped,
+    confirm + idempotency required, illegal transitions rejected. Assigning makes the
+    strategy AVAILABLE to the paper engine but never creates a trade (that is M-E)."""
+    pid = owner_pid(user)
+    body = payload or {}
+    if cmd not in ('assign', 'unassign', 'activate', 'pause', 'close', 'archive'):
+        raise HTTPException(status_code=422, detail='Unknown command.')
+    doc = _studio_get(sid, pid)
+    if not doc:
+        raise HTTPException(status_code=404, detail='No such strategy.')
+    if not body.get('confirm'):
+        raise HTTPException(status_code=428, detail=f'Explicit confirmation is required to {cmd}.')
+    idem = str(body.get('idempotencyKey') or '').strip()
+    if not idem:
+        raise HTTPException(status_code=422, detail='idempotencyKey is required.')
+    prior = _studio_idem(pid, f'{cmd}:{sid}:{idem}')
+    if prior is not None:
+        return prior
+    cur = doc.get('status')
+    allowed = STUDIO_TRANSITIONS.get(cur, {})
+    if cmd not in allowed:
+        raise HTTPException(status_code=409, detail=f'Cannot {cmd} a strategy in state {cur}.')
+    new_state = allowed[cmd]
+    updates = {'status': new_state, 'updatedAt': datetime.datetime.utcnow().isoformat()}
+    if cmd == 'assign':
+        acct_id = str(body.get('paperAccountId') or '').strip()
+        acct = _paper_get(acct_id, pid) if acct_id else None
+        if not acct:
+            raise HTTPException(status_code=404, detail='No such paper account.')
+        _c, _h, errs = _studio_validate({'assets': doc['contract']['assets'],
+                                         **doc['contract']}, pid, account=acct)
+        if _h != doc['contractHash']:
+            raise HTTPException(status_code=409, detail='Contract hash mismatch on assignment.')
+        if errs:
+            raise HTTPException(status_code=422, detail='Not compatible with this account: ' + '; '.join(errs))
+        if body.get('expectedVersion') is not None and int(body['expectedVersion']) != int(doc['version']):
+            raise HTTPException(status_code=409, detail='Strategy version changed — reload.')
+        updates['assignedPaperAccountId'] = acct_id
+    if cmd == 'unassign':
+        updates['assignedPaperAccountId'] = None
+    strategy_contracts_col.update_one({'_id': doc['_id']}, {'$set': updates})
+    fresh = _studio_get(sid, pid)
+    result = {'status': 'ready', 'command': cmd, **_studio_public(fresh)}
+    return _studio_idem(pid, f'{cmd}:{sid}:{idem}', result)
+
 
 
 

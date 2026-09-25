@@ -117,6 +117,42 @@ user_problem_statement: |
   with seeded test session to verify UI rendering across 6 deep-linked views in desktop and mobile.
 
 backend:
+  - task: "M-D: Strategy Studio — deterministic, immutable, versioned strategy contracts"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/app/components/StrategyStudio.js, app/app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Implemented the Strategy Studio (spec §7) in a NEW namespace (/api/v1/albert/studio/*) and
+          collections (strategy_contracts, strategy_backtests, studio_idem) so the legacy strategy/basket
+          system is untouched. Albert may conversationally DRAFT (POST /studio/draft, LLM proposal, NEVER
+          persists — chat alone cannot save/activate), but ONLY the server validator creates the
+          authoritative contract. Canonical, order-independent contract projection + short_hash canonical
+          hash; the review card, saved contract and assigned contract all share the same version + hash.
+          Every asset/leg is preserved exactly (SOL/NEAR/FIL never becomes BTC or loses a leg). Immutable
+          versioned docs keyed (strategyId,version); material edits create a new version, never mutating a
+          historical one. Lifecycle state machine REVIEWED->PAPER_ASSIGNED->PAPER_ACTIVE->PAUSED->ARCHIVED
+          (+unassign/close) with illegal transitions rejected (409). Every mutation: authenticated (owner
+          from session; client pid/ownerId ignored), explicit confirm (428 if missing), idempotency key
+          (one effect on replay), hash/stale-review check (409), fail-closed validation (unsupported/
+          excluded assets, weight sum, position limits, reserve, paper-account compatibility on assign).
+          Assigning makes the contract AVAILABLE to the paper engine but never creates a trade (M-E).
+          Backtest wired to a deterministic ccxt daily-candle historical replay (drops the forming candle
+          for within-day determinism): fees + slippage from the exec profile, BTC benchmark, sampleSize,
+          maxDrawdown, dataCoverage, and a dataHash — bound to the exact strategyVersion + contractHash and
+          stored per run; the LLM never manufactures results. _sop_strategies now surfaces these contracts.
+          Verified: pytest tests/test_mD_strategies.py (7) — 3-asset survives review/save/reload/assign,
+          stale-hash 409, confirm-required 428 + chat-cannot-save, unsupported/excluded fail-closed,
+          duplicate=one effect, cross-owner 404, illegal transition 409. Live smoke: validate/save/assign
+          OK; backtest deterministic (identical dataHash + return across runs). Frontend StrategyStudio
+          verified via authenticated 1920px screenshot (immutable hash, exact weights, backtest metrics,
+          confirm-gated lifecycle). Full suite: 102 passed, no regression. Clean production build passes.
+
   - task: "M-C: Ask Albert — authenticated, owner-scoped, read-only companion (POST /api/v1/albert/ask)"
     implemented: true
     working: true
