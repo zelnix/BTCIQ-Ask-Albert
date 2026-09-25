@@ -11777,3 +11777,57 @@ agent_communication:
          timing-risk strip on the cone.
       Determinism reconfirmed (identical driverChainId across calls). No new API keys. Advisory/paper only.
 
+agent_communication:
+    -agent: "main"
+    -message: |
+      BACKLOG ENHANCEMENTS (3) shipped + verified:
+      1) Pin Detail Popover (TraderHome EventStrip) — tap a projection pin for time, type, source,
+         affected horizon + plain-English "why it matters"; expected volatility shown QUALITATIVELY
+         (High/Elevated/etc. straight from the calendar — never invented); explicit "timing risk only,
+         no direction" line.
+      2) Driver Alerts — opt-in per horizon (GET/POST /api/v1/albert/driver-alerts/subs), toggle in the
+         Market Drivers header. Detection (_evaluate_driver_alerts) runs on bell poll: fires ONLY on a
+         posture/leader/regime flip that (a) comes from a NEW run, (b) is VERIFIED + confidence>=0.4
+         (freshness gate), (c) persists across 2 distinct runs (hysteresis), with per-run id dedup +
+         committed-state advance. Surfaced in the existing bell as category 'driver'. VERIFIED the full
+         emission path end-to-end by temporarily making the dev run fresh + staging a one-confirmation-away
+         state: alert fired once ("Bearish → Bullish"), dedup held on re-poll; run then restored to stale
+         (alerts correctly gate OFF on stale data). New collections: albert_driver_alert_subs/_state/_alerts.
+      3) Equity Sparkline (TraderHome My-Portfolio) — renders the real stored daily equity curve only at
+         >=7 genuine snapshots; missing days shown as GAPS (segments break), never interpolated.
+      Frontend compiles clean (2505 modules). No new API keys. Determinism intact.
+      NEXT (user-queued specs to implement now): Ask_Albert_Paper_Trading_Bot + Ask_Albert_App_Diagnosis_and_Checkup.
+
+agent_communication:
+    -agent: "main"
+    -message: |
+      TWO NEW SPECS implemented + backend-verified end-to-end (all reuse existing engine data; NO new keys):
+
+      A) App Diagnosis & Checkup (diagnostics-v1.0.0) — deterministic health engine. Runs ~18 structured
+         checks (connectivity/TLS, service liveness+readiness via Mongo ping, auth session, engine+market
+         freshness/completeness from the run, provider health via data_audit, portfolio/mandate sync,
+         explanation service, notifications), maps the WORST failing category to a plain-English cause +
+         confidence (CONFIRMED/LIKELY/POSSIBLE/UNKNOWN) + ONE safe action, then verify. Endpoints:
+         POST /diagnostics/checkups, POST /diagnostics/runs, GET /diagnostics/runs/{id},
+         POST .../actions/{id} (SAFE whitelist only: retry/clear_cache/reconnect/sign_in — never arbitrary
+         or trading-critical), POST .../verify, POST .../reports. New "App Checkup" section + DiagnosticsCheckup.js.
+         Verified: checkup returns outcome/category/confidence, verify returns still_failing on the genuinely
+         stale dev run (honest, deterministic). READS state only; remediation is safe/whitelisted.
+
+      B) Paper-Trading Bot (paper-bot-v1.0.0) — PAPER ONLY, NO exchange keys, NO live orders ever. Modes
+         OBSERVE / APPROVAL_REQUIRED / PAPER_AUTOPILOT. Decisions come from the deterministic SWING
+         market-driver; mandate gates (max 50% alloc, -20% drawdown breaker, flat-vs-held); conservative
+         simulated fills (40bps fee + 5+8bps spread/slippage); append-only ledger with per-account sequence;
+         stale data pauses entries. Endpoints under /api/v1/albert/paper/*: create/list account, dashboard
+         (ticks lazily), PATCH mode, pause/resume/archive, proposals approve/cancel (with fresh revalidation),
+         positions close, trade-log, trades/{id}/evidence. New "Paper Bot" section + PaperTradingBot.js
+         (empty-state mode picker, mode controls, equity summary, proposal review+approve/skip, positions+close,
+         activity ledger, assumptions, Paper-Only badges). VERIFIED full flow by temporarily freshening the
+         run: proposal created (BUY $50k) → approved → simulated fill @ ref+13bps, $200 fee → position →
+         equity/uPnL → manual close (SELL @ ref-13bps, realized -468.62 round-trip cost) → trade-log; run then
+         restored to stale (entries correctly gate off). Test data cleaned up.
+
+      Frontend compiles clean (2521 modules). Determinism intact. Decimal money is simplified to rounded
+      floats-as-strings in paper v1 (noted). Advanced spec pieces deferred for v1: OCO/limit orders,
+      reconciliation jobs, background scheduler (ticks run lazily on dashboard read), multi-asset paper.
+

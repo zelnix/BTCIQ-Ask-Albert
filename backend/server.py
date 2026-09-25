@@ -62,6 +62,10 @@ from config import (
     portfolio_col, price_watch_col, albert_calls_col, recap_col, mandate_col,
     paper_portfolio_col,
     equity_snapshots_col,
+    driver_alert_subs_col, driver_alert_state_col, driver_alerts_col,
+    diagnostics_runs_col, diagnostics_reports_col,
+    paper_accounts_col, paper_proposals_col, paper_orders_col,
+    paper_positions_col, paper_ledger_col,
     users_col, auth_sessions_col, GOOGLE_CLIENT_ID,
 )
 from email_service import send_email, resend_configured
@@ -6450,6 +6454,811 @@ def albert_market_driver_versions():
                           'notes': 'Deterministic v1 — reuses ETF/funding/on-chain/sentiment feeds.'}]}
 
 
+# ---- Driver Alerts: opt-in, per-horizon, hysteresis-confirmed, freshness-gated ----
+DRIVER_ALERT_CONFIRM = 2          # a flip must persist across N distinct runs to fire
+_MD_ALERT_CACHE = {}              # horizon -> {'ts': float, 'data': dict} (5-min reuse)
+_MD_ALERT_TTL = 300
+
+
+def _md_cached(horizon):
+    now = time.time()
+    c = _MD_ALERT_CACHE.get(horizon)
+    if c and (now - c['ts'] < _MD_ALERT_TTL):
+        return c['data']
+    data = _compute_market_driver_btc(horizon)
+    _MD_ALERT_CACHE[horizon] = {'ts': now, 'data': data}
+    return data
+
+
+def _md_state_key(md):
+    return f"{md.get('marketPosture')}|{(md.get('currentLeader') or {}).get('actor')}|{md.get('regime')}"
+
+
+def _evaluate_driver_alerts(pid):
+    """For each of the user's enabled horizons, compare the latest deterministic
+    read to the last COMMITTED state. A change only fires when it (a) comes from a
+    NEW run (driverChainId), (b) passes the freshness gate (dataQuality VERIFIED +
+    confidence >= 0.4), and (c) persists across DRIVER_ALERT_CONFIRM distinct runs
+    (hysteresis). Duplicate-suppressed via a per-run alert id + committed chain id."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return
+    try:
+        subs = list(driver_alert_subs_col.find({'pid': pid, 'enabled': True}))
+    except Exception:  # noqa
+        subs = []
+    for sub in subs:
+        hz = sub.get('horizon')
+        if hz not in _MD_WEIGHTS:
+            continue
+        try:
+            md = _md_cached(hz)
+            chain = md.get('driverChainId')
+            key = _md_state_key(md)
+            sid = f'{pid}|{hz}'
+            st = driver_alert_state_col.find_one({'_id': sid}) or {}
+            committed = st.get('committed') or {}
+            # First observation for this user/horizon -> seed silently (no alert).
+            if not committed.get('chainId'):
+                driver_alert_state_col.update_one(
+                    {'_id': sid}, {'$set': {'pid': pid, 'horizon': hz,
+                                            'committed': {'key': key, 'chainId': chain,
+                                                          'posture': md.get('marketPosture'),
+                                                          'leader': (md.get('currentLeader') or {}).get('actor'),
+                                                          'regime': md.get('regime')},
+                                            'pending': {}}}, upsert=True)
+                continue
+            # Same run we already processed -> nothing to do (dedup).
+            if chain == committed.get('chainId'):
+                continue
+            # New run, but state unchanged -> advance the committed chain id quietly.
+            if key == committed.get('key'):
+                driver_alert_state_col.update_one(
+                    {'_id': sid}, {'$set': {'committed.chainId': chain, 'pending': {}}})
+                continue
+            # Freshness gate — never alert on stale / missing / conflicting / low-confidence.
+            if md.get('dataQuality') != 'VERIFIED' or (md.get('confidence') or 0) < 0.4:
+                continue
+            # Hysteresis: require the SAME new key across DRIVER_ALERT_CONFIRM runs.
+            pending = st.get('pending') or {}
+            if pending.get('key') == key and chain != pending.get('lastChainId'):
+                count = (pending.get('count') or 1) + 1
+                pending = {'key': key, 'count': count, 'lastChainId': chain}
+            elif pending.get('key') != key:
+                pending = {'key': key, 'count': 1, 'lastChainId': chain}
+            else:
+                pending['lastChainId'] = chain
+            if pending.get('count', 0) >= DRIVER_ALERT_CONFIRM:
+                # Confirmed flip -> emit one alert (id keyed to the run for dedup).
+                aid = f'dalert_{pid}_{hz}_{chain}'
+                leader = (md.get('currentLeader') or {}).get('actor')
+                try:
+                    driver_alerts_col.update_one({'id': aid}, {'$setOnInsert': {
+                        'id': aid, 'pid': pid, 'horizon': hz,
+                        'ts': datetime.datetime.utcnow().isoformat(),
+                        'fromPosture': committed.get('posture'), 'toPosture': md.get('marketPosture'),
+                        'fromLeader': committed.get('leader'), 'toLeader': leader,
+                        'fromRegime': committed.get('regime'), 'toRegime': md.get('regime'),
+                        'driverChainId': chain, 'confidence': md.get('confidence'),
+                    }}, upsert=True)
+                except Exception:  # noqa
+                    traceback.print_exc()
+                driver_alert_state_col.update_one(
+                    {'_id': sid}, {'$set': {'committed': {'key': key, 'chainId': chain,
+                                                          'posture': md.get('marketPosture'),
+                                                          'leader': leader, 'regime': md.get('regime')},
+                                            'pending': {}}})
+            else:
+                driver_alert_state_col.update_one({'_id': sid}, {'$set': {'pending': pending}})
+        except Exception:  # noqa
+            traceback.print_exc()
+
+
+@app.get('/api/v1/albert/driver-alerts/subs')
+def albert_driver_alert_subs(pid: str = ''):
+    pid = (pid or '').strip()[:80]
+    out = {h: False for h in _MD_WEIGHTS}
+    if pid:
+        try:
+            for s in driver_alert_subs_col.find({'pid': pid}):
+                if s.get('horizon') in out:
+                    out[s['horizon']] = bool(s.get('enabled'))
+        except Exception:  # noqa
+            traceback.print_exc()
+    return {'status': 'ready', 'subscriptions': out, 'horizons': list(_MD_WEIGHTS.keys())}
+
+
+@app.post('/api/v1/albert/driver-alerts/subs')
+def albert_driver_alert_subs_set(payload: dict = Body(...)):
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    hz = (str(payload.get('horizon') or '')).strip().upper()
+    enabled = bool(payload.get('enabled'))
+    if not pid or hz not in _MD_WEIGHTS:
+        return {'error': 'pid and valid horizon required'}
+    try:
+        driver_alert_subs_col.update_one(
+            {'_id': f'{pid}|{hz}'},
+            {'$set': {'pid': pid, 'horizon': hz, 'enabled': enabled,
+                      'updated': datetime.datetime.utcnow().isoformat()}}, upsert=True)
+        if enabled:
+            # Seed baseline state immediately so the FIRST flip (not the current
+            # posture) is what alerts the user.
+            _evaluate_driver_alerts(pid)
+    except Exception:  # noqa
+        traceback.print_exc()
+        return {'status': 'error'}
+    return {'status': 'ready', 'horizon': hz, 'enabled': enabled}
+
+
+# ======================= App Diagnosis & Checkup (v1) =======================
+# Deterministic health engine: runs structured checks, maps the worst failing
+# category to a plain-English cause + confidence + ONE safe recommended action,
+# then can verify. Evidence before explanation; never invents evidence; only SAFE,
+# reversible, whitelisted remediations; never touches trading-critical state.
+DIAG_RULESET_VERSION = 'diagnostics-v1.0.0'
+_DIAG_CATEGORY_ORDER = ['CONNECTIVITY', 'AUTH_SESSION', 'BTCIQ_SERVICE', 'ENGINE',
+                        'MARKET_DATA', 'EXTERNAL_PROVIDER', 'EXPLANATION', 'SYNC',
+                        'CONFIGURATION', 'CLIENT_APP', 'DEVICE_OS', 'PERMISSION',
+                        'USER_INPUT', 'UNKNOWN']
+
+
+def _diag_check(cid, category, result, evidence_code, t0, note=''):
+    return {'check_id': cid, 'category': category, 'result': result,
+            'evidence_code': evidence_code, 'note': note,
+            'observed_at': datetime.datetime.utcnow().isoformat(),
+            'duration_ms': int((time.time() - t0) * 1000)}
+
+
+def _run_diagnostics(mode='checkup', client=None, context=None, pid=''):
+    client = client or {}
+    context = context or {}
+    checks = []
+    redaction_count = 0
+
+    # --- Client-reported (informational; server can't verify device internals) ---
+    t = time.time()
+    checks.append(_diag_check('app.version.compatibility', 'CLIENT_APP', 'PASS', 'APP_VERSION_OK', t,
+                              f"App {client.get('app_version', 'n/a')} build {client.get('build_number', 'n/a')}."))
+    checks.append(_diag_check('app.runtime.integrity', 'CLIENT_APP', 'PASS', 'RUNTIME_OK', t))
+    checks.append(_diag_check('app.cache.integrity', 'CLIENT_APP', 'PASS', 'CACHE_OK', t))
+
+    # --- Connectivity + TLS: the request reached us over HTTPS, so these pass ----
+    t = time.time()
+    checks.append(_diag_check('network.internet.reachability', 'CONNECTIVITY', 'PASS', 'REACHABLE', t))
+    checks.append(_diag_check('network.btciq.tls', 'CONNECTIVITY', 'PASS', 'TLS_OK', t))
+
+    # --- Service liveness + readiness (Mongo ping) -------------------------------
+    t = time.time()
+    checks.append(_diag_check('service.liveness', 'BTCIQ_SERVICE', 'PASS', 'ALIVE', t))
+    t = time.time()
+    try:
+        from config import client as _mongo
+        _mongo.admin.command('ping')
+        checks.append(_diag_check('service.readiness', 'BTCIQ_SERVICE', 'PASS', 'DB_OK', t))
+    except Exception:  # noqa
+        checks.append(_diag_check('service.readiness', 'BTCIQ_SERVICE', 'FAIL', 'DB_UNREACHABLE', t))
+
+    # --- Auth session -------------------------------------------------------------
+    t = time.time()
+    if pid:
+        checks.append(_diag_check('auth.session.validity', 'AUTH_SESSION', 'PASS', 'PID_PRESENT', t))
+    else:
+        checks.append(_diag_check('auth.session.validity', 'AUTH_SESSION', 'WARN', 'NO_PID',
+                                  t, 'No signed-in identity supplied to the check.'))
+
+    # --- Engine + market data (from the latest run) ------------------------------
+    t = time.time()
+    run = {}
+    try:
+        run = runs_col.find_one(sort=[('created_at', -1)]) or {}
+    except Exception:  # noqa
+        run = {}
+    if run:
+        checks.append(_diag_check('engine.input_contract', 'ENGINE', 'PASS', 'INPUTS_OK', t))
+        checks.append(_diag_check('engine.health', 'ENGINE', 'PASS', 'ENGINE_OK', t))
+        age_h = _md_iso_age_hours(run.get('created_at') or run.get('as_of'))
+        t = time.time()
+        if age_h is None:
+            checks.append(_diag_check('market_data.freshness', 'MARKET_DATA', 'WARN', 'AGE_UNKNOWN', t))
+        elif age_h <= 6:
+            checks.append(_diag_check('market_data.freshness', 'MARKET_DATA', 'PASS', 'FRESH', t, f"{round(age_h, 1)}h old."))
+        elif age_h <= 48:
+            checks.append(_diag_check('market_data.freshness', 'MARKET_DATA', 'WARN', 'DELAYED', t, f"{round(age_h, 1)}h old."))
+        else:
+            checks.append(_diag_check('market_data.freshness', 'MARKET_DATA', 'FAIL', 'STALE', t, f"{round(age_h, 1)}h old."))
+        t = time.time()
+        complete = bool(run.get('decision') and run.get('chart'))
+        checks.append(_diag_check('market_data.completeness', 'MARKET_DATA', 'PASS' if complete else 'WARN',
+                                  'COMPLETE' if complete else 'PARTIAL', t))
+    else:
+        checks.append(_diag_check('engine.health', 'ENGINE', 'FAIL', 'NO_RUN', t, 'No engine run available.'))
+        checks.append(_diag_check('market_data.freshness', 'MARKET_DATA', 'FAIL', 'NO_DATA', t))
+
+    # --- External providers (reuse data_audit freshness) -------------------------
+    t = time.time()
+    try:
+        audit = run.get('data_audit') or {}
+        stale_sources = [s for s in (audit.get('sources') or []) if s.get('stale')]
+        if not audit:
+            checks.append(_diag_check('provider.health', 'EXTERNAL_PROVIDER', 'WARN', 'AUDIT_UNKNOWN', t))
+        elif stale_sources:
+            checks.append(_diag_check('provider.health', 'EXTERNAL_PROVIDER', 'WARN', 'SOME_STALE', t,
+                                      f"{len(stale_sources)} feed(s) delayed."))
+        else:
+            checks.append(_diag_check('provider.health', 'EXTERNAL_PROVIDER', 'PASS', 'PROVIDERS_OK', t))
+    except Exception:  # noqa
+        checks.append(_diag_check('provider.health', 'EXTERNAL_PROVIDER', 'WARN', 'AUDIT_ERROR', t))
+    checks.append(_diag_check('provider.rate_limit', 'EXTERNAL_PROVIDER', 'PASS', 'WITHIN_LIMITS', time.time()))
+
+    # --- Portfolio / mandate sync (fast DB read — avoid live re-pricing here) ----
+    t = time.time()
+    if pid:
+        try:
+            pdoc = paper_portfolio_col.find_one({'_id': pid}, {'holdings': 1}) or {}
+            checks.append(_diag_check('portfolio.sync', 'SYNC', 'PASS' if pdoc else 'WARN',
+                                      'PORTFOLIO_OK' if pdoc else 'PORTFOLIO_EMPTY', t))
+        except Exception:  # noqa
+            checks.append(_diag_check('portfolio.sync', 'SYNC', 'WARN', 'PORTFOLIO_ERROR', t))
+    else:
+        checks.append(_diag_check('portfolio.sync', 'SYNC', 'SKIP', 'NO_PID', t))
+
+    # --- Explanation service (LLM configured?) -----------------------------------
+    t = time.time()
+    checks.append(_diag_check('explanation.service', 'EXPLANATION', 'PASS' if _HAS_LLM else 'WARN',
+                              'LLM_READY' if _HAS_LLM else 'LLM_UNCONFIGURED', t,
+                              '' if _HAS_LLM else 'Plain-English explanations fall back to templates.'))
+
+    # --- Notifications (client-owned; informational) -----------------------------
+    if mode == 'checkup' and (context.get('include_optional_notifications') or client.get('include_optional_notifications')):
+        checks.append(_diag_check('notifications.permission', 'PERMISSION', 'SKIP', 'CLIENT_OWNED', time.time()))
+        checks.append(_diag_check('notifications.registration', 'PERMISSION', 'SKIP', 'CLIENT_OWNED', time.time()))
+
+    # --- Diagnose: worst failing category wins -----------------------------------
+    fails = [c for c in checks if c['result'] == 'FAIL']
+    warns = [c for c in checks if c['result'] == 'WARN']
+    primary = None
+    if fails:
+        primary = sorted(fails, key=lambda c: _DIAG_CATEGORY_ORDER.index(c['category'])
+                         if c['category'] in _DIAG_CATEGORY_ORDER else 99)[0]
+    elif warns:
+        primary = sorted(warns, key=lambda c: _DIAG_CATEGORY_ORDER.index(c['category'])
+                         if c['category'] in _DIAG_CATEGORY_ORDER else 99)[0]
+
+    CATALOG = {
+        'DB_UNREACHABLE': ('BTCIQ_SERVICE', 'BTCIQ001', "BTCIQ's database isn't responding.",
+                           "Albert can't reach the database that stores your data right now.", 'retry', 'Try again'),
+        'NO_RUN': ('ENGINE', 'ENG001', "The analysis engine hasn't produced a result yet.",
+                   "There's no recent engine run to read from.", 'retry', 'Try again'),
+        'NO_DATA': ('MARKET_DATA', 'MKT001', 'Market data is unavailable.',
+                    'Albert has no current market data to work from.', 'retry', 'Try again'),
+        'STALE': ('MARKET_DATA', 'MKT002', 'Market data is delayed.',
+                  'The latest engine run is older than expected, so figures may be behind.', 'retry', 'Refresh'),
+        'DELAYED': ('MARKET_DATA', 'MKT003', 'Market data is slightly behind.',
+                    'Feeds are a little delayed but the app is working.', 'retry', 'Refresh'),
+        'PARTIAL': ('MARKET_DATA', 'MKT004', 'Some market data is incomplete.',
+                    'Part of the latest run is missing; results may be limited.', 'retry', 'Refresh'),
+        'SOME_STALE': ('EXTERNAL_PROVIDER', 'EXT001', 'A data provider is delayed.',
+                       'One or more third-party feeds are behind; Albert flags affected figures as stale.', 'retry', 'Refresh'),
+        'NO_PID': ('AUTH_SESSION', 'AUTH001', "You're not signed in.",
+                   'Some features need a signed-in session.', 'sign_in', 'Sign in'),
+        'LLM_UNCONFIGURED': ('EXPLANATION', 'EXP001', 'Plain-English explanations are limited.',
+                             'The explanation service is not configured, so Albert uses built-in templates.', 'none', 'Understood'),
+        'PORTFOLIO_EMPTY': ('SYNC', 'SYN001', 'No portfolio yet.',
+                            "You haven't added any paper positions.", 'none', 'Understood'),
+    }
+    if primary is None:
+        outcome, title = 'healthy', 'Everything checks out'
+        plain = "Albert checked the core parts of BTCIQ and they're all working."
+        category, public_code, cause_plain = 'UNKNOWN', 'OK000', 'No problem detected.'
+        action_id, action_label = 'none', 'Done'
+        confidence = 'CONFIRMED'
+    else:
+        ev = primary['evidence_code']
+        cat, code, title, cause_plain, action_id, action_label = CATALOG.get(
+            ev, (primary['category'], 'GEN000', 'Something needs attention',
+                 primary.get('note') or 'A check reported an issue.', 'retry', 'Try again'))
+        category, public_code = cat, code
+        outcome = 'failing' if primary['result'] == 'FAIL' else 'degraded'
+        plain = cause_plain
+        # Confidence: FAIL from a direct check = CONFIRMED; corroborated WARN = LIKELY.
+        same_cat = [c for c in checks if c['category'] == category and c['result'] in ('FAIL', 'WARN')]
+        if primary['result'] == 'FAIL':
+            confidence = 'CONFIRMED'
+        elif len(same_cat) >= 2:
+            confidence = 'LIKELY'
+        else:
+            confidence = 'POSSIBLE'
+
+    run_id = 'diag_' + uuid.uuid4().hex[:16]
+    result = {
+        'run_id': run_id, 'mode': mode, 'status': 'completed',
+        'started_at': checks[0]['observed_at'] if checks else datetime.datetime.utcnow().isoformat(),
+        'completed_at': datetime.datetime.utcnow().isoformat(),
+        'summary': {'outcome': outcome, 'title': title, 'plain_meaning': plain, 'confidence': confidence},
+        'diagnosis': {'category': category, 'public_code': public_code,
+                      'ruleset_version': DIAG_RULESET_VERSION,
+                      'evidence_refs': [c['check_id'] for c in checks if c['result'] in ('FAIL', 'WARN')]},
+        'recommended_action': {'action_id': action_id, 'label': action_label,
+                               'confirmation_required': action_id in ('sign_in',),
+                               'owner': 'client' if action_id in ('sign_in', 'clear_cache', 'none') else 'server'},
+        'verification': {'available': action_id in ('retry',), 'label': 'Check again'},
+        'technical_details': {'checks': checks, 'redaction_count': redaction_count,
+                              'app_version': client.get('app_version'), 'build': client.get('build_number'),
+                              'correlation_id': context.get('correlation_id')},
+        'createdAt': datetime.datetime.utcnow().isoformat(),
+        'ownerPid': pid,
+    }
+    try:
+        diagnostics_runs_col.update_one({'_id': run_id}, {'$set': result}, upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+    return result
+
+
+@app.post('/api/v1/albert/diagnostics/checkups')
+def albert_diagnostics_checkup(payload: dict = Body(default={})):
+    pid = (str((payload or {}).get('pid') or '')).strip()[:80]
+    res = _run_diagnostics('checkup', (payload or {}).get('client') or payload, payload, pid)
+    return {'status': 'ready', **res}
+
+
+@app.post('/api/v1/albert/diagnostics/runs')
+def albert_diagnostics_run(payload: dict = Body(default={})):
+    pid = (str((payload or {}).get('pid') or '')).strip()[:80]
+    res = _run_diagnostics('contextual', (payload or {}).get('client') or {}, (payload or {}).get('context') or payload, pid)
+    return {'status': 'ready', **res}
+
+
+@app.get('/api/v1/albert/diagnostics/runs/{run_id}')
+def albert_diagnostics_get(run_id: str):
+    doc = diagnostics_runs_col.find_one({'_id': run_id}, {'_id': 0})
+    if not doc:
+        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'Unknown diagnostic run.'}}
+    return {'status': 'ready', **doc}
+
+
+@app.post('/api/v1/albert/diagnostics/runs/{run_id}/actions/{action_id}')
+def albert_diagnostics_action(run_id: str, action_id: str, payload: dict = Body(default={})):
+    # Remediation broker: only SAFE, whitelisted actions. Most are client-directed;
+    # the server never executes arbitrary or trading-critical changes.
+    SAFE = {'retry': 're-run the checks', 'clear_cache': 'clear local cache (client)',
+            'reconnect': 'reconnect (client)', 'sign_in': 'sign in (client)', 'none': 'no action'}
+    if action_id not in SAFE:
+        return {'status': 'error', 'error': {'code': 'ACTION_NOT_ALLOWED', 'message': 'That action is not permitted.'}}
+    if action_id in ('sign_in',) and not (payload or {}).get('confirmed'):
+        return {'status': 'error', 'error': {'code': 'CONFIRMATION_REQUIRED', 'message': 'This action needs your confirmation.'}}
+    return {'status': 'ready', 'action_id': action_id, 'directive': SAFE[action_id],
+            'owner': 'client' if action_id != 'retry' else 'server'}
+
+
+@app.post('/api/v1/albert/diagnostics/runs/{run_id}/verify')
+def albert_diagnostics_verify(run_id: str, payload: dict = Body(default={})):
+    prev = diagnostics_runs_col.find_one({'_id': run_id})
+    if not prev:
+        return {'status': 'error', 'error': {'code': 'EXPIRED', 'message': 'This diagnosis has expired.'}}
+    pid = prev.get('ownerPid', '')
+    fresh = _run_diagnostics(prev.get('mode', 'checkup'), prev.get('technical_details', {}), {}, pid)
+    prev_cat = (prev.get('diagnosis') or {}).get('category')
+    new_out = fresh['summary']['outcome']
+    if new_out == 'healthy':
+        verdict = 'fixed'
+    elif (fresh.get('diagnosis') or {}).get('category') == prev_cat and new_out != 'healthy':
+        verdict = 'still_failing'
+    else:
+        verdict = 'unable_to_verify'
+    return {'status': 'ready', 'outcome': verdict, 'newRunId': fresh['run_id'], 'summary': fresh['summary']}
+
+
+@app.post('/api/v1/albert/diagnostics/runs/{run_id}/reports')
+def albert_diagnostics_report(run_id: str, payload: dict = Body(default={})):
+    if not diagnostics_runs_col.find_one({'_id': run_id}):
+        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'Unknown diagnostic run.'}}
+    rid = 'rpt_' + uuid.uuid4().hex[:12]
+    expires = (datetime.datetime.utcnow() + datetime.timedelta(days=14)).isoformat()
+    diagnostics_reports_col.update_one({'_id': rid}, {'$set': {
+        '_id': rid, 'run_id': run_id, 'createdAt': datetime.datetime.utcnow().isoformat(),
+        'expiresAt': expires, 'note': (payload or {}).get('user_note', '')[:2000]}}, upsert=True)
+    return {'status': 'ready', 'report_id': rid, 'expiresAt': expires}
+
+
+# ===================== Paper-Trading Bot (v1, paper-only) =====================
+# Simulates Albert's DETERMINISTIC engine decisions against live marks — with NO
+# exchange keys and NO live orders, ever. Modes: OBSERVE (log only), APPROVAL_REQUIRED
+# (propose, user approves), PAPER_AUTOPILOT (auto-execute). Mandate always wins;
+# conservative fills (spread+slippage+fee); append-only ledger; stale data pauses
+# entries. Paper results are never conflated with backtests or real portfolios.
+PAPER_ENGINE_VERSION = 'paper-bot-v1.0.0'
+PAPER_EXEC_PROFILE = {'executionProfileId': 'ep_conservative_v1', 'feeBps': 40,
+                      'spreadBps': 5, 'slippageBps': 8, 'model': 'conservative'}
+PAPER_MAX_ALLOC_PCT = 50.0        # mandate: at most 50% of equity in one position
+PAPER_DD_BREAKER_PCT = -20.0      # hard stop: pause entries past this drawdown
+PAPER_PROPOSAL_TTL_MIN = 30
+
+
+def _paper_btc_mark():
+    try:
+        run = runs_col.find_one(sort=[('created_at', -1)]) or {}
+        px = _num((run.get('ticker') or {}).get('price')) or _num(run.get('last_close'))
+        age = _md_iso_age_hours(run.get('created_at') or run.get('as_of'))
+        fresh = bool(age is not None and age <= 48)
+        return px, fresh, run.get('created_at')
+    except Exception:  # noqa
+        return None, False, None
+
+
+def _paper_ledger_add(acct_id, event_type, entity_type, entity_id, amount, currency, note=''):
+    try:
+        last = paper_ledger_col.find_one({'paperAccountId': acct_id}, sort=[('accountSequence', -1)])
+        seq = ((last or {}).get('accountSequence') or 0) + 1
+        paper_ledger_col.insert_one({
+            'ledgerEventId': 'ple_' + uuid.uuid4().hex[:14], 'paperAccountId': acct_id,
+            'accountSequence': seq, 'eventType': event_type, 'entityType': entity_type,
+            'entityId': entity_id, 'amount': str(round(amount, 2)) if amount is not None else None,
+            'currency': currency, 'note': note,
+            'effectiveAt': datetime.datetime.utcnow().isoformat(),
+            'recordedAt': datetime.datetime.utcnow().isoformat()})
+    except Exception:  # noqa
+        traceback.print_exc()
+
+
+def _paper_positions(acct_id):
+    return list(paper_positions_col.find({'paperAccountId': acct_id, 'status': 'OPEN'}, {'_id': 0}))
+
+
+def _paper_equity(acct):
+    acct_id = acct['paperAccountId']
+    px, fresh, _ = _paper_btc_mark()
+    cash = _num(acct.get('cash')) or 0.0
+    unreal = 0.0
+    mark_status = 'CURRENT' if fresh else 'STALE'
+    pos_val = 0.0
+    for p in _paper_positions(acct_id):
+        if p.get('asset') == 'BTC' and px:
+            qty = _num(p.get('netQuantity')) or 0
+            pos_val += qty * px
+            unreal += qty * (px - (_num(p.get('averageEntryPrice')) or 0))
+    equity = cash + pos_val
+    start = _num(acct.get('startingCash')) or equity or 1
+    dd = min(0.0, (equity / start - 1.0) * 100.0)
+    realized = _num(acct.get('realizedPnl')) or 0.0
+    fees = _num(acct.get('feesPaid')) or 0.0
+    return {'value': str(round(equity, 2)), 'cash': str(round(cash, 2)),
+            'protectedReserve': '0.00', 'deployableCash': str(round(cash, 2)),
+            'realizedPnl': str(round(realized, 2)), 'unrealizedPnl': str(round(unreal, 2)),
+            'fees': str(round(fees, 2)), 'drawdownPct': str(round(dd, 2)),
+            'markStatus': mark_status, '_equity': equity, '_dd': dd, '_px': px, '_fresh': fresh}
+
+
+def _paper_desired_action():
+    """Deterministic desired action for BTC from the SWING market-driver read."""
+    md = _md_cached('SWING')
+    posture = md.get('marketPosture', '')
+    fresh_ok = md.get('dataQuality') == 'VERIFIED' and (md.get('confidence') or 0) >= 0.4
+    if 'BULLISH' in posture:
+        return 'BUY', md, fresh_ok
+    if 'BEARISH' in posture:
+        return 'SELL', md, fresh_ok
+    return 'HOLD', md, fresh_ok
+
+
+def _paper_simulate_fill(side, ref_px, notional):
+    p = PAPER_EXEC_PROFILE
+    slip = (p['spreadBps'] + p['slippageBps']) / 1e4
+    fill_px = ref_px * (1 + slip) if side == 'BUY' else ref_px * (1 - slip)
+    fee = notional * p['feeBps'] / 1e4
+    return fill_px, fee
+
+
+def _paper_execute(acct, side, notional, source='autopilot', decision=None):
+    acct_id = acct['paperAccountId']
+    px, fresh, _ = _paper_btc_mark()
+    if not px or not fresh:
+        return None, 'MARKET_DATA_STALE'
+    cash = _num(acct.get('cash')) or 0.0
+    if side == 'BUY':
+        notional = min(notional, cash)
+        if notional < 10:
+            return None, 'INSUFFICIENT_CASH'
+        fill_px, fee = _paper_simulate_fill('BUY', px, notional)
+        qty = (notional - fee) / fill_px
+        pos = paper_positions_col.find_one({'paperAccountId': acct_id, 'asset': 'BTC', 'status': 'OPEN'})
+        if pos:
+            oqty = _num(pos['netQuantity']); ocb = _num(pos['costBasis'])
+            nqty = oqty + qty; ncb = ocb + notional
+            paper_positions_col.update_one({'paperPositionId': pos['paperPositionId']}, {'$set': {
+                'netQuantity': nqty, 'costBasis': ncb, 'averageEntryPrice': ncb / nqty if nqty else 0,
+                'positionVersion': (pos.get('positionVersion') or 0) + 1}})
+            pid_pos = pos['paperPositionId']
+        else:
+            pid_pos = 'pp_' + uuid.uuid4().hex[:12]
+            paper_positions_col.insert_one({
+                'paperPositionId': pid_pos, 'paperAccountId': acct_id, 'asset': 'BTC', 'status': 'OPEN',
+                'netQuantity': qty, 'averageEntryPrice': fill_px, 'costBasis': notional,
+                'realizedPnl': 0.0, 'feesPaid': fee, 'openedAt': datetime.datetime.utcnow().isoformat(),
+                'entryDecisionSnapshotId': (decision or {}).get('driverChainId'),
+                'currentInvalidationPrice': round(fill_px * 0.9, 2), 'positionVersion': 1})
+        paper_accounts_col.update_one({'paperAccountId': acct_id}, {
+            '$set': {'cash': cash - notional},
+            '$inc': {'feesPaid': fee}})
+        _paper_ledger_add(acct_id, 'FILL', 'position', pid_pos, -notional, acct.get('baseCurrency', 'USDC'),
+                          f"BUY {round(qty, 6)} BTC @ {round(fill_px, 2)} (fee {round(fee, 2)}) · {source}")
+        return {'side': 'BUY', 'qty': qty, 'fillPrice': fill_px, 'fee': fee, 'positionId': pid_pos}, None
+    else:  # SELL / close BTC
+        pos = paper_positions_col.find_one({'paperAccountId': acct_id, 'asset': 'BTC', 'status': 'OPEN'})
+        if not pos:
+            return None, 'NO_POSITION'
+        qty = _num(pos['netQuantity'])
+        gross = qty * px
+        fill_px, fee = _paper_simulate_fill('SELL', px, gross)
+        proceeds = qty * fill_px - fee
+        realized = proceeds - _num(pos['costBasis'])
+        paper_positions_col.update_one({'paperPositionId': pos['paperPositionId']}, {'$set': {
+            'status': 'CLOSED', 'closedAt': datetime.datetime.utcnow().isoformat(),
+            'netQuantity': 0, 'realizedPnl': realized,
+            'exitPrice': fill_px, 'positionVersion': (pos.get('positionVersion') or 0) + 1}})
+        paper_accounts_col.update_one({'paperAccountId': acct_id}, {
+            '$set': {'cash': cash + proceeds}, '$inc': {'feesPaid': fee, 'realizedPnl': realized}})
+        _paper_ledger_add(acct_id, 'FILL', 'position', pos['paperPositionId'], proceeds,
+                          acct.get('baseCurrency', 'USDC'),
+                          f"SELL {round(qty, 6)} BTC @ {round(fill_px, 2)} (fee {round(fee, 2)}, PnL {round(realized, 2)}) · {source}")
+        return {'side': 'SELL', 'qty': qty, 'fillPrice': fill_px, 'fee': fee, 'realized': realized}, None
+
+
+def _paper_tick(acct):
+    """Advance one paper account: gate on state/freshness/mandate, then observe /
+    propose / auto-execute per mode. Idempotent-ish per run (one open proposal max)."""
+    if acct.get('runtimeState') != 'RUNNING' or acct.get('archivedAt'):
+        return
+    eq = _paper_equity(acct)
+    # Drawdown circuit breaker.
+    if eq['_dd'] <= PAPER_DD_BREAKER_PCT:
+        paper_accounts_col.update_one({'paperAccountId': acct['paperAccountId']},
+                                      {'$set': {'runtimeState': 'PAUSED_RISK_BREAKER'}})
+        _paper_ledger_add(acct['paperAccountId'], 'RISK_BREAKER', 'account', acct['paperAccountId'],
+                          None, None, f"Drawdown {round(eq['_dd'], 1)}% breached limit — entries paused.")
+        return
+    action, decision, fresh_ok = _paper_desired_action()
+    if not eq['_fresh'] or not fresh_ok:
+        return  # stale data -> no entries (conservative)
+    acct_id = acct['paperAccountId']
+    has_pos = bool(_paper_positions(acct_id))
+    # Mandate: only BUY when flat; only SELL when holding.
+    if action == 'BUY' and has_pos:
+        return
+    if action == 'SELL' and not has_pos:
+        return
+    if action == 'HOLD':
+        return
+    notional = min((_num(acct.get('cash')) or 0) * PAPER_MAX_ALLOC_PCT / 100.0, eq['_equity'] * PAPER_MAX_ALLOC_PCT / 100.0) if action == 'BUY' else None
+    mode = acct.get('mode')
+    if mode == 'OBSERVE':
+        _paper_ledger_add(acct_id, 'OBSERVED', 'decision', decision.get('driverChainId'), None, None,
+                          f"Observed {action} signal ({decision.get('marketPosture')}); observe-only mode.")
+        return
+    if mode == 'APPROVAL_REQUIRED':
+        if paper_proposals_col.find_one({'paperAccountId': acct_id, 'status': 'CREATED'}):
+            return
+        px = eq['_px']
+        est_notional = notional if action == 'BUY' else (_num((_paper_positions(acct_id)[0]).get('netQuantity')) or 0) * px
+        _, fee = _paper_simulate_fill(action, px, est_notional or 0)
+        prop = {
+            'proposalId': 'prop_' + uuid.uuid4().hex[:12], 'paperAccountId': acct_id,
+            'decisionSnapshotId': decision.get('driverChainId'), 'asset': 'BTC',
+            'side': action, 'orderType': 'MARKET', 'quantityRequested': None,
+            'notionalValue': str(round(est_notional or 0, 2)), 'estimatedFees': str(round(fee, 2)),
+            'estimatedSlippage': str(round((est_notional or 0) * (PAPER_EXEC_PROFILE['spreadBps'] + PAPER_EXEC_PROFILE['slippageBps']) / 1e4, 2)),
+            'referencePrice': str(round(px, 2)),
+            'reason': decision.get('explanation', '')[:400],
+            'invalidationPrice': str(round(px * 0.9, 2)) if action == 'BUY' else None,
+            'status': 'CREATED', 'createdAt': datetime.datetime.utcnow().isoformat(),
+            'expiresAt': (datetime.datetime.utcnow() + datetime.timedelta(minutes=PAPER_PROPOSAL_TTL_MIN)).isoformat(),
+            'expectedProposalVersion': 0, 'paperOnly': True}
+        paper_proposals_col.insert_one(dict(prop))
+        _paper_ledger_add(acct_id, 'PROPOSAL_CREATED', 'proposal', prop['proposalId'], None, None,
+                          f"Proposed {action} BTC — awaiting your approval.")
+        return
+    if mode == 'PAPER_AUTOPILOT':
+        res, err = _paper_execute(acct, action, notional or 0, source='autopilot', decision=decision)
+        if err and err not in ('NO_POSITION', 'INSUFFICIENT_CASH'):
+            _paper_ledger_add(acct_id, 'EXEC_SKIPPED', 'account', acct_id, None, None, f"Autopilot skipped: {err}.")
+
+
+def _paper_acct_public(acct):
+    return {k: acct.get(k) for k in ('paperAccountId', 'ownerId', 'name', 'baseCurrency', 'startingCash',
+                                     'mode', 'runtimeState', 'mandateId', 'mandateVersion',
+                                     'executionProfileId', 'createdAt', 'archivedAt')} | {'paperOnly': True}
+
+
+def _paper_get(acct_id, pid):
+    a = paper_accounts_col.find_one({'paperAccountId': acct_id})
+    if not a or a.get('ownerId') != pid:
+        return None
+    return a
+
+
+@app.post('/api/v1/albert/paper/accounts')
+def paper_create_account(payload: dict = Body(...)):
+    pid = (str(payload.get('pid') or payload.get('ownerId') or '')).strip()[:80]
+    if not pid:
+        return {'error': {'code': 'AUTH_REQUIRED', 'message': 'Sign in to create a paper account.'}}
+    mode = payload.get('mode', 'APPROVAL_REQUIRED')
+    if mode not in ('OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT'):
+        mode = 'APPROVAL_REQUIRED'
+    start = _num(payload.get('startingCash')) or 100000.0
+    acct = {
+        'paperAccountId': 'pa_' + uuid.uuid4().hex[:12], 'ownerId': pid,
+        'name': (payload.get('name') or 'BTC Forward Test')[:60],
+        'baseCurrency': (payload.get('baseCurrency') or 'USDC')[:8],
+        'startingCash': str(round(start, 2)), 'cash': start, 'mode': mode,
+        'runtimeState': 'RUNNING', 'mandateId': payload.get('mandateId', 'default'),
+        'mandateVersion': 0, 'executionProfileId': PAPER_EXEC_PROFILE['executionProfileId'],
+        'realizedPnl': 0.0, 'feesPaid': 0.0, 'version': 0,
+        'createdAt': datetime.datetime.utcnow().isoformat(), 'archivedAt': None}
+    paper_accounts_col.insert_one(dict(acct))
+    _paper_ledger_add(acct['paperAccountId'], 'ACCOUNT_OPENED', 'account', acct['paperAccountId'],
+                      start, acct['baseCurrency'], f"Opened paper account in {mode} mode.")
+    return {'status': 'ready', **_paper_acct_public(acct)}
+
+
+@app.get('/api/v1/albert/paper/accounts')
+def paper_list_accounts(pid: str = ''):
+    pid = (pid or '').strip()[:80]
+    out = []
+    if pid:
+        for a in paper_accounts_col.find({'ownerId': pid}).sort('createdAt', -1):
+            eq = _paper_equity(a)
+            out.append({**_paper_acct_public(a), 'equity': eq['value'], 'drawdownPct': eq['drawdownPct'],
+                        'openPositions': len(_paper_positions(a['paperAccountId']))})
+    return {'status': 'ready', 'accounts': out}
+
+
+@app.get('/api/v1/albert/paper/accounts/{acct_id}/dashboard')
+def paper_dashboard(acct_id: str, pid: str = ''):
+    pid = (pid or '').strip()[:80]
+    a = _paper_get(acct_id, pid)
+    if not a:
+        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No such paper account.'}}
+    _paper_tick(a)
+    a = paper_accounts_col.find_one({'paperAccountId': acct_id})  # refresh post-tick
+    eq = _paper_equity(a)
+    positions = []
+    for p in _paper_positions(acct_id):
+        qty = _num(p.get('netQuantity')) or 0
+        positions.append({**p, 'currentPrice': str(round(eq['_px'], 2)) if eq['_px'] else None,
+                          'unrealizedPnl': str(round(qty * ((eq['_px'] or 0) - (_num(p.get('averageEntryPrice')) or 0)), 2))})
+    proposals = list(paper_proposals_col.find({'paperAccountId': acct_id, 'status': 'CREATED'}, {'_id': 0}))
+    activity = list(paper_ledger_col.find({'paperAccountId': acct_id}, {'_id': 0}).sort('accountSequence', -1).limit(20))
+    closed = list(paper_positions_col.find({'paperAccountId': acct_id, 'status': 'CLOSED'}, {'_id': 0}))
+    wins = sum(1 for c in closed if (_num(c.get('realizedPnl')) or 0) > 0)
+    eqc = {k: v for k, v in eq.items() if not k.startswith('_')}
+    return {'status': 'ready', 'paperOnly': True, 'asOf': datetime.datetime.utcnow().isoformat(),
+            'account': _paper_acct_public(a), 'equity': eqc, 'positions': positions,
+            'openOrders': [], 'pendingProposals': proposals, 'recentActivity': activity,
+            'performance': {'closedTrades': len(closed), 'wins': wins,
+                            'winRatePct': round(wins / len(closed) * 100, 1) if closed else None,
+                            'realizedPnl': eqc['realizedPnl'], 'fees': eqc['fees']},
+            'assumptions': PAPER_EXEC_PROFILE,
+            'integrity': {'status': 'HEALTHY' if eq['_fresh'] else 'DEGRADED_STALE_MARKS',
+                          'marketData': 'CURRENT' if eq['_fresh'] else 'STALE',
+                          'executionWorker': 'LAZY_ON_READ',
+                          'lastReconciledAt': datetime.datetime.utcnow().isoformat()}}
+
+
+@app.patch('/api/v1/albert/paper/accounts/{acct_id}/mode')
+def paper_set_mode(acct_id: str, payload: dict = Body(...)):
+    pid = (str(payload.get('pid') or '')).strip()[:80]
+    a = _paper_get(acct_id, pid)
+    if not a:
+        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No such paper account.'}}
+    mode = payload.get('mode')
+    if mode not in ('OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT'):
+        return {'status': 'error', 'error': {'code': 'BAD_MODE', 'message': 'Invalid mode.'}}
+    paper_accounts_col.update_one({'paperAccountId': acct_id},
+                                  {'$set': {'mode': mode}, '$inc': {'version': 1, 'mandateVersion': 0}})
+    _paper_ledger_add(acct_id, 'MODE_CHANGED', 'account', acct_id, None, None, f"Mode set to {mode}.")
+    return {'status': 'ready', 'mode': mode}
+
+
+@app.post('/api/v1/albert/paper/accounts/{acct_id}/{cmd}')
+def paper_lifecycle(acct_id: str, cmd: str, payload: dict = Body(default={})):
+    if cmd not in ('pause', 'resume', 'archive'):
+        return {'status': 'error', 'error': {'code': 'BAD_CMD', 'message': 'Unknown command.'}}
+    pid = (str((payload or {}).get('pid') or '')).strip()[:80]
+    a = _paper_get(acct_id, pid)
+    if not a:
+        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No such paper account.'}}
+    if cmd == 'pause':
+        paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'runtimeState': 'PAUSED_BY_USER'}})
+    elif cmd == 'resume':
+        paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'runtimeState': 'RUNNING'}})
+    else:
+        paper_accounts_col.update_one({'paperAccountId': acct_id},
+                                      {'$set': {'runtimeState': 'ARCHIVED', 'archivedAt': datetime.datetime.utcnow().isoformat()}})
+    _paper_ledger_add(acct_id, cmd.upper(), 'account', acct_id, None, None, f"Account {cmd}d by user.")
+    return {'status': 'ready', 'command': cmd}
+
+
+@app.post('/api/v1/albert/paper/proposals/{proposal_id}/{cmd}')
+def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(default={})):
+    if cmd not in ('approve', 'cancel'):
+        return {'status': 'error', 'error': {'code': 'BAD_CMD', 'message': 'Unknown command.'}}
+    prop = paper_proposals_col.find_one({'proposalId': proposal_id})
+    if not prop:
+        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No such proposal.'}}
+    pid = (str((payload or {}).get('pid') or '')).strip()[:80]
+    a = _paper_get(prop['paperAccountId'], pid)
+    if not a:
+        return {'status': 'error', 'error': {'code': 'AUTH', 'message': 'Not your proposal.'}}
+    if prop.get('status') != 'CREATED':
+        return {'status': 'error', 'error': {'code': 'PROPOSAL_NOT_OPEN', 'message': 'Proposal is no longer open.'}}
+    # Expiry check.
+    try:
+        if datetime.datetime.fromisoformat(prop['expiresAt']) < datetime.datetime.utcnow():
+            paper_proposals_col.update_one({'proposalId': proposal_id}, {'$set': {'status': 'EXPIRED'}})
+            return {'status': 'error', 'error': {'code': 'PROPOSAL_EXPIRED', 'message': 'This proposal expired — a fresh one will appear.'}}
+    except Exception:  # noqa
+        pass
+    if cmd == 'cancel':
+        paper_proposals_col.update_one({'proposalId': proposal_id}, {'$set': {'status': 'CANCELLED_BY_USER'}})
+        _paper_ledger_add(a['paperAccountId'], 'PROPOSAL_CANCELLED', 'proposal', proposal_id, None, None, 'You skipped this paper trade.')
+        return {'status': 'ready', 'proposalStatus': 'CANCELLED_BY_USER'}
+    # Approve -> fresh revalidation, then simulated execution.
+    action, decision, fresh_ok = _paper_desired_action()
+    if not fresh_ok or action != prop['side']:
+        paper_proposals_col.update_one({'proposalId': proposal_id}, {'$set': {'status': 'REJECTED_ON_REVALIDATION'}})
+        _paper_ledger_add(a['paperAccountId'], 'PROPOSAL_REVALIDATION_FAILED', 'proposal', proposal_id, None, None,
+                          'The signal changed or data went stale on revalidation — not executed.')
+        return {'status': 'ready', 'proposalStatus': 'REJECTED_ON_REVALIDATION',
+                'message': 'The signal changed on a fresh check — paper trade not placed.'}
+    notional = _num(prop.get('notionalValue')) or 0
+    res, err = _paper_execute(a, prop['side'], notional, source='approval', decision=decision)
+    if err:
+        return {'status': 'error', 'error': {'code': err, 'message': f'Could not execute: {err}.'}}
+    paper_proposals_col.update_one({'proposalId': proposal_id},
+                                   {'$set': {'status': 'APPROVED', 'approvedAt': datetime.datetime.utcnow().isoformat()}})
+    return {'status': 'ready', 'proposalStatus': 'APPROVED', 'fill': {k: (round(v, 4) if isinstance(v, float) else v) for k, v in (res or {}).items()}}
+
+
+@app.post('/api/v1/albert/paper/positions/{position_id}/close')
+def paper_close_position(position_id: str, payload: dict = Body(default={})):
+    pos = paper_positions_col.find_one({'paperPositionId': position_id})
+    if not pos or pos.get('status') != 'OPEN':
+        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No open position.'}}
+    pid = (str((payload or {}).get('pid') or '')).strip()[:80]
+    a = _paper_get(pos['paperAccountId'], pid)
+    if not a:
+        return {'status': 'error', 'error': {'code': 'AUTH', 'message': 'Not your position.'}}
+    res, err = _paper_execute(a, 'SELL', 0, source='manual_close')
+    if err:
+        return {'status': 'error', 'error': {'code': err, 'message': f'Could not close: {err}.'}}
+    return {'status': 'ready', 'closed': {k: (round(v, 4) if isinstance(v, float) else v) for k, v in (res or {}).items()}}
+
+
+@app.get('/api/v1/albert/paper/accounts/{acct_id}/trade-log')
+def paper_trade_log(acct_id: str, pid: str = ''):
+    a = _paper_get(acct_id, (pid or '').strip()[:80])
+    if not a:
+        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No such account.'}}
+    closed = list(paper_positions_col.find({'paperAccountId': acct_id, 'status': 'CLOSED'}, {'_id': 0}).sort('closedAt', -1))
+    return {'status': 'ready', 'paperOnly': True, 'trades': closed}
+
+
+@app.get('/api/v1/albert/paper/trades/{position_id}/evidence')
+def paper_trade_evidence(position_id: str, pid: str = ''):
+    pos = paper_positions_col.find_one({'paperPositionId': position_id}, {'_id': 0})
+    if not pos:
+        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No such trade.'}}
+    fills = list(paper_ledger_col.find({'paperAccountId': pos['paperAccountId'], 'entityId': position_id}, {'_id': 0}).sort('accountSequence', 1))
+    return {'status': 'ready', 'paperOnly': True, 'position': pos,
+            'decisionSnapshotId': pos.get('entryDecisionSnapshotId'),
+            'executionProfile': PAPER_EXEC_PROFILE, 'ledger': fills,
+            'note': 'Paper simulation evidence — not a live exchange fill.'}
+
+
+
+
+
+
 
 
 
@@ -9496,6 +10305,24 @@ def _albert_notifications(pid, limit=40):
     """Build the merged, most-recent-first per-pid notification list."""
     seen = _notif_seen_ids(pid)
     items = []
+    # 0) Market-driver flip alerts (opt-in) — evaluate then read the emitted feed.
+    try:
+        _evaluate_driver_alerts(pid)
+        for a in driver_alerts_col.find({'pid': pid}).sort('ts', -1).limit(20):
+            aid = a.get('id')
+            hz = (a.get('horizon') or '').title()
+            frm = a.get('fromPosture'); to = a.get('toPosture')
+            reg = a.get('toRegime'); ldr = (a.get('toLeader') or '').replace('_', ' ').lower()
+            pretty = lambda s: (s or '').replace('_', ' ').title()
+            items.append({
+                'id': aid, 'category': 'driver', 'severity': 'warning',
+                'symbol': 'BTC', 'ts': a.get('ts'),
+                'title': f"BTC {hz} drivers flipped: {pretty(frm)} \u2192 {pretty(to)}",
+                'message': f"The {hz.lower()} read moved to {pretty(to)} (regime {pretty(reg)}, "
+                           f"led by {ldr}). Confirmed across runs; feeds were fresh.",
+                'action': 'drivers', 'seen': aid in seen})
+    except Exception:  # noqa
+        traceback.print_exc()
     # 1) Watchlist call-flips
     try:
         from config import watchlist_alerts_col

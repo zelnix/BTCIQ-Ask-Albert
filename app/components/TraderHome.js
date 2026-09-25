@@ -85,6 +85,7 @@ function ProjectionCone({ projection, symbol, selected, onSelect }) {
 }
 
 function EventStrip({ projection, horizonDays }) {
+  const [sel, setSel] = React.useState(null);
   const pins = (projection?.eventPins || []).filter((p) => p.daysUntil != null && (horizonDays == null || p.daysUntil <= horizonDays));
   if (projection && projection.eventsAvailable === false) {
     return <p className="mt-2 text-[10px] text-slate-500">Event calendar unavailable.</p>;
@@ -92,6 +93,17 @@ function EventStrip({ projection, horizonDays }) {
   if (!pins.length) return null;
   const span = Math.max(1, horizonDays || Math.max(...pins.map((p) => p.daysUntil)));
   const typeTone = (t) => (t === 'Macro' ? 'bg-sky-400' : t === 'Derivatives' ? 'bg-violet-400' : 'bg-slate-400');
+  // Plain-English "why it matters" — qualitative only, never an invented number.
+  const significance = (p) => {
+    const t = (p.title || '').toLowerCase();
+    if (t.includes('fomc') || t.includes('rate decision')) return 'The Fed sets interest-rate policy — a big driver of risk appetite and liquidity. Surprises tend to move crypto sharply.';
+    if (t.includes('cpi') || t.includes('inflation')) return 'Inflation data steers rate expectations. A hot or cool print can swing rate-cut odds and, with them, crypto.';
+    if (t.includes('pce')) return 'The Fed’s preferred inflation gauge — feeds directly into rate-path expectations.';
+    if (t.includes('payroll') || t.includes('employment') || t.includes('jobs')) return 'Jobs data shapes how fast the Fed can ease. Strong or weak numbers ripple into risk assets.';
+    if (t.includes('gdp')) return 'Growth data frames the macro backdrop and the odds of policy easing or tightening.';
+    if (t.includes('expiry') || t.includes('roll')) return 'Large futures/options expiries can cluster hedging and positioning flows, raising short-term whippiness.';
+    return 'A scheduled event that historically clusters volatility around its release. Timing risk only.';
+  };
   return (
     <div className="mt-3">
       <p className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500"><Flag className="h-3 w-3" />Timing risk (scheduled events — not direction)</p>
@@ -99,21 +111,43 @@ function EventStrip({ projection, horizonDays }) {
         <div className="absolute left-0 right-0 top-3 h-px bg-slate-800" />
         {pins.map((p, i) => {
           const left = Math.max(0, Math.min(100, (p.daysUntil / span) * 100));
+          const on = sel && sel.title === p.title && sel.date === p.date;
           return (
-            <div key={i} className="absolute -translate-x-1/2" style={{ left: `${left}%`, top: 0 }} title={`${p.title} · ${p.date} · ${p.importance || ''} ${p.expectedVolatility ? '· vol ' + p.expectedVolatility : ''} · ${p.source}`}>
-              <span className={`block h-3 w-3 rotate-45 rounded-sm ${typeTone(p.type)}`} />
-            </div>
+            <button key={i} onClick={() => setSel(on ? null : p)} className="absolute -translate-x-1/2" style={{ left: `${left}%`, top: 0 }} title={`${p.title} · ${p.date}`}>
+              <span className={`block h-3 w-3 rotate-45 rounded-sm ${typeTone(p.type)} ${on ? 'ring-2 ring-white/70' : ''}`} />
+            </button>
           );
         })}
       </div>
       <div className="flex flex-wrap gap-1.5">
-        {pins.slice(0, 6).map((p, i) => (
-          <span key={i} className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950/60 px-1.5 py-0.5 text-[9.5px] text-slate-400">
-            <span className={`h-1.5 w-1.5 rotate-45 ${typeTone(p.type)}`} />
-            {p.title.replace(/\s*\(approx\.\)/i, '')} · {p.daysUntil}d
-          </span>
-        ))}
+        {pins.slice(0, 6).map((p, i) => {
+          const on = sel && sel.title === p.title && sel.date === p.date;
+          return (
+            <button key={i} onClick={() => setSel(on ? null : p)}
+              className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[9.5px] ${on ? 'border-slate-500 bg-slate-800 text-slate-200' : 'border-slate-800 bg-slate-950/60 text-slate-400 hover:text-slate-200'}`}>
+              <span className={`h-1.5 w-1.5 rotate-45 ${typeTone(p.type)}`} />
+              {p.title.replace(/\s*\(approx\.\)/i, '')} · {p.daysUntil}d
+            </button>
+          );
+        })}
       </div>
+      {sel && (
+        <div className="mt-2 rounded-xl border border-slate-700 bg-slate-950/80 p-3">
+          <div className="mb-1 flex items-start justify-between gap-2">
+            <div>
+              <p className="flex items-center gap-1.5 text-[13px] font-bold text-white"><span className={`h-2 w-2 rotate-45 ${typeTone(sel.type)}`} />{sel.title.replace(/\s*\(approx\.\)/i, '')}</p>
+              <p className="text-[10.5px] text-slate-500">{sel.type} · {sel.date}{sel.daysUntil != null ? ` · in ${sel.daysUntil}d` : ''} · affects {sel.affectedHorizon}</p>
+            </div>
+            <button onClick={() => setSel(null)} className="text-[11px] text-slate-500 hover:text-slate-300">✕</button>
+          </div>
+          <p className="text-[11.5px] leading-relaxed text-slate-300">{significance(sel)}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-slate-500">
+            {sel.expectedVolatility && <span>Expected volatility: <b className="text-amber-300">{sel.expectedVolatility}</b> (qualitative)</span>}
+            {sel.importance && <span>Importance: <b className="text-slate-300">{sel.importance}</b></span>}
+          </div>
+          <p className="mt-1.5 text-[9.5px] text-slate-600">Source: {sel.source}. Timing risk only — this pin implies no bullish or bearish direction.</p>
+        </div>
+      )}
     </div>
   );
 }
@@ -224,6 +258,41 @@ function DualSpark({ a, b }) {
   );
 }
 
+function EquitySparkline({ series }) {
+  // Genuine daily equity curve. Only shown with >=7 real observations; missing days
+  // render as GAPS (segments break) — never interpolated.
+  const pts = (series || []).filter((p) => p && p.date && p.value != null);
+  if (pts.length < 7) return null;
+  const day = (d) => Math.floor(new Date(d + 'T00:00:00Z').getTime() / 86400000);
+  const d0 = day(pts[0].date);
+  const totalDays = Math.max(1, day(pts[pts.length - 1].date) - d0);
+  const vals = pts.map((p) => p.value);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const W = 520, H = 110, pad = 6;
+  const xOf = (d) => pad + (W - 2 * pad) * ((day(d) - d0) / totalDays);
+  const yOf = (v) => pad + (H - 2 * pad) * (1 - (v - lo) / (hi - lo || 1));
+  const segs = [];
+  let cur = [];
+  for (let i = 0; i < pts.length; i++) {
+    if (i > 0 && day(pts[i].date) - day(pts[i - 1].date) > 1) { if (cur.length) segs.push(cur); cur = []; }
+    cur.push(pts[i]);
+  }
+  if (cur.length) segs.push(cur);
+  const path = (seg) => seg.map((p, i) => `${i === 0 ? 'M' : 'L'}${xOf(p.date).toFixed(1)},${yOf(p.value).toFixed(1)}`).join(' ');
+  const hasGaps = segs.length > 1;
+  return (
+    <div className="mt-3">
+      <p className="mb-1 text-[10px] uppercase tracking-wide text-slate-500">Equity curve ({pts.length} days{hasGaps ? ' · gaps shown, not filled' : ''})</p>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 120 }}>
+        {segs.map((seg, i) => (seg.length > 1
+          ? <path key={i} d={path(seg)} fill="none" stroke="#38bdf8" strokeWidth="2" />
+          : <circle key={i} cx={xOf(seg[0].date)} cy={yOf(seg[0].value)} r="2" fill="#38bdf8" />))}
+      </svg>
+    </div>
+  );
+}
+
+
 function Kpi({ label, value, sub, tone }) {
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2">
@@ -309,6 +378,7 @@ function PerformancePanel({ symbol, open, onToggle, highlight }) {
                       <Kpi label={`${symbol} buy & hold`} value={fmtPct(d.benchmark?.returnPct)} sub="window ref" tone={pctColor(d.benchmark?.returnPct)} />
                       {pv.historyFrom && <Kpi label="Equity history" value={`${pv.historySampleCount || 0} days`} sub={`${pv.historyFrom} →`} />}
                     </div>
+                    <EquitySparkline series={pv.equitySeries} />
                     {(pv.allocation || []).length > 0 && (
                       <div className="mt-3">
                         <p className="mb-1.5 text-[10px] uppercase tracking-wide text-slate-500">Allocation</p>

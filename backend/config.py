@@ -180,6 +180,38 @@ try:
 except Exception:  # noqa
     pass
 
+# Market-Driver alerts — opt-in, per horizon. Subscriptions + last-committed state
+# (for hysteresis / duplicate suppression) + the emitted alert feed for the bell.
+driver_alert_subs_col = db['albert_driver_alert_subs']    # {_id:'<pid>|<hz>', pid, horizon, enabled}
+driver_alert_state_col = db['albert_driver_alert_state']  # {_id:'<pid>|<hz>', committed{}, pending{}}
+driver_alerts_col = db['albert_driver_alerts']            # emitted alerts (bell feed)
+try:
+    driver_alerts_col.create_index([('pid', 1), ('ts', -1)])
+    driver_alerts_col.create_index([('id', 1)], unique=True)
+except Exception:  # noqa
+    pass
+
+# App Diagnosis & Checkup — deterministic health runs + shareable support reports.
+diagnostics_runs_col = db['albert_diagnostics_runs']      # {_id: run_id, ...full result}
+diagnostics_reports_col = db['albert_diagnostics_reports']  # {_id: report_id, run_id, expiresAt}
+try:
+    diagnostics_runs_col.create_index([('createdAt', -1)])
+except Exception:  # noqa
+    pass
+
+# Paper-Trading Bot (paper-only; NO exchange keys, NO live orders ever).
+paper_accounts_col = db['albert_paper_accounts']
+paper_proposals_col = db['albert_paper_proposals']
+paper_orders_col = db['albert_paper_orders']
+paper_positions_col = db['albert_paper_positions']
+paper_ledger_col = db['albert_paper_ledger']
+try:
+    paper_accounts_col.create_index([('ownerId', 1), ('createdAt', -1)])
+    paper_proposals_col.create_index([('paperAccountId', 1), ('status', 1)])
+    paper_ledger_col.create_index([('paperAccountId', 1), ('accountSequence', 1)], unique=True)
+except Exception:  # noqa
+    pass
+
 # Ask-Albert chat persistence — one conversation per user (pid), stored so it
 # survives navigation/expand and follows the user across devices.
 # Doc: {_id: pid, sessionId, messages: [...], updatedAt}.

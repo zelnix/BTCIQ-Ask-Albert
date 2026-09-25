@@ -6,11 +6,11 @@
 // continuation & failure conditions, a data-quality indicator, and an on-demand
 // evidence trace. Honest about observed vs inferred. Advisory / paper only.
 import React from 'react';
-import { API_BASE } from '../lib/api';
+import { API_BASE, getPid } from '../lib/api';
 import {
   Loader2, TrendingUp, TrendingDown, Minus, Users, Crown, Flag, CheckCircle2,
   ShieldAlert, ArrowRightCircle, Activity, Gauge, ChevronDown, Info, AlertTriangle,
-  Database, Radar, MessageCircle,
+  Database, Radar, MessageCircle, Bell, BellRing,
 } from 'lucide-react';
 
 const HORIZONS = ['INTRADAY', 'SWING', 'CYCLE'];
@@ -173,6 +173,8 @@ function TracePanel({ horizon }) {
 export default function MarketDrivers({ horizon = 'SWING', onHorizon }) {
   const [d, setD] = React.useState(null);
   const [err, setErr] = React.useState(false);
+  const [subs, setSubs] = React.useState(null);
+  const [subBusy, setSubBusy] = React.useState(false);
   const hz = HORIZONS.includes(horizon) ? horizon : 'SWING';
 
   React.useEffect(() => {
@@ -184,6 +186,29 @@ export default function MarketDrivers({ horizon = 'SWING', onHorizon }) {
       .catch(() => { if (alive) setErr(true); });
     return () => { alive = false; };
   }, [hz]);
+
+  React.useEffect(() => {
+    const pid = getPid();
+    if (!pid) return;
+    fetch(`${API_BASE}/v1/albert/driver-alerts/subs?pid=${encodeURIComponent(pid)}`, { cache: 'no-store' })
+      .then((r) => r.json()).then((j) => setSubs(j.subscriptions || {})).catch(() => {});
+  }, []);
+
+  const alertsOn = subs ? !!subs[hz] : false;
+  const toggleAlert = async () => {
+    const pid = getPid();
+    if (!pid || subBusy) return;
+    setSubBusy(true);
+    const next = !alertsOn;
+    setSubs((s) => ({ ...(s || {}), [hz]: next }));
+    try {
+      await fetch(`${API_BASE}/v1/albert/driver-alerts/subs`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pid, horizon: hz, enabled: next }),
+      });
+    } catch (e) { setSubs((s) => ({ ...(s || {}), [hz]: !next })); }
+    setSubBusy(false);
+  };
 
   const tone = d ? postureTone(d.marketPosture) : postureTone('');
   const Tone = tone.Icon;
@@ -199,11 +224,21 @@ export default function MarketDrivers({ horizon = 'SWING', onHorizon }) {
           <h2 className="flex items-center gap-2 text-xl font-bold text-white"><Users className="h-5 w-5 text-sky-300" />Market Drivers</h2>
           <p className="mt-0.5 text-[12px] text-slate-400">Who is actually moving Bitcoin — and who could rotate in next.</p>
         </div>
-        <div className="inline-flex rounded-lg border border-slate-800 bg-slate-900/60 p-0.5 text-[11px]">
-          {HORIZONS.map((h) => (
-            <button key={h} onClick={() => onHorizon && onHorizon(h)}
-              className={`rounded-md px-3 py-1.5 font-semibold ${h === hz ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200'}`}>{humanize(h)}</button>
-          ))}
+        <div className="flex items-center gap-2">
+          {subs && (
+            <button onClick={toggleAlert} disabled={subBusy}
+              title={alertsOn ? `Alerts on for ${humanize(hz)} flips` : `Get alerted when the ${humanize(hz)} read flips`}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition-colors ${alertsOn ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-900/60 text-slate-400 hover:text-slate-200'}`}>
+              {alertsOn ? <BellRing className="h-3.5 w-3.5" /> : <Bell className="h-3.5 w-3.5" />}
+              {alertsOn ? 'Alerts on' : 'Alert me'}
+            </button>
+          )}
+          <div className="inline-flex rounded-lg border border-slate-800 bg-slate-900/60 p-0.5 text-[11px]">
+            {HORIZONS.map((h) => (
+              <button key={h} onClick={() => onHorizon && onHorizon(h)}
+                className={`rounded-md px-3 py-1.5 font-semibold ${h === hz ? 'bg-sky-500/20 text-sky-200' : 'text-slate-400 hover:text-slate-200'}`}>{humanize(h)}</button>
+            ))}
+          </div>
         </div>
       </div>
 

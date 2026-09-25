@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, Target, Scale, BarChart3, Globe, History, Waves, Fish, Landmark,
   Gauge, Newspaper, ShieldAlert, CalendarClock, Trophy, MessageCircle, Bell, Activity,
-  Database, Cpu, ShieldCheck, Sparkles, CandlestickChart, ClipboardList, Info, Crosshair, Radar, Users,
+  Database, Cpu, ShieldCheck, Sparkles, CandlestickChart, ClipboardList, Info, Crosshair, Radar, Users, Stethoscope, FlaskConical,
 } from 'lucide-react';
 
 const SECTIONS = [
@@ -55,6 +55,10 @@ const SECTIONS = [
     blurb: 'Where every number comes from and how much to trust it. A trust-scored composite Bitcoin price (median of Coinbase, Kraken, OKX, CoinGecko with outlier detection), broader cross-asset context, global news tone (GDELT) and US macro (FRED) — each tagged HIGH / MEDIUM / LOW confidence. No fabricated data.' },
   { id: 'settings', label: 'Settings', icon: Cpu,
     blurb: 'Admin passcode for manual forecast runs, plus Ask Albert’s about & compliance information. (Live data-source status now lives in the Admin screen.)' },
+  { id: 'paper', label: 'Paper Bot', icon: FlaskConical,
+    blurb: 'Forward-test Albert’s engine with virtual money — no exchange keys, no real orders. Choose Observe, Ask-me-first or Autopilot; review and approve paper trades; watch simulated fills, positions, equity and an honest activity ledger. Paper results are never mixed with backtests or your real portfolio.' },
+  { id: 'checkup', label: 'App Checkup', icon: Stethoscope,
+    blurb: 'Not sure if something is broken? Albert checks the parts of BTCIQ needed for the app to work — connectivity, services, market-data freshness, the engine and your session — then explains in plain English what (if anything) is wrong, how confident he is, and the single best next step. Reads health only; never changes your data.' },
   { id: 'admin', label: 'Admin', icon: ShieldCheck,
     blurb: 'Integrations, data-source freshness, usage, costs and system health for the Ask Albert platform.' },
 ];

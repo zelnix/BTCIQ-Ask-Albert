@@ -45,6 +45,8 @@ import WeeklyRecap from './components/WeeklyRecap';
 import { WeeklyBriefCard } from './components/WeeklyBrief';
 import TraderHome from './components/TraderHome';
 import MarketDrivers from './components/MarketDrivers';
+import DiagnosticsCheckup from './components/DiagnosticsCheckup';
+import PaperTradingBot from './components/PaperTradingBot';
 
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
@@ -3630,6 +3632,8 @@ export default function DashboardPage() {
     if (active === 'forecasts') return <ForecastsHubSection d={d} />;
     if (active === 'market-intel') return <MarketIntelligenceSection d={d} />;
     if (active === 'drivers') return <MarketDrivers horizon={homeParams.mdHorizon} onHorizon={(h) => setHomeParams((p) => ({ ...p, mdHorizon: h }))} />;
+    if (active === 'checkup') return <DiagnosticsCheckup />;
+    if (active === 'paper') return <PaperTradingBot />;
     if (active === 'crossmarket') return <CrossMarketSection />;
     if (active === 'analogs') return <AnalogsSection />;
     if (active === 'smartmoney') return <DemoMetricsCard title="Smart Money" icon={Waves} panel={d.smart_money} sectionId="smartmoney" />;
