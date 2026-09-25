@@ -48,6 +48,7 @@ import MarketDrivers from './components/MarketDrivers';
 import DiagnosticsCheckup from './components/DiagnosticsCheckup';
 import PaperTradingBot from './components/PaperTradingBot';
 import AlbertHome from './components/AlbertHome';
+import AskAlbert from './components/AskAlbert';
 
 import DailyReportModal from './components/DailyReport';
 import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS, PRIMARY_NAV, TECH_GROUPS, PRIMARY_IDS } from './lib/sections';
@@ -3653,7 +3654,7 @@ export default function DashboardPage() {
     if (active === 'events') return <EventsSection d={d} />;
     if (active === 'performance') return <PerformanceHubSection d={d} />;
     if (active === 'timemachine') return <TimeMachineSection />;
-    if (active === 'ask') return <AskQuantSection d={d} />;
+    if (active === 'ask') return <AskAlbert onNav={setActive} />;
     if (active === 'strategies') return <StrategiesSection />;
     if (active === 'alert-engine') return <AlertEngineSection />;
     if (active === 'alerts') return <AlertsSection d={d} alertsData={alertsData} onAck={ackAlerts} filter={alertFilter} onFilter={setAlertFilter} coins={coins} />;

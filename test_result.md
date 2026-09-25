@@ -117,6 +117,37 @@ user_problem_statement: |
   with seeded test session to verify UI rendering across 6 deep-linked views in desktop and mobile.
 
 backend:
+  - task: "M-C: Ask Albert — authenticated, owner-scoped, read-only companion (POST /api/v1/albert/ask)"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/app/components/AskAlbert.js, app/app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Implemented the contextual Ask Albert surface (spec §6). POST /api/v1/albert/ask is
+          authenticated (Depends get_current_user); identity is derived ONLY from the session — any 'pid'
+          in the body is ignored (verified). Each turn injects a BOUNDED (<=14k) owner-scoped state-of-play
+          snapshot and consults ONLY allowlisted, owner-scoped READ functions: state_of_play, paper_account,
+          strategies, rotation_history, worker_health, current_decisions (engine-authoritative, bounded),
+          plus an evidence resolver. Every read result carries asOf/freshness/sourceId/deepLink. Client-
+          provided entity/evidence ids are resolved AGAINST the owner (_ask_resolve_entity); a non-owned or
+          unknown id yields UNAVAILABLE (never another owner's). GET /api/v1/albert/ask/evidence returns 404
+          for cross-owner access. Strict ASK_ALBERT_SYSTEM guardrails: read-only, paper-only, never invent
+          numbers, cannot mutate (no trade/mandate/mode/assign/pause functions exist here), owner-only data,
+          and message content is treated as a question — injection cannot expand permissions. LLM runs via
+          the configured model tier (model switcher; observed gemini-3-flash-preview) with grounded=False
+          (context-only, no web). Plain-English first + Evidence + Technical details.
+          Verified: pytest tests/test_mC_ask_albert.py (6) — owner-scoped/bounded gather, keyword read-fn
+          selection, cross-owner evidence denied (+404), owner evidence w/ metadata + prefilled handoff,
+          forged body pid ignored, guardrail prompt + no mutation surface. Live smoke: 2.8s plain-English
+          answer; injection probe REFUSED (no trade, no other-account access); forged pid scoped to own;
+          unauth ask/evidence -> 401. Frontend AskAlbert verified via authenticated 1920px screenshot
+          (evidence chips FRESH, Technical details, live state panel). Full suite: 95 passed, no regression.
+
   - task: "M-A: Albert state-of-play aggregate (GET /api/v1/albert/state-of-play)"
     implemented: true
     working: true
