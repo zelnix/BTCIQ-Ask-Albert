@@ -2295,7 +2295,7 @@ function AskQuantSection({ d }) {
     'Compare this setup to a past halving-cycle analog.',
   ];
 
-  const send = async (text) => {
+  const send = async (text, extra) => {
     const msg = (text ?? input).trim();
     if (!msg || loading) return;
     setInput('');
@@ -2307,7 +2307,7 @@ function AskQuantSection({ d }) {
     try {
       const r = await fetch(`${API_BASE}/v1/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: msg, symbol, deep, pid }),
+        body: JSON.stringify({ session_id: sessionId, message: msg, symbol, deep, pid, driver_context: extra && extra.driver_context }),
         signal: ctrl.signal,
       });
       if (r.status === 429) {
@@ -2336,19 +2336,26 @@ function AskQuantSection({ d }) {
     } finally { clearTimeout(timer); setLoading(false); }
   };
 
+  // Driver -> chat handoff: consume an "albert:ask" (may have been dispatched just
+  // before this section mounted, so also drain a one-shot window buffer). Uses a ref
+  // so the latest send() (current thread/sessionId) is always called.
+  const sendRef = React.useRef(send);
+  sendRef.current = send;
+  React.useEffect(() => {
+    const consume = (detail) => {
+      if (!detail || !detail.question) return;
+      sendRef.current(detail.question, { driver_context: detail.driver_context });
+    };
+    try { if (window.__albertPendingAsk) { const p = window.__albertPendingAsk; window.__albertPendingAsk = null; setTimeout(() => consume(p), 60); } } catch (e) { /* noop */ }
+    const onAsk = (e) => consume(e.detail);
+    window.addEventListener('albert:ask', onAsk);
+    return () => window.removeEventListener('albert:ask', onAsk);
+  }, []); // eslint-disable-line
+
   return (
     <div className="space-y-5">
       <SectionHead icon={MessageCircle} title="Ask Albert" blurb={sec('ask').blurb} />
-      <AlbertIntroCard />
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="space-y-4">
-          <PortfolioPanel />
-          <AlertManager />
-        </div>
-        <AlbertTrackRecord />
-      </div>
-      <WeeklyRecap />
-      <Card className="flex h-[560px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
+      <Card className="flex h-[calc(100vh-8rem)] min-h-[520px] flex-col overflow-hidden border-0 bg-slate-900 p-0 ring-1 ring-slate-800">
         <div className="flex items-center gap-2.5 border-b border-slate-800 px-5 py-3">
           <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-sky-500/40" />
           <div><p className="text-sm font-semibold text-white">Albert · Ask Albert HuCentAI Quant</p><p className="text-[10px] text-slate-500">Crypto strategist & advisor · live dashboard + web search · fast by default, Deep dive for depth</p></div>
@@ -2446,6 +2453,15 @@ function AskQuantSection({ d }) {
           <p className="mt-2 text-center text-[10px] text-slate-600">Albert blends the live Ask Albert dashboard with real-time web search · powerful, but markets are uncertain — always do your own research.</p>
         </div>
       </Card>
+      <AlbertIntroCard />
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="space-y-4">
+          <PortfolioPanel />
+          <AlertManager />
+        </div>
+        <AlbertTrackRecord />
+      </div>
+      <WeeklyRecap />
     </div>
   );
 }
@@ -3346,6 +3362,17 @@ export default function DashboardPage() {
     window.addEventListener('albert:build-strategy', onBuild);
     return () => window.removeEventListener('albert:build-strategy', onBuild);
   }, [symbol]);
+
+  // Driver -> chat handoff: buffer the ask and jump to the Ask Albert section so the
+  // chat (which mounts on demand) can drain it and send with the driver context.
+  useEffect(() => {
+    const onAsk = (e) => {
+      try { window.__albertPendingAsk = e.detail || null; } catch (x) { /* noop */ }
+      setActive('ask');
+    };
+    window.addEventListener('albert:ask', onAsk);
+    return () => window.removeEventListener('albert:ask', onAsk);
+  }, []);
 
 
   // Clear the coin-switch overlay once the new coin's data is ready (or errors out).

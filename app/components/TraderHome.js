@@ -10,7 +10,7 @@ import { API_BASE, getPid } from '../lib/api';
 import {
   Loader2, TrendingUp, TrendingDown, Minus, ShieldCheck, Activity, Gauge,
   CheckCircle2, AlertTriangle, Layers, Clock, ArrowRight, LineChart, ChevronDown,
-  BarChart3, Wallet, Info,
+  BarChart3, Wallet, Info, Flag,
 } from 'lucide-react';
 
 /* ---------------------------------- format ------------------------------- */
@@ -83,6 +83,41 @@ function ProjectionCone({ projection, symbol, selected, onSelect }) {
     </div>
   );
 }
+
+function EventStrip({ projection, horizonDays }) {
+  const pins = (projection?.eventPins || []).filter((p) => p.daysUntil != null && (horizonDays == null || p.daysUntil <= horizonDays));
+  if (projection && projection.eventsAvailable === false) {
+    return <p className="mt-2 text-[10px] text-slate-500">Event calendar unavailable.</p>;
+  }
+  if (!pins.length) return null;
+  const span = Math.max(1, horizonDays || Math.max(...pins.map((p) => p.daysUntil)));
+  const typeTone = (t) => (t === 'Macro' ? 'bg-sky-400' : t === 'Derivatives' ? 'bg-violet-400' : 'bg-slate-400');
+  return (
+    <div className="mt-3">
+      <p className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-slate-500"><Flag className="h-3 w-3" />Timing risk (scheduled events — not direction)</p>
+      <div className="relative mb-2 h-6">
+        <div className="absolute left-0 right-0 top-3 h-px bg-slate-800" />
+        {pins.map((p, i) => {
+          const left = Math.max(0, Math.min(100, (p.daysUntil / span) * 100));
+          return (
+            <div key={i} className="absolute -translate-x-1/2" style={{ left: `${left}%`, top: 0 }} title={`${p.title} · ${p.date} · ${p.importance || ''} ${p.expectedVolatility ? '· vol ' + p.expectedVolatility : ''} · ${p.source}`}>
+              <span className={`block h-3 w-3 rotate-45 rounded-sm ${typeTone(p.type)}`} />
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {pins.slice(0, 6).map((p, i) => (
+          <span key={i} className="inline-flex items-center gap-1 rounded-md border border-slate-800 bg-slate-950/60 px-1.5 py-0.5 text-[9.5px] text-slate-400">
+            <span className={`h-1.5 w-1.5 rotate-45 ${typeTone(p.type)}`} />
+            {p.title.replace(/\s*\(approx\.\)/i, '')} · {p.daysUntil}d
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 
 function ProjectionPanel({ projection, symbol, selected, onSelect, highlight }) {
   if (!projection || !projection.available) {
@@ -158,6 +193,7 @@ function ProjectionPanel({ projection, symbol, selected, onSelect, highlight }) 
           {projection.bandCoverage && (
             <p className="mt-1.5 text-[9.5px] text-slate-500">Bands: outer {projection.bandCoverage.outer}, inner {projection.bandCoverage.inner}. {projection.method}</p>
           )}
+          <EventStrip projection={projection} horizonDays={cur?.days} />
         </>
       )}
       <p className="mt-2 text-[9.5px] leading-relaxed text-slate-600">{projection.disclaimer}</p>
@@ -268,9 +304,10 @@ function PerformancePanel({ symbol, open, onToggle, highlight }) {
                       <Kpi label="Total return" value={pv.totalReturnPct != null ? fmtPct(pv.totalReturnPct) : 'n/a'} tone={pctColor(pv.totalReturnPct)} />
                       <Kpi label="Cash (USDC)" value={fmtUsd(pv.cash)} />
                       <Kpi label="Holdings" value={fmtUsd(pv.holdingsValue)} />
-                      <Kpi label="Drawdown" value="n/a" sub="needs history" />
-                      <Kpi label="Volatility" value="n/a" sub="needs history" />
+                      <Kpi label="Drawdown" value={pv.drawdownPct != null ? fmtPct(pv.drawdownPct) : (pv.historyReady ? 'n/a' : `collecting (${pv.historySampleCount || 0})`)} tone={pv.drawdownPct != null ? 'text-rose-300' : 'text-slate-400'} />
+                      <Kpi label="Volatility" value={pv.volatilityPct != null ? `${pv.volatilityPct}%` : (pv.historyReady ? 'n/a' : `collecting (${pv.historySampleCount || 0})`)} />
                       <Kpi label={`${symbol} buy & hold`} value={fmtPct(d.benchmark?.returnPct)} sub="window ref" tone={pctColor(d.benchmark?.returnPct)} />
+                      {pv.historyFrom && <Kpi label="Equity history" value={`${pv.historySampleCount || 0} days`} sub={`${pv.historyFrom} →`} />}
                     </div>
                     {(pv.allocation || []).length > 0 && (
                       <div className="mt-3">

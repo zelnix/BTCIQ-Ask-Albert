@@ -168,6 +168,18 @@ try:
 except Exception:  # noqa
     pass
 
+# Portfolio Equity History — one idempotent UTC daily equity snapshot per user.
+# Powers genuine drawdown/volatility in the performance module. Never fabricated
+# from today's holdings; collection begins the first time a user's equity is read.
+# Doc: {_id: '<pid>|<YYYY-MM-DD>', pid, date, equity, cash, holdingsValue,
+#       prices: {ASSET: spot}, dataQuality, sources: [...], ts}.
+equity_snapshots_col = db['albert_equity_snapshots']
+try:
+    equity_snapshots_col.create_index([('pid', 1), ('date', 1)], unique=True)
+    equity_snapshots_col.create_index([('pid', 1), ('date', -1)])
+except Exception:  # noqa
+    pass
+
 # Ask-Albert chat persistence — one conversation per user (pid), stored so it
 # survives navigation/expand and follows the user across devices.
 # Doc: {_id: pid, sessionId, messages: [...], updatedAt}.

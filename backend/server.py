@@ -61,6 +61,7 @@ from config import (
     PUBLIC_BASE_URL, UNSUB_SECRET, WEEKLY_HOUR, WEEKLY_MINUTE, regime_col,
     portfolio_col, price_watch_col, albert_calls_col, recap_col, mandate_col,
     paper_portfolio_col,
+    equity_snapshots_col,
     users_col, auth_sessions_col, GOOGLE_CLIENT_ID,
 )
 from email_service import send_email, resend_configured
@@ -5686,6 +5687,45 @@ def albert_trader_home(pid: str = '', symbol: str = 'BTC'):
         }
 
     horizons = [_band(f) for f in fc_all if f.get('horizon')]
+    # --- Event pins: scheduled, source-backed macro/derivatives events only. They
+    # mark TIMING RISK on the cone — never a bullish/bearish direction. Dedup by
+    # (date,title); degrade gracefully if the calendar is unavailable. -------------
+    event_pins = []
+    try:
+        ec = (dash.get('event_calendar') or {})
+        max_days = max((h.get('days') or 0) for h in horizons) if horizons else 365
+        seen_ev = set()
+        for ev in (ec.get('events') or []):
+            cat = ev.get('category')
+            if cat not in ('Macro', 'Derivatives'):
+                continue
+            du = _num(ev.get('days_until'))
+            if du is None or du < 0 or du > max_days:
+                continue
+            key = (ev.get('date'), ev.get('title'))
+            if key in seen_ev:
+                continue
+            seen_ev.add(key)
+            # Affected horizon = the nearest horizon whose window contains the event.
+            affected = None
+            for h in sorted(horizons, key=lambda x: x.get('days') or 0):
+                if (h.get('days') or 0) >= du:
+                    affected = h.get('horizon'); break
+            if not affected and horizons:
+                affected = horizons[-1].get('horizon')
+            event_pins.append({
+                'date': ev.get('date'),
+                'utc': (str(ev.get('date')) + 'T00:00:00Z') if ev.get('date') else None,
+                'daysUntil': du, 'type': cat, 'title': ev.get('title'),
+                'importance': ev.get('importance'), 'expectedVolatility': ev.get('expected_volatility'),
+                'affectedHorizon': affected,
+                'source': 'Ask Albert event calendar (scheduled; dates approximate)',
+                'availableAt': as_of, 'directionImplied': False,
+            })
+        event_pins.sort(key=lambda x: x.get('daysUntil') if x.get('daysUntil') is not None else 1e9)
+    except Exception:  # noqa
+        event_pins = []
+    events_available = bool((dash.get('event_calendar') or {}).get('events') is not None)
     if horizons and anchor_price:
         drift_pct = (round((price_now / anchor_price - 1.0) * 100, 2)
                      if (price_now and anchor_price) else None)
@@ -5697,6 +5737,8 @@ def albert_trader_home(pid: str = '', symbol: str = 'BTC'):
             'anchorAsOf': as_of,
             'liveDriftPct': drift_pct,
             'horizons': horizons,
+            'eventPins': event_pins,
+            'eventsAvailable': events_available,
             # Feed-delay staleness pauses the forward path (spec 7.1). A large live
             # drift from the anchor is a softer caution, not a pause.
             'stale': feeds_stale,
@@ -5704,7 +5746,8 @@ def albert_trader_home(pid: str = '', symbol: str = 'BTC'):
             'bandCoverage': {'inner': '50% (p25\u2013p75)', 'outer': '80% (p10\u2013p90)'},
             'method': 'Log-normal quantiles from drift + realised volatility (documented coverage).',
             'disclaimer': ('Scenario ranges are anchored to the last engine run price and are '
-                           'probabilistic \u2014 odds, not guarantees. Paper / advisory only.'),
+                           'probabilistic \u2014 odds, not guarantees. Event pins mark timing risk '
+                           'only, not direction. Paper / advisory only.'),
         }
     else:
         projection = {'available': False, 'reason': 'no_forecasts',
@@ -5784,8 +5827,11 @@ def _compute_performance_module(pid: str = '', symbol: str = 'BTC', fee_pct: flo
     ledger.sort(key=lambda x: x.get('issued_date') or '')
 
     portfolio = None
+    equity_hist = None
     if pid:
         try:
+            _record_equity_snapshot(pid)  # capture today's truth (idempotent)
+            equity_hist = _equity_history_stats(pid)
             summ = _portfolio_summary(pid)
             hv = summ.get('holdings_value') or 0.0
             # Blended unrealised return across held positions (value-weighted).
@@ -5875,6 +5921,16 @@ def _compute_performance_module(pid: str = '', symbol: str = 'BTC', fee_pct: flo
     portfolio_view = None
     if portfolio and portfolio.get('totalValue') is not None:
         tv = portfolio.get('totalValue') or 0
+        eh = equity_hist or {}
+        n_snap = eh.get('sampleCount') or 0
+        history_ready = n_snap >= 2
+        if history_ready:
+            note = (f"Drawdown & volatility from {n_snap} stored daily equity snapshots "
+                    f"({eh.get('from')} → {eh.get('to')}). Return is value-weighted from cost basis.")
+        else:
+            note = (f"Collecting equity history now ({n_snap} snapshot"
+                    f"{'' if n_snap == 1 else 's'} so far) — drawdown & volatility appear once "
+                    f"there are at least 2 days. Nothing is back-filled.")
         portfolio_view = {
             'equity': tv,
             'cash': portfolio.get('usdc'),
@@ -5883,10 +5939,14 @@ def _compute_performance_module(pid: str = '', symbol: str = 'BTC', fee_pct: flo
             'allocation': [{'asset': h.get('asset'), 'pct': h.get('portfolio_pct'),
                             'value': h.get('value'), 'unrealizedPct': h.get('unrealized_pct')}
                            for h in (portfolio.get('holdings') or [])],
-            # Drawdown / volatility need a portfolio time-series we don't retain yet.
-            'drawdownPct': None, 'volatilityPct': None,
-            'note': 'Return is a value-weighted unrealised estimate from cost basis; '
-                    'drawdown / volatility need a stored equity history (coming soon).',
+            # Genuine metrics from the STORED daily equity series (None until enough data).
+            'drawdownPct': eh.get('drawdownPct'),
+            'volatilityPct': eh.get('volatilityPct'),
+            'equitySeries': eh.get('series') or [],
+            'historyFrom': eh.get('from'), 'historyTo': eh.get('to'),
+            'historySampleCount': n_snap,
+            'historyReady': history_ready,
+            'note': note,
         }
     return {
         'status': 'ready', 'available': True, 'symbol': symbol,
@@ -5956,6 +6016,39 @@ def _md_iso_age_hours(iso):
         return None
 
 
+def _md_freshness(as_of, quality, source_id=''):
+    """Freshness verdict for one driver source. Trading-calendar-aware for ETF flows
+    (Farside publishes on US trading days, so a Friday value read over the weekend or
+    on Monday is FRESH, not a feed failure). Status uses the WEAKEST reasonable read.
+    Returns colour-independent status + a readable label + provenance timestamps."""
+    is_etf = str(source_id or '').startswith('etf')
+    age = _md_iso_age_hours(as_of)
+    now = datetime.datetime.utcnow()
+    wd = now.weekday()  # Mon=0 .. Sun=6
+    # Base freshness thresholds (hours): fresh <= t1, delayed <= t2, else stale.
+    t1, t2 = 30.0, 54.0
+    if is_etf:
+        # Weekend / Monday: last print is expected to be Friday's -> allow up to ~80h.
+        t1 = 80.0 if wd in (5, 6, 0) else 30.0
+        t2 = t1 + 30.0
+    if quality == 'MISSING' or (age is None and quality in ('MISSING',)):
+        status, label = 'missing', 'missing'
+    elif quality == 'CONFLICTING':
+        status, label = 'conflicting', 'conflicting'
+    elif age is None:
+        status, label = 'fresh', 'live'
+    elif age <= t1:
+        status, label = 'fresh', 'fresh'
+    elif age <= t2:
+        status, label = 'delayed', 'delayed'
+    else:
+        status, label = 'stale', 'stale'
+    return {'status': status, 'label': label,
+            'ageHours': (round(age, 1) if age is not None else None),
+            'marketTime': as_of, 'availableAt': as_of, 'fetchedAt': as_of,
+            'provider': None, 'quality': quality, 'tradingCalendarAware': is_etf}
+
+
 def _compute_market_driver_btc(horizon: str = 'SWING'):
     horizon = (horizon or 'SWING').strip().upper()
     if horizon not in _MD_WEIGHTS:
@@ -5985,10 +6078,14 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
         stage = _md_stage(direction, mag, turning)
         dirsign = 1 if direction == 'bullish' else (-1 if direction == 'bearish' else 0)
         contrib = dirsign * (mag / 100.0) * w * conf * 100.0
+        fresh = _md_freshness((snap or {}).get('asOf') if snap else None,
+                              (snap or {}).get('quality') or evidence, snap_id)
+        if snap is not None:
+            fresh['provider'] = snap.get('source')
         drivers.append({'actor': actor, 'channel': channel, 'behavior': behavior,
                         'stage': stage, 'evidenceStatus': evidence, 'confidence': round(conf, 2),
                         'direction': direction, 'magnitude': round(mag), 'weight': w,
-                        'label': label, 'detail': detail, '_contrib': contrib})
+                        'label': label, 'detail': detail, 'freshness': fresh, '_contrib': contrib})
         if snap is not None:
             snapshots.append({'id': snap_id, **snap})
 
@@ -6265,7 +6362,8 @@ def _compute_market_driver_btc(horizon: str = 'SWING'):
 
     def _pub(d):
         return {k: d[k] for k in ('actor', 'channel', 'behavior', 'stage', 'evidenceStatus',
-                                  'confidence', 'direction', 'magnitude', 'contribution', 'label', 'detail')}
+                                  'confidence', 'direction', 'magnitude', 'contribution', 'label',
+                                  'detail', 'freshness')}
 
     return {
         'engineVersion': MARKET_DRIVER_ENGINE_VERSION,
@@ -8339,6 +8437,20 @@ def chat_endpoint(request: Request, payload: dict = Body(...)):
             eng_ctx = ''
         if eng_ctx:
             ctx = ctx + "\n\n===== ALBERT'S ENGINES (edge board, sector rotation, recent signals, your strategies) =====\n" + eng_ctx
+        # Market-Driver handoff: when the user taps "Ask why" on a driver card, the
+        # UI passes the IMMUTABLE deterministic assessment. Albert may ONLY explain it
+        # (observed vs inferred, freshness) — he must not recompute or override it.
+        dctx = payload.get('driver_context')
+        if isinstance(dctx, dict):
+            try:
+                import json as _json
+                ctx = (ctx + "\n\n===== MARKET-DRIVER ASSESSMENT (deterministic — EXPLAIN ONLY, DO NOT ALTER) =====\n"
+                       + "This is the exact engine output the user tapped. Explain it in plain English; "
+                       "distinguish OBSERVED evidence from inferred; if it is stale, say so and offer to refresh. "
+                       "Never invent numbers, flows or timestamps beyond what is here. Never turn a probability into a certainty.\n"
+                       + _json.dumps(dctx, default=str)[:2000])
+            except Exception:  # noqa
+                pass
         hist = list(chat_col.find({'session_id': session_id}, {'_id': 0}).sort('created_at', 1))
         hist_txt = ''
         for h in hist[-5:]:
@@ -8699,6 +8811,88 @@ def _portfolio_summary(pid):
             'deployable_usdc': deployable, 'reserve_pct': reserve_pct,
             'holdings_value': round(holdings_value, 2), 'holdings': holdings,
             'mandate_complete': _mandate_complete(m)}
+
+
+def _record_equity_snapshot(pid):
+    """Idempotently store ONE UTC daily equity snapshot for this user. Never
+    manufactures history — it only records the truth as of now. Safe to call on
+    every read; the {pid,date} unique index makes repeat calls a no-op update."""
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return None
+    try:
+        summ = _portfolio_summary(pid)
+        total = summ.get('total_value')
+        if total is None:
+            return None
+        today = datetime.datetime.utcnow().strftime('%Y-%m-%d')
+        prices = {h.get('asset'): h.get('spot') for h in (summ.get('holdings') or []) if h.get('asset')}
+        doc = {
+            '_id': f'{pid}|{today}', 'pid': pid, 'date': today,
+            'equity': total, 'cash': summ.get('usdc'),
+            'holdingsValue': summ.get('holdings_value'),
+            'prices': prices, 'dataQuality': 'OBSERVED',
+            'sources': ['paper_portfolio', 'live_spot'],
+            'ts': datetime.datetime.utcnow().isoformat(),
+        }
+        # setOnInsert the equity for the first read of the day (point-in-time
+        # integrity — the day's first observed value is the record for that day);
+        # keep prices/ts fresh so the latest read reflects the current valuation.
+        equity_snapshots_col.update_one(
+            {'_id': doc['_id']},
+            {'$setOnInsert': {'pid': pid, 'date': today, 'equity': total,
+                              'dataQuality': 'OBSERVED', 'sources': doc['sources']},
+             '$set': {'cash': doc['cash'], 'holdingsValue': doc['holdingsValue'],
+                      'prices': prices, 'ts': doc['ts'], 'equityLatest': total}},
+            upsert=True)
+        return doc
+    except Exception:  # noqa
+        traceback.print_exc()
+        return None
+
+
+def _equity_history_stats(pid):
+    """Genuine drawdown + volatility from the STORED daily equity series. Returns
+    None metrics (never zero) until enough real snapshots exist."""
+    pid = (pid or '').strip()[:80]
+    try:
+        rows = list(equity_snapshots_col.find({'pid': pid}, {'_id': 0}).sort('date', 1))
+    except Exception:  # noqa
+        rows = []
+    series = [{'date': r.get('date'), 'value': _num(r.get('equity'))}
+              for r in rows if _num(r.get('equity')) is not None]
+    n = len(series)
+    out = {'series': series, 'sampleCount': n,
+           'from': series[0]['date'] if series else None,
+           'to': series[-1]['date'] if series else None,
+           'drawdownPct': None, 'volatilityPct': None, 'totalReturnPct': None}
+    if n >= 2:
+        vals = [p['value'] for p in series]
+        peak = vals[0]; max_dd = 0.0
+        for v in vals:
+            peak = max(peak, v)
+            if peak:
+                max_dd = min(max_dd, v / peak - 1.0)
+        out['drawdownPct'] = round(max_dd * 100, 2)
+        out['totalReturnPct'] = round((vals[-1] / vals[0] - 1.0) * 100, 2) if vals[0] else None
+    if n >= 3:
+        try:
+            rets = pd.Series(vals).pct_change().dropna()
+            sd = float(rets.std())
+            out['volatilityPct'] = round(sd * math.sqrt(365) * 100, 2) if sd == sd else None
+        except Exception:  # noqa
+            pass
+    return out
+
+
+@app.get('/api/v1/albert/equity-history')
+def albert_equity_history(pid: str = ''):
+    pid = (pid or '').strip()[:80]
+    if not pid:
+        return {'status': 'ready', 'sampleCount': 0, 'series': []}
+    _record_equity_snapshot(pid)
+    return {'status': 'ready', **_equity_history_stats(pid)}
+
 
 
 @app.get('/api/v1/albert/portfolio-summary')

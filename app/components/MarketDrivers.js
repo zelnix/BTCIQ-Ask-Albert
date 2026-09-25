@@ -10,7 +10,7 @@ import { API_BASE } from '../lib/api';
 import {
   Loader2, TrendingUp, TrendingDown, Minus, Users, Crown, Flag, CheckCircle2,
   ShieldAlert, ArrowRightCircle, Activity, Gauge, ChevronDown, Info, AlertTriangle,
-  Database, Radar,
+  Database, Radar, MessageCircle,
 } from 'lucide-react';
 
 const HORIZONS = ['INTRADAY', 'SWING', 'CYCLE'];
@@ -38,7 +38,50 @@ const evidenceBadge = (e) => {
   return <span className="rounded bg-slate-500/15 px-1.5 py-0.5 text-[9px] font-semibold text-slate-500">unknown</span>;
 };
 
-function DriverCard({ d, icon: Icon, title, accent }) {
+// Colour-independent freshness indicator (dot + text label) — never colour alone.
+const freshDot = { fresh: 'bg-emerald-400', delayed: 'bg-amber-400', stale: 'bg-rose-400', missing: 'bg-slate-500', conflicting: 'bg-amber-400' };
+function FreshnessDot({ f }) {
+  if (!f) return null;
+  const age = f.ageHours != null ? (f.ageHours < 1 ? '<1h' : f.ageHours < 48 ? `${Math.round(f.ageHours)}h` : `${Math.round(f.ageHours / 24)}d`) : 'live';
+  const title = `${f.label} · ${f.provider || 'source'} · ${f.marketTime ? String(f.marketTime).slice(0, 16) : ''}${f.tradingCalendarAware ? ' · trading-calendar aware' : ''}`;
+  return (
+    <span title={title} className="inline-flex items-center gap-1 text-[9px] font-semibold text-slate-400">
+      <span className={`h-2 w-2 rounded-full ${freshDot[f.status] || 'bg-slate-500'}`} />
+      {f.label}{f.ageHours != null ? ` · ${age}` : ''}
+    </span>
+  );
+}
+
+// Driver -> Ask Albert handoff: opens chat with a grounded question + the IMMUTABLE
+// deterministic assessment (chain id, horizon, asOf, evidence + freshness). Albert
+// explains it; he cannot alter it.
+function askWhy(dv, role, meta) {
+  if (!dv) return;
+  const aged = dv.freshness && (dv.freshness.status === 'stale' || dv.freshness.status === 'missing');
+  const q = `Why is ${humanize(dv.actor).toLowerCase()} ${humanize(dv.behavior).toLowerCase()} `
+    + `${role} Bitcoin on the ${humanize(meta.horizon)} horizon? `
+    + `Explain the observed vs inferred evidence and whether it's fresh.`
+    + (aged ? ' (I know the reading may be stale — say so and offer to refresh.)' : '');
+  const driver_context = {
+    driverChainId: meta.driverChainId, engineVersion: meta.engineVersion,
+    horizon: meta.horizon, asOf: meta.asOf, dataQuality: meta.dataQuality,
+    role, actor: dv.actor, channel: dv.channel, behavior: dv.behavior, stage: dv.stage,
+    evidenceStatus: dv.evidenceStatus, confidence: dv.confidence, detail: dv.detail,
+    freshness: dv.freshness, sourceSnapshotIds: meta.sourceSnapshotIds,
+  };
+  try { window.dispatchEvent(new CustomEvent('albert:ask', { detail: { question: q, driver_context } })); } catch (e) { /* noop */ }
+}
+
+function AskWhyBtn({ dv, role, meta }) {
+  return (
+    <button onClick={(e) => { e.stopPropagation(); askWhy(dv, role, meta); }}
+      className="inline-flex items-center gap-1 rounded-md border border-slate-700 bg-slate-900/70 px-1.5 py-0.5 text-[9.5px] font-semibold text-sky-300 hover:border-sky-500/50 hover:text-sky-200">
+      <MessageCircle className="h-3 w-3" />Ask why
+    </button>
+  );
+}
+
+function DriverCard({ d, icon: Icon, title, accent, role, meta }) {
   if (!d) return null;
   return (
     <div className={`rounded-xl border border-slate-800 bg-slate-950/50 p-3`}>
@@ -56,17 +99,25 @@ function DriverCard({ d, icon: Icon, title, accent }) {
         </div>
         <span className="text-[10px] font-mono text-slate-400">{Math.round((d.confidence || 0) * 100)}%</span>
       </div>
+      <div className="mt-2 flex items-center justify-between">
+        <FreshnessDot f={d.freshness} />
+        <AskWhyBtn dv={d} role={role || 'driving'} meta={meta} />
+      </div>
     </div>
   );
 }
 
-function DriverRow({ d, side }) {
+function DriverRow({ d, side, meta }) {
   return (
     <div className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-2.5 py-1.5">
       {side === 'confirm' ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" /> : <ShieldAlert className="h-3.5 w-3.5 shrink-0 text-rose-400" />}
       <span className="text-[12px] font-semibold text-slate-200">{humanize(d.actor)}</span>
       <span className={`text-[11px] ${dirColor(d.direction)}`}>{humanize(d.behavior)}</span>
-      <span className="ml-auto text-[10px] text-slate-500">{humanize(d.stage)} · {Math.round((d.confidence || 0) * 100)}%</span>
+      <FreshnessDot f={d.freshness} />
+      <div className="ml-auto flex items-center gap-2">
+        <span className="text-[10px] text-slate-500">{humanize(d.stage)} · {Math.round((d.confidence || 0) * 100)}%</span>
+        <AskWhyBtn dv={d} role={side === 'confirm' ? 'confirming' : 'resisting'} meta={meta} />
+      </div>
     </div>
   );
 }
@@ -138,6 +189,7 @@ export default function MarketDrivers({ horizon = 'SWING', onHorizon }) {
   const Tone = tone.Icon;
   const dq = d ? dqTone(d.dataQuality) : dqTone('');
   const DQIcon = dq.Icon;
+  const meta = d ? { driverChainId: d.driverChainId, engineVersion: d.engineVersion, horizon: hz, asOf: d.asOf, dataQuality: d.dataQuality, sourceSnapshotIds: d.sourceSnapshotIds } : {};
 
   return (
     <div className="space-y-4">
@@ -203,8 +255,8 @@ export default function MarketDrivers({ horizon = 'SWING', onHorizon }) {
 
           {/* Attribution: first mover + current leader */}
           <div className="grid gap-3 md:grid-cols-2">
-            <DriverCard d={d.firstMover} icon={Flag} title="First mover" accent="text-sky-300" />
-            <DriverCard d={d.currentLeader} icon={Crown} title="Current leader" accent="text-amber-300" />
+            <DriverCard d={d.firstMover} icon={Flag} title="First mover" accent="text-sky-300" role="leading" meta={meta} />
+            <DriverCard d={d.currentLeader} icon={Crown} title="Current leader" accent="text-amber-300" role="leading" meta={meta} />
           </div>
 
           {/* Sequence + confirming/resisting */}
@@ -212,13 +264,13 @@ export default function MarketDrivers({ horizon = 'SWING', onHorizon }) {
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <p className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400"><CheckCircle2 className="h-3.5 w-3.5 text-emerald-300" />Confirming drivers</p>
               <div className="space-y-1.5">
-                {(d.confirmingDrivers || []).length ? d.confirmingDrivers.map((x, i) => <DriverRow key={i} d={x} side="confirm" />) : <p className="text-[12px] text-slate-500">None strong enough to list.</p>}
+                {(d.confirmingDrivers || []).length ? d.confirmingDrivers.map((x, i) => <DriverRow key={i} d={x} side="confirm" meta={meta} />) : <p className="text-[12px] text-slate-500">None strong enough to list.</p>}
               </div>
             </div>
             <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
               <p className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400"><ShieldAlert className="h-3.5 w-3.5 text-rose-300" />Resisting drivers</p>
               <div className="space-y-1.5">
-                {(d.resistingDrivers || []).length ? d.resistingDrivers.map((x, i) => <DriverRow key={i} d={x} side="resist" />) : <p className="text-[12px] text-slate-500">No meaningful pushback right now.</p>}
+                {(d.resistingDrivers || []).length ? d.resistingDrivers.map((x, i) => <DriverRow key={i} d={x} side="resist" meta={meta} />) : <p className="text-[12px] text-slate-500">No meaningful pushback right now.</p>}
               </div>
             </div>
           </div>
