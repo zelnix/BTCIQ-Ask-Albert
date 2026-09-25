@@ -3553,7 +3553,10 @@ def get_model_settings():
 
 
 @app.post('/api/v1/settings/models')
-def save_model_settings(payload: dict = Body(...)):
+def save_model_settings(request: Request, payload: dict = Body(...)):
+    # M-F: this route is defined before get_current_user, so authenticate at
+    # request time (same session/allowlist rules, no Depends ordering problem).
+    _require_session(request)
     incoming = payload.get('prefs') or payload or {}
     update = {}
     for k in _MODEL_FEATURE_DEFAULTS:
@@ -3614,6 +3617,15 @@ def owner_pid(user: dict) -> str:
     snapshots) remains readable. The client can never select or override this —
     identity comes only from the validated session (see get_current_user)."""
     return f"u_{user['_id']}"
+
+
+def _require_session(request: Request):
+    """Runtime equivalent of the get_current_user dependency, for the few routes
+    declared before it (Depends defaults are bound at import time). Same session
+    validation + email allowlist; raises 401/403 exactly the same way."""
+    auth = request.headers.get('authorization') if request is not None else None
+    cookie = request.cookies.get(AUTH_COOKIE) if request is not None else None
+    return get_current_user(request, cookie, auth)
 
 
 def _remediation_flag(name: str, default: bool) -> bool:
@@ -5508,7 +5520,7 @@ def dashboard(symbol: str = 'BTC'):
 
 
 @app.post('/api/v1/refresh')
-def refresh(request: Request, payload: dict = Body(default={})):
+def refresh(request: Request, payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     # Expensive full recompute — gate behind admin passcode + per-client rate limit.
     limited = _too_many(request, 'refresh', per_min=3, per_day=50)
     if limited is not None:
@@ -5549,7 +5561,7 @@ def news(symbol: str = 'BTC'):
 
 
 @app.post('/api/v1/news/refresh')
-def news_refresh(request: Request):
+def news_refresh(request: Request, user: dict = Depends(get_current_user)):
     limited = _too_many(request, 'news_refresh', per_min=3, per_day=60)
     if limited is not None:
         return limited
@@ -5558,7 +5570,7 @@ def news_refresh(request: Request):
 
 
 @app.get('/api/v1/chat/history')
-def chat_history(session_id: str):
+def chat_history(session_id: str, user: dict = Depends(get_current_user)):
     msgs = list(chat_col.find({'session_id': session_id}, {'_id': 0}).sort('created_at', 1))
     return {'session_id': session_id, 'messages': msgs}
 
@@ -8193,7 +8205,24 @@ def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
                           'primaryPauseReason': pause_reason},
             'allocation': allocation_panel, 'rankingSnapshot': ranking_snapshot,
             'rotations': rotations,
+            'strategy': _paper_bound_strategy_public(a),
             'autopilot': _paper_autopilot_status(a)}
+
+
+def _paper_bound_strategy_public(acct):
+    """M-F (additive, read-only): the ACTIVE strategy bound to this account, so the
+    plain-English Paper Trading summary and the Technical Centre can both name it
+    without recomputing anything. None when no strategy is bound."""
+    try:
+        s = _strategy_for_account(acct)
+    except Exception:  # noqa
+        s = None
+    if not s:
+        return None
+    return {'strategyId': s.get('strategyId'), 'name': s.get('name'),
+            'version': s.get('version'), 'contractHash': s.get('contractHash'),
+            'status': s.get('status'),
+            'assets': [a.get('symbol') for a in ((s.get('contract') or {}).get('assets') or [])]}
 
 
 @app.patch('/api/v1/albert/paper/accounts/{acct_id}/mode')
@@ -8651,7 +8680,9 @@ def _sop_build(user, requested_account=None):
             paper = {
                 'selectedAccount': dash.get('account'),
                 'mode': (dash.get('account') or {}).get('mode'),
-                'assignedStrategy': (dash.get('account') or {}).get('assignedStrategy'),
+                # M-F: the bound ACTIVE strategy comes from the canonical dashboard block
+                # (single source), so Albert never says "none assigned" while one is live.
+                'assignedStrategy': dash.get('strategy'),
                 'positions': dash.get('positions') or [],
                 'pendingProposals': pend,
                 'recentActivity': dash.get('recentActivity') or [],
@@ -8841,7 +8872,7 @@ def simulate_shock_state():
 
 
 @app.post('/api/v1/admin/simulate-shock')
-def simulate_shock(request: Request, payload: dict = Body(default={})):
+def simulate_shock(request: Request, payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     """Admin-only demo switch: force the drift circuit breaker to trip live in the UI
     (without an expensive recompute). Toggle off to restore the real model state."""
     if not _passcode_ok((payload or {}).get('passcode', '')):
@@ -8973,7 +9004,7 @@ def forecast_regime():
 
 
 @app.post('/api/v1/forecast/reconcile-signals')
-def reconcile_signals(payload: dict = Body(default={})):
+def reconcile_signals(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     """Recompute the composite quant score under the CURRENT market regime.
 
     Any signal score (0-100) left null is filled from the latest live decision
@@ -9225,7 +9256,7 @@ def exchange_flows_feed(refresh: int = 0):
 
 
 @app.get('/api/v1/admin/overview')
-def admin_overview():
+def admin_overview(user: dict = Depends(get_current_user)):
     """Admin dashboard: integrations, data freshness, usage, costs & system health."""
     now = time.time()
 
@@ -9545,7 +9576,7 @@ def alerts_feed(limit: int = 50, symbol: str = None):
 
 
 @app.post('/api/v1/alerts/ack')
-def alerts_ack(payload: dict = Body(default={})):
+def alerts_ack(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     ids = (payload or {}).get('ids')
     symbol = (payload or {}).get('symbol')
     flt = _alert_symbol_filter(symbol)
@@ -9810,7 +9841,7 @@ def _email_admin_guard(payload):
 
 
 @app.post('/api/v1/email/recipients/list')
-def email_recipients_list_ep(payload: dict = Body(default={})):
+def email_recipients_list_ep(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     if not _email_admin_guard(payload):
         return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
     return {'status': 'ok', 'recipients': _recipient_list(), 'from': RESEND_FROM,
@@ -9821,7 +9852,7 @@ def email_recipients_list_ep(payload: dict = Body(default={})):
 
 
 @app.post('/api/v1/email/recipients')
-def email_recipients_add_ep(payload: dict = Body(default={})):
+def email_recipients_add_ep(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     if not _email_admin_guard(payload):
         return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
     email = ((payload or {}).get('email') or '').strip().lower()
@@ -9840,7 +9871,7 @@ def email_recipients_add_ep(payload: dict = Body(default={})):
 
 
 @app.post('/api/v1/email/recipients/delete')
-def email_recipients_delete_ep(payload: dict = Body(default={})):
+def email_recipients_delete_ep(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     if not _email_admin_guard(payload):
         return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
     email = ((payload or {}).get('email') or '').strip().lower()
@@ -9852,7 +9883,7 @@ def email_recipients_delete_ep(payload: dict = Body(default={})):
 
 
 @app.post('/api/v1/email/test')
-def email_test_ep(payload: dict = Body(default={})):
+def email_test_ep(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     if not _email_admin_guard(payload):
         return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
     if not resend_configured():
@@ -9879,7 +9910,7 @@ def email_test_ep(payload: dict = Body(default={})):
 
 
 @app.post('/api/v1/email/digest/send-now')
-def email_digest_now_ep(payload: dict = Body(default={})):
+def email_digest_now_ep(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     if not _email_admin_guard(payload):
         return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
     result = send_daily_digest_bg(force=True)
@@ -10177,7 +10208,7 @@ def send_instant_alerts_bg():
 
 
 @app.post('/api/v1/email/instant/send-now')
-def email_instant_now_ep(payload: dict = Body(default={})):
+def email_instant_now_ep(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     if not _email_admin_guard(payload):
         return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
     result = send_instant_alerts_bg()
@@ -10298,7 +10329,7 @@ def send_weekly_recap_bg(force=False):
 
 
 @app.post('/api/v1/email/weekly/send-now')
-def email_weekly_now_ep(payload: dict = Body(default={})):
+def email_weekly_now_ep(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     if not _email_admin_guard(payload):
         return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
     result = send_weekly_recap_bg(force=True)
@@ -10308,7 +10339,7 @@ def email_weekly_now_ep(payload: dict = Body(default={})):
 
 
 @app.post('/api/v1/email/settings')
-def email_settings_ep(payload: dict = Body(default={})):
+def email_settings_ep(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     if not _email_admin_guard(payload):
         return {'status': 'unauthorized', 'message': 'A valid admin passcode is required.'}
     sev = (payload or {}).get('instant_severities')
@@ -10380,7 +10411,7 @@ def scenarios():
 
 
 @app.post('/api/v1/bitmark/run')
-def bitmark_run(payload: dict = Body(default={})):
+def bitmark_run(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     import time
     passcode = (payload or {}).get('passcode', '')
     if not _passcode_ok(passcode):
@@ -10407,7 +10438,7 @@ def bitmark_run(payload: dict = Body(default={})):
 
 
 @app.get('/api/v1/audit')
-def audit_log(limit: int = 20):
+def audit_log(limit: int = 20, user: dict = Depends(get_current_user)):
     items = list(audit_col.find({}, {'_id': 0}).sort('ts', -1).limit(limit))
     return {'status': 'ready', 'entries': items}
 
@@ -11289,7 +11320,7 @@ def studio_lifecycle(sid: str, cmd: str, payload: dict = Body(default={}), user:
 
 
 @app.post('/api/v1/chat')
-def chat_endpoint(request: Request, payload: dict = Body(...)):
+def chat_endpoint(request: Request, payload: dict = Body(...), user: dict = Depends(get_current_user)):
     limited = _too_many(request, 'chat', per_min=10, per_day=200)
     if limited is not None:
         return limited
@@ -11505,8 +11536,8 @@ def _portfolio_context(pid):
 
 
 @app.get('/api/v1/portfolio')
-def get_portfolio(pid: str = ''):
-    pid = (pid or '').strip()[:80]
+def get_portfolio(pid: str = '', user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'positions': []}
     doc = portfolio_col.find_one({'_id': pid}, {'_id': 0})
@@ -11514,8 +11545,8 @@ def get_portfolio(pid: str = ''):
 
 
 @app.post('/api/v1/portfolio')
-def save_portfolio(payload: dict = Body(...)):
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+def save_portfolio(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     clean = []
@@ -11563,8 +11594,8 @@ def _mandate_complete(m):
 
 
 @app.get('/api/v1/albert/mandate')
-def albert_get_mandate(pid: str = ''):
-    pid = (pid or '').strip()[:80]
+def albert_get_mandate(pid: str = '', user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'mandate': _DEFAULT_MANDATE, 'complete': False}
     m = _get_mandate(pid)
@@ -11572,8 +11603,8 @@ def albert_get_mandate(pid: str = ''):
 
 
 @app.post('/api/v1/albert/mandate')
-def albert_save_mandate(payload: dict = Body(...)):
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+def albert_save_mandate(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     src = payload.get('mandate') or payload
@@ -11865,8 +11896,8 @@ def albert_equity_history(user: dict = Depends(get_current_user)):
 
 
 @app.get('/api/v1/albert/portfolio-summary')
-def albert_portfolio_summary(pid: str = ''):
-    pid = (pid or '').strip()[:80]
+def albert_portfolio_summary(pid: str = '', user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     return _portfolio_summary(pid)
@@ -11958,8 +11989,8 @@ def albert_regime_endpoint():
 
 
 @app.get('/api/v1/albert/decisions')
-def albert_decisions_endpoint(pid: str = ''):
-    pid = (pid or '').strip()[:80]
+def albert_decisions_endpoint(pid: str = '', user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     snap = _albert_decisions(pid)
@@ -11974,8 +12005,8 @@ def albert_decisions_endpoint(pid: str = ''):
 
 
 @app.get('/api/v1/albert/decision-history')
-def albert_decision_history(pid: str = '', asset: str = '', limit: int = 50):
-    pid = (pid or '').strip()[:80]
+def albert_decision_history(pid: str = '', asset: str = '', limit: int = 50, user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     rows = _decision_history_repo.list_history(pid, asset=(asset or '').strip() or None, limit=limit)
@@ -11983,8 +12014,8 @@ def albert_decision_history(pid: str = '', asset: str = '', limit: int = 50):
 
 
 @app.get('/api/v1/albert/decision/{decision_id}')
-def albert_decision_fetch(decision_id: str, pid: str = ''):
-    pid = (pid or '').strip()[:80]
+def albert_decision_fetch(decision_id: str, pid: str = '', user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     env = _decision_history_repo.get_snapshot(pid, decision_id)
@@ -12034,8 +12065,8 @@ def _explain_dto(env):
 
 
 @app.post('/api/v1/albert/explain-call')
-def albert_explain_call(payload: dict = Body(...)):
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+def albert_explain_call(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     decision_id = (str(payload.get('decisionId') or '')).strip()
@@ -12149,11 +12180,11 @@ def albert_paper_reset(payload: dict = Body(default={}), user: dict = Depends(ge
 
 
 @app.get('/api/v1/albert/portfolio-risk')
-def albert_portfolio_risk(pid: str = ''):
+def albert_portfolio_risk(pid: str = '', user: dict = Depends(get_current_user)):
     """Phase G: current portfolio drawdown-protection state (HWM, drawdown, protection
     mode + hysteresis) for the Command Centre banner. Evaluation is deterministic and
     stateful (persisted). The full per-asset risk-reduction plan is in /decisions."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     summary = _portfolio_summary(pid)
@@ -12190,14 +12221,14 @@ def _welcome_line_fallback(name, counts, protection_active):
 
 
 @app.get('/api/v1/albert/welcome-brief')
-def albert_welcome_brief(pid: str = ''):
+def albert_welcome_brief(pid: str = '', user: dict = Depends(get_current_user)):
     """Personalized morning welcome brief shown right after sign-in. Deterministic
     snapshot (portfolio totals, drawdown-protection state, counts of Albert's current
     calls, watchlist highlights) plus ONE character-driven line from Albert (read-only;
     the LLM never invents numbers). Falls back to a templated line if the LLM is off.
     Result is cached per-pid for a short TTL so the sign-in modal is instant on
     re-open/retry and never recomputes the ~decisions pass on every request."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     now = _time_mod.time()
@@ -12359,7 +12390,7 @@ def _discovery_core():
 
 
 @app.get('/api/v1/albert/discovery')
-def albert_discovery(pid: str = ''):
+def albert_discovery(pid: str = '', user: dict = Depends(get_current_user)):
     """Phase I: live top-100 discovery feed. Discovery is NOT permission to buy — the
     core (rank/liquidity/data-quality/opportunity score) is pid-independent; mandate
     eligibility + the honest discovery call are applied for this pid on top. If no
@@ -12368,7 +12399,7 @@ def albert_discovery(pid: str = ''):
     if not core:
         return {'status': 'building', 'assets': []}
     stale = (_time_mod.time() - _DISCOVERY_CACHE['ts']) >= _discovery_mod.DISCOVERY_TTL_SEC
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'status': 'ready', 'stale': stale, **core}
     summary = _portfolio_summary(pid)
@@ -12388,11 +12419,11 @@ def _watchlist_symbols(pid):
 
 
 @app.get('/api/v1/albert/watchlist')
-def albert_watchlist(pid: str = ''):
+def albert_watchlist(pid: str = '', user: dict = Depends(get_current_user)):
     """Discovery watchlist for this pid, enriched with the CURRENT discovery core +
     per-pid eligibility so a pinned coin still shows its honest call. Pinning is a
     bookmark only — an ineligible pinned coin still shows WAIT, never BUY."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     symbols = _watchlist_symbols(pid)
@@ -12455,9 +12486,9 @@ def albert_watchlist(pid: str = ''):
 
 
 @app.get('/api/v1/albert/watchlist/alerts')
-def albert_watchlist_alerts(pid: str = '', include_seen: bool = False):
+def albert_watchlist_alerts(pid: str = '', include_seen: bool = False, user: dict = Depends(get_current_user)):
     """Unseen (default) call-flip alerts for a pid's pinned coins, most recent first."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     from config import watchlist_alerts_col
@@ -12467,9 +12498,9 @@ def albert_watchlist_alerts(pid: str = '', include_seen: bool = False):
 
 
 @app.post('/api/v1/albert/watchlist/alerts/ack')
-def albert_watchlist_alerts_ack(payload: dict = Body(...)):
+def albert_watchlist_alerts_ack(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     """Mark call-flip alerts seen. Pass {ids:[...]} for specific ones, or omit to ack all."""
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     ids = payload.get('ids')
@@ -12586,10 +12617,10 @@ def _albert_notifications(pid, limit=40):
 
 
 @app.get('/api/v1/albert/notifications')
-def albert_notifications(pid: str = '', limit: int = 40):
+def albert_notifications(pid: str = '', limit: int = 40, user: dict = Depends(get_current_user)):
     """Unified per-pid bell feed: watchlist flips + paper fills + drawdown recoveries,
     most recent first, with an unseen count for the header badge."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'status': 'ready', 'alerts': [], 'unseen': 0, 'total': 0}
     try:
@@ -12600,11 +12631,11 @@ def albert_notifications(pid: str = '', limit: int = 40):
 
 
 @app.post('/api/v1/albert/notifications/ack')
-def albert_notifications_ack(payload: dict = Body(...)):
+def albert_notifications_ack(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     """Mark notifications seen. Pass {ids:[...]} for specific ones, or omit to ack all.
     Flip ids clear the watchlist alert's seen flag; fill/recovery ids are recorded
     in the per-pid seen ledger."""
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     ids = payload.get('ids')
@@ -12664,11 +12695,11 @@ def _weekly_brief_line_fallback(name, calls_n, fills_n, recov_n):
 
 
 @app.get('/api/v1/albert/weekly-brief')
-def albert_weekly_brief(pid: str = '', refresh: bool = False):
+def albert_weekly_brief(pid: str = '', refresh: bool = False, user: dict = Depends(get_current_user)):
     """A Sunday recap of the user's past 7 days: Albert's call changes, paper fills,
     and drawdown recoveries, plus ONE character-driven line (read-only LLM; never
     invents numbers). Deterministic aggregation; cached per-pid for a short TTL."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     now = _time_mod.time()
@@ -12815,10 +12846,10 @@ def _trim_msgs(messages):
 
 
 @app.get('/api/v1/albert/chat/threads')
-def albert_chat_threads(pid: str = ''):
+def albert_chat_threads(pid: str = '', user: dict = Depends(get_current_user)):
     """List the user's saved conversation threads (most recent first), lightweight
     (no message bodies)."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'status': 'ready', 'threads': []}
     out = []
@@ -12833,10 +12864,10 @@ def albert_chat_threads(pid: str = ''):
 
 
 @app.get('/api/v1/albert/chat')
-def albert_chat_get(pid: str = '', threadId: str = ''):
+def albert_chat_get(pid: str = '', threadId: str = '', user: dict = Depends(get_current_user)):
     """Return one conversation thread. With threadId -> that thread; without ->
     the most recent thread; none yet -> a fresh empty thread."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     threadId = (threadId or '').strip()[:80]
     if not pid:
         return {'status': 'ready', 'threadId': _new_chat_sid(), 'sessionId': _new_chat_sid(), 'title': 'New chat', 'messages': []}
@@ -12859,10 +12890,10 @@ def albert_chat_get(pid: str = '', threadId: str = ''):
 
 
 @app.put('/api/v1/albert/chat')
-def albert_chat_save(payload: dict = Body(...)):
+def albert_chat_save(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     """Upsert one thread (client-driven sync). Auto-titles from the first user
     message when no title is set."""
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     tid = (str(payload.get('threadId') or '')).strip()[:80] or _new_chat_sid()
@@ -12884,15 +12915,15 @@ def albert_chat_save(payload: dict = Body(...)):
 
 
 @app.post('/api/v1/albert/chat/new')
-def albert_chat_new(payload: dict = Body(...)):
+def albert_chat_new(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     """Return fresh threadId + sessionId for a brand-new conversation. The thread
     is persisted lazily on its first saved message."""
     return {'status': 'ready', 'threadId': _new_chat_sid(), 'sessionId': _new_chat_sid(), 'title': 'New chat'}
 
 
 @app.post('/api/v1/albert/chat/rename')
-def albert_chat_rename(payload: dict = Body(...)):
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+def albert_chat_rename(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     tid = (str(payload.get('threadId') or '')).strip()[:80]
     title = (str(payload.get('title') or '')).strip()[:80] or 'New chat'
     if not (pid and tid):
@@ -12906,8 +12937,8 @@ def albert_chat_rename(payload: dict = Body(...)):
 
 
 @app.post('/api/v1/albert/chat/delete')
-def albert_chat_delete(payload: dict = Body(...)):
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+def albert_chat_delete(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     tid = (str(payload.get('threadId') or '')).strip()[:80]
     if not (pid and tid):
         return {'error': 'pid and threadId required'}
@@ -12924,8 +12955,8 @@ def albert_chat_delete(payload: dict = Body(...)):
 
 
 @app.post('/api/v1/albert/watchlist')
-def albert_watchlist_pin(payload: dict = Body(...)):
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+def albert_watchlist_pin(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     sym = (str(payload.get('symbol') or '')).strip().upper()[:20]
     if not pid or not sym:
         return {'error': 'pid and symbol required'}
@@ -12939,8 +12970,8 @@ def albert_watchlist_pin(payload: dict = Body(...)):
 
 
 @app.delete('/api/v1/albert/watchlist/{symbol}')
-def albert_watchlist_unpin(symbol: str, pid: str = ''):
-    pid = (pid or '').strip()[:80]
+def albert_watchlist_unpin(symbol: str, pid: str = '', user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     sym = (symbol or '').strip().upper()[:20]
     if not pid or not sym:
         return {'error': 'pid and symbol required'}
@@ -12950,10 +12981,10 @@ def albert_watchlist_unpin(symbol: str, pid: str = ''):
 
 
 @app.get('/api/v1/albert/lifecycle-assets')
-def albert_lifecycle_assets(pid: str = ''):
+def albert_lifecycle_assets(pid: str = '', user: dict = Depends(get_current_user)):
     """Phase H: assets that have a stored decision journey (snapshots/history/fills),
     whether currently held or only historically traded. Powers the 'View Journey' entry."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     from config import decision_snapshots_col as _dsc, order_ledger_col as _olc
@@ -12967,10 +12998,10 @@ def albert_lifecycle_assets(pid: str = ''):
 
 
 @app.get('/api/v1/albert/lifecycle/{asset}')
-def albert_lifecycle(asset: str, pid: str = ''):
+def albert_lifecycle(asset: str, pid: str = '', user: dict = Depends(get_current_user)):
     """Phase H: read-only per-asset lifecycle replay assembled from frozen snapshots,
     history, paper orders and fills. Never recomputes historical decisions."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     return _lifecycle_repo.build_lifecycle(pid, asset)
@@ -12988,7 +13019,7 @@ EXPLAIN_ORDER_SYSTEM = (
 
 
 @app.post('/api/v1/albert/explain-order-intent')
-def albert_explain_order(payload: dict = Body(...)):
+def albert_explain_order(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     order_id = (str(payload.get('orderIntentId') or '')).strip()
     question = (str(payload.get('question') or '')).strip()[:400]
     intent = _order_mgr.get_intent(order_id)
@@ -13018,8 +13049,8 @@ def albert_explain_order(payload: dict = Body(...)):
 
 
 @app.get('/api/v1/albert/deployment-plan')
-def albert_deployment_plan(pid: str = ''):
-    pid = (pid or '').strip()[:80]
+def albert_deployment_plan(pid: str = '', user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'error': 'pid required'}
     snap = _albert_decisions(pid)
@@ -13037,7 +13068,7 @@ def albert_deployment_plan(pid: str = ''):
 
 
 @app.post('/api/v1/price-alert')
-def create_price_alert(payload: dict = Body(...)):
+def create_price_alert(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     try:
         asset = str(payload.get('asset') or 'BTC').upper().strip()[:6]
         level = float(payload.get('level'))
@@ -13045,7 +13076,7 @@ def create_price_alert(payload: dict = Body(...)):
         return {'error': 'invalid_level'}
     if level <= 0:
         return {'error': 'invalid_level'}
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     spot = _spot_price(asset)
     direction = payload.get('direction')
     if direction not in ('above', 'below'):
@@ -13060,18 +13091,16 @@ def create_price_alert(payload: dict = Body(...)):
 
 
 @app.get('/api/v1/price-alerts')
-def list_price_alerts(pid: str = ''):
-    q = {}
-    if pid:
-        q['pid'] = pid.strip()[:80]
+def list_price_alerts(pid: str = '', user: dict = Depends(get_current_user)):
+    q = {'pid': owner_pid(user)}   # M-F: server-derived owner; client pid ignored
     active = list(price_watch_col.find({**q, 'triggered': False}, {'_id': 0}).sort('created_at', -1).limit(50))
     triggered = list(price_watch_col.find({**q, 'triggered': True}, {'_id': 0}).sort('triggered_at', -1).limit(20))
     return {'watches': active, 'triggered': triggered}
 
 
 @app.delete('/api/v1/price-alert/{wid}')
-def delete_price_alert(wid: str):
-    price_watch_col.delete_one({'_id': wid})
+def delete_price_alert(wid: str, user: dict = Depends(get_current_user)):
+    price_watch_col.delete_one({'_id': wid, 'pid': owner_pid(user)})   # owner-scoped
     return {'ok': True}
 
 
@@ -13327,7 +13356,7 @@ def _pcm_to_wav(pcm, rate=24000):
 
 
 @app.post('/api/v1/tts')
-def albert_tts(payload: dict = Body(...)):
+def albert_tts(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     """Generate Albert's spoken audio via Google AI Studio Gemini TTS (server-side).
     Returns base64 WAV. Falls back gracefully (frontend uses browser TTS on failure)."""
     text = (payload.get('text') or '').strip()
@@ -13395,10 +13424,10 @@ def albert_tts_voices():
 
 
 @app.get('/api/v1/albert/voice-pref')
-def get_voice_pref(pid: str = ''):
+def get_voice_pref(pid: str = '', user: dict = Depends(get_current_user)):
     """User's saved Albert voice preference (per-account; falls back to the
     legacy global doc, then defaults)."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     doc = {}
     try:
         if pid:
@@ -13413,8 +13442,8 @@ def get_voice_pref(pid: str = ''):
 
 
 @app.post('/api/v1/albert/voice-pref')
-def set_voice_pref(payload: dict = Body(...)):
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+def set_voice_pref(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     engine = (payload.get('engine') or 'gemini').strip().lower()
     if engine not in ('gemini', 'browser'):
         engine = 'gemini'
@@ -14165,7 +14194,7 @@ def get_brief_watchlist():
 
 
 @app.post('/api/v1/albert/brief-watchlist')
-def set_brief_watchlist(payload: dict = Body(...)):
+def set_brief_watchlist(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     coins = payload.get('coins') or []
     clean = ['BTC'] + [c.strip().upper() for c in coins if c.strip().upper() != 'BTC' and c.strip().upper() in COMPARE_COINS]
     # dedupe, preserve order
@@ -14604,7 +14633,7 @@ def _strategy_eval_job():
 
 
 @app.post('/api/v1/albert/strategy/build')
-def albert_strategy_build(payload: dict = Body(default={})):
+def albert_strategy_build(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     """Albert drafts a structured strategy for a coin (optionally guided by a goal).
     Returns a DRAFT for the user to review — not yet saved."""
     symbol = (payload.get('symbol') or 'BTC').upper()
@@ -14879,7 +14908,7 @@ def _basket_public(strat):
 
 
 @app.post('/api/v1/albert/strategy/basket/build')
-def albert_basket_build(payload: dict = Body(default={})):
+def albert_basket_build(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     """Albert drafts a multi-coin basket (he picks the coins). Returns a DRAFT (not saved)."""
     goal = (payload.get('goal') or '').strip()[:400]
     try:
@@ -14890,10 +14919,10 @@ def albert_basket_build(payload: dict = Body(default={})):
 
 
 @app.post('/api/v1/albert/strategy/basket')
-def albert_basket_activate(payload: dict = Body(...)):
+def albert_basket_activate(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     """Save/activate a multi-coin basket for the signed-in user."""
     draft = payload.get('draft') or payload
-    pid = (str(payload.get('pid') or draft.get('pid') or '')).strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     norm = _normalize_basket_draft(draft)
     if not norm.get('legs'):
         return JSONResponse({'status': 'error', 'message': 'No valid legs (need live prices for the coins).'}, status_code=400)
@@ -14908,9 +14937,9 @@ def albert_basket_activate(payload: dict = Body(...)):
 
 
 @app.get('/api/v1/albert/strategy/baskets')
-def albert_basket_list(pid: str = ''):
+def albert_basket_list(pid: str = '', user: dict = Depends(get_current_user)):
     """List the user's multi-coin baskets (active + closed) with live performance."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     try:
         rows = list(strategies_col.find({'kind': 'basket', 'owner': pid}, {'_id': 0}).sort('created_at', -1).limit(40))
     except Exception:  # noqa
@@ -14922,11 +14951,11 @@ def albert_basket_list(pid: str = ''):
 
 
 @app.get('/api/v1/albert/strategy/briefing')
-def albert_strategy_briefing(pid: str = ''):
+def albert_strategy_briefing(pid: str = '', user: dict = Depends(get_current_user)):
     """Deterministic 'how are my strategies playing out' summary for the Morning Brief:
     each active basket's live P&L + best/worst leg, plus rule-based ACTIONS / WATCH-OUTS
     (stops/targets hit, concentration, big draw-down/run-up, past horizon, sector cooling)."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     if not pid:
         return {'status': 'ready', 'hasStrategies': False, 'activeCount': 0, 'strategies': [], 'actions': []}
     try:
@@ -14985,8 +15014,8 @@ def albert_strategy_briefing(pid: str = ''):
 
 
 @app.post('/api/v1/albert/strategy/basket/{bid}/close')
-def albert_basket_close(bid: str, payload: dict = Body(default={})):
-    strat = strategies_col.find_one({'id': bid, 'kind': 'basket'}, {'_id': 0})
+def albert_basket_close(bid: str, payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
+    strat = strategies_col.find_one({'id': bid, 'kind': 'basket', 'owner': owner_pid(user)}, {'_id': 0})
     if not strat:
         return JSONResponse({'status': 'error', 'message': 'Basket not found.'}, status_code=404)
     now = datetime.datetime.utcnow()
@@ -14999,10 +15028,10 @@ def albert_basket_close(bid: str, payload: dict = Body(default={})):
 
 
 @app.post('/api/v1/albert/strategy/basket/{bid}/rebalance')
-def albert_basket_rebalance(bid: str, payload: dict = Body(default={})):
+def albert_basket_rebalance(bid: str, payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     """Albert reviews an active basket vs the live market and suggests new weights
     (plain-English rationale). Does NOT apply — the user reviews then applies."""
-    strat = strategies_col.find_one({'id': bid, 'kind': 'basket', 'status': 'active'}, {'_id': 0})
+    strat = strategies_col.find_one({'id': bid, 'kind': 'basket', 'status': 'active', 'owner': owner_pid(user)}, {'_id': 0})
     if not strat:
         return JSONResponse({'status': 'error', 'message': 'Active basket not found.'}, status_code=404)
     legs = strat.get('legs') or []
@@ -15061,9 +15090,9 @@ def albert_basket_rebalance(bid: str, payload: dict = Body(default={})):
 
 
 @app.post('/api/v1/albert/strategy/basket/{bid}/reweight')
-def albert_basket_reweight(bid: str, payload: dict = Body(...)):
+def albert_basket_reweight(bid: str, payload: dict = Body(...), user: dict = Depends(get_current_user)):
     """Apply new weights to an active basket's legs (normalised to 100)."""
-    strat = strategies_col.find_one({'id': bid, 'kind': 'basket', 'status': 'active'}, {'_id': 0})
+    strat = strategies_col.find_one({'id': bid, 'kind': 'basket', 'status': 'active', 'owner': owner_pid(user)}, {'_id': 0})
     if not strat:
         return JSONResponse({'status': 'error', 'message': 'Active basket not found.'}, status_code=404)
     weights = payload.get('weights') or {}
@@ -15085,10 +15114,10 @@ def albert_basket_reweight(bid: str, payload: dict = Body(...)):
 
 
 @app.post('/api/v1/albert/strategy/basket/{bid}/rebalance-apply')
-def albert_basket_rebalance_apply(bid: str, payload: dict = Body(default={})):
+def albert_basket_rebalance_apply(bid: str, payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     """One-tap: compute Albert's rebalance suggestion for this basket AND apply it in a
     single call (used by the weekly rebalance-nudge alert's 'Apply Albert's rebalance')."""
-    sug = albert_basket_rebalance(bid)
+    sug = albert_basket_rebalance(bid, user=user)
     if not (isinstance(sug, dict) and sug.get('status') == 'ready'):
         return sug  # propagate the 404/error JSONResponse
     weights = {l['symbol']: l['suggested_weight'] for l in (sug.get('legs') or [])}
@@ -15140,9 +15169,9 @@ def _basket_digest_data(pid, cutoff, hours):
 
 
 @app.get('/api/v1/albert/basket-digest')
-def albert_basket_digest(pid: str = '', hours: int = 24):
+def albert_basket_digest(pid: str = '', hours: int = 24, user: dict = Depends(get_current_user)):
     """One consolidated summary of every basket leg that hit a target/stop in the window."""
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     try:
         hours = max(1, min(168, int(hours or 24)))
     except Exception:  # noqa
@@ -15247,11 +15276,11 @@ def _basket_rebalance_nudge_job():
 
 
 @app.post('/api/v1/albert/strategy')
-def albert_strategy_activate(payload: dict = Body(...)):
+def albert_strategy_activate(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     """Activate (save) a strategy for a coin. Closes any existing active strategy for
     that coin (one active per coin). Logs the paper entry at the current price."""
     draft = payload.get('draft') or payload
-    pid = (str(payload.get('pid') or draft.get('pid') or '')).strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     symbol = (draft.get('symbol') or 'BTC').upper()
     spot = _spot_price(symbol)
     if not spot:
@@ -15296,10 +15325,10 @@ def albert_strategy_activate(payload: dict = Body(...)):
 
 
 @app.get('/api/v1/albert/strategy')
-def albert_strategy_active(symbol: str = 'BTC', pid: str = ''):
+def albert_strategy_active(symbol: str = 'BTC', pid: str = '', user: dict = Depends(get_current_user)):
     """The current ACTIVE strategy for a coin (evaluated live), or status 'none'."""
     symbol = (symbol or 'BTC').upper()
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     strat = strategies_col.find_one({'symbol': symbol, 'status': 'active', 'owner': pid}, {'_id': 0})
     if not strat:
         return {'status': 'none', 'symbol': symbol}
@@ -15319,10 +15348,10 @@ def albert_strategy_active(symbol: str = 'BTC', pid: str = ''):
 
 
 @app.get('/api/v1/albert/strategies')
-def albert_strategies_list(symbol: str = 'BTC', pid: str = ''):
+def albert_strategies_list(symbol: str = 'BTC', pid: str = '', user: dict = Depends(get_current_user)):
     """Active + past strategies for a coin (scoped to the signed-in user), each with performance."""
     symbol = (symbol or 'BTC').upper()
-    pid = (pid or '').strip()[:80]
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     try:
         rows = list(strategies_col.find({'symbol': symbol, 'owner': pid}, {'_id': 0}).sort('created_at', -1))
     except Exception:  # noqa
@@ -15344,8 +15373,8 @@ def albert_strategies_list(symbol: str = 'BTC', pid: str = ''):
 
 
 @app.get('/api/v1/albert/strategy/{sid}')
-def albert_strategy_get(sid: str):
-    strat = strategies_col.find_one({'id': sid}, {'_id': 0})
+def albert_strategy_get(sid: str, user: dict = Depends(get_current_user)):
+    strat = strategies_col.find_one({'id': sid, 'owner': owner_pid(user)}, {'_id': 0})
     if not strat:
         return JSONResponse({'status': 'none'}, status_code=404)
     strat['perf'] = _strategy_perf(strat)
@@ -15353,8 +15382,8 @@ def albert_strategy_get(sid: str):
 
 
 @app.post('/api/v1/albert/strategy/{sid}/close')
-def albert_strategy_close(sid: str, payload: dict = Body(default={})):
-    strat = strategies_col.find_one({'id': sid}, {'_id': 0})
+def albert_strategy_close(sid: str, payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
+    strat = strategies_col.find_one({'id': sid, 'owner': owner_pid(user)}, {'_id': 0})
     if not strat:
         return JSONResponse({'status': 'none'}, status_code=404)
     if strat.get('status') != 'active':
@@ -15941,7 +15970,7 @@ def alert_engine_config():
 
 
 @app.post('/api/v1/alert-engine/config')
-def alert_engine_config_save(payload: dict = Body(...)):
+def alert_engine_config_save(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     st = _save_alert_settings(payload.get('settings') or payload)
     return {'status': 'ready', 'settings': st}
 
@@ -15956,7 +15985,7 @@ def alert_engine_readings(symbol: str = 'BTC'):
 
 
 @app.post('/api/v1/alert-engine/scan')
-def alert_engine_scan(payload: dict = Body(default={})):
+def alert_engine_scan(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
     """Manually run a scan now. Optional {symbol} to scan one coin (fires alerts)."""
     st = _get_alert_settings()
     sym = (payload.get('symbol') or '').upper()
@@ -16275,8 +16304,9 @@ def _albert_engine_context(symbol='BTC', pid=None):
 
 
 @app.get('/api/v1/albert/engine-brief')
-def albert_engine_brief(symbol: str = 'BTC', pid: str = ''):
+def albert_engine_brief(symbol: str = 'BTC', pid: str = '', user: dict = Depends(get_current_user)):
     """Raw engine context block (debug/UX aid)."""
+    pid = owner_pid(user)  # M-F: identity is server-derived; any client pid is ignored
     return {'status': 'ready', 'context': _albert_engine_context(symbol, (pid or '').strip()[:80] or None)}
 
 

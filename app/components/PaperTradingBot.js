@@ -22,26 +22,7 @@ function PaperBadge() {
   return <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300"><FlaskConical className="h-3 w-3" />Paper only</span>;
 }
 
-// M5.1 — one metric row: current value vs its limit, with a labelled bar (never colour alone).
-function LimitBar({ label, valuePct, limitPct }) {
-  const v = valuePct == null ? null : Number(valuePct);
-  const lim = limitPct == null ? null : Number(limitPct);
-  const ratio = (v != null && lim) ? Math.min(1, v / lim) : 0;
-  const near = (v != null && lim) ? (v / lim >= 0.9) : false;
-  return (
-    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2">
-      <div className="flex items-baseline justify-between text-[11px]">
-        <span className="text-slate-400">{label}</span>
-        <span className="font-mono font-semibold text-slate-200">{v == null ? '—' : v + '%'}<span className="text-slate-500"> / {lim == null ? '—' : lim + '%'}</span>{near ? <span className="ml-1 font-bold text-amber-300">near limit</span> : null}</span>
-      </div>
-      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
-        <div className={`h-full ${near ? 'bg-amber-400' : 'bg-sky-400'}`} style={{ width: (ratio * 100).toFixed(0) + '%' }} />
-      </div>
-    </div>
-  );
-}
-
-export default function PaperTradingBot() {
+export default function PaperTradingBot({ onNav }) {
   const [accounts, setAccounts] = React.useState(null);
   const [acctId, setAcctId] = React.useState(null);
   const [dash, setDash] = React.useState(null);
@@ -206,10 +187,42 @@ export default function PaperTradingBot() {
   const integ = dash?.integrity || {};
   const perf = dash?.performance || {};
   const ap = dash?.autopilot || {};
-  const alloc = dash?.allocation || null;
-  const rankSnap = dash?.rankingSnapshot || null;
-  const rotations = dash?.rotations || [];
+  const strat = dash?.strategy || null;
   const fmtTs = (t) => { try { return t ? new Date(t).toLocaleTimeString() : '—'; } catch (e) { return '—'; } };
+
+  // ---- M-F plain-English summary (deterministic, straight from the payload) ----
+  const modeLabel = (MODES.find((m) => m.id === acct.mode) || {}).label || acct.mode || '—';
+  const running = acct.runtimeState === 'RUNNING';
+  const RISK_PLAIN = {
+    PAPER_EXECUTION_DISABLED_PENDING_REMEDIATION: 'Paper execution switched off',
+    RECONCILIATION_MISMATCH: 'Ledger check failed — trading stopped',
+    EQUITY_UNAVAILABLE: 'Valuation unavailable — holding',
+    DRAWDOWN_BREAKER: 'Drawdown limit hit — entries paused',
+  };
+  const riskCondition = integ.primaryPauseReason
+    ? (RISK_PLAIN[integ.primaryPauseReason] || String(integ.primaryPauseReason).replace(/_/g, ' ').toLowerCase())
+    : (eq.drawdownPct != null && Number(eq.drawdownPct) < 0 ? `Within limits · ${eq.drawdownPct}% off high` : 'Within your limits');
+  const freshnessPlain = integ.marketData === 'CURRENT' ? 'Fresh'
+    : integ.marketData === 'STALE' ? 'Stale — entries paused'
+    : integ.marketData === 'FLAT' ? 'No positions to price' : (integ.marketData || 'Unknown');
+  const lastAct = activity[0] || null;
+  const lastActionPlain = lastAct
+    ? `${(lastAct.eventType || '').replace(/_/g, ' ').toLowerCase()} · ${fmtTs(lastAct.recordedAt || lastAct.effectiveAt)}`
+    : 'Nothing yet';
+  const plainSummary = [
+    `Albert is in ${modeLabel} on this account and is ${running ? 'running' : 'paused'}.`,
+    strat ? `He is working to your “${strat.name}” strategy (${(strat.assets || []).join(', ') || 'no assets'}).`
+      : 'No strategy is assigned yet, so he only acts on the engine’s own decisions.',
+    eq.value != null
+      ? `The account is worth ${usd(eq.value)}, with ${usd(eq.deployableCash)} free to invest and ${positions.length} open ${positions.length === 1 ? 'position' : 'positions'}.`
+      : `Live valuation is unavailable right now, so Albert is holding; ${positions.length} ${positions.length === 1 ? 'position is' : 'positions are'} still tracked exactly.`,
+    integ.marketData === 'STALE'
+      ? 'Price data is stale, so no new entries will be taken until it refreshes.'
+      : integ.primaryPauseReason ? `${riskCondition} — new entries are on hold.`
+        : 'Price data is fresh and everything is inside your limits.',
+    lastAct ? `Last action: ${lastAct.note || (lastAct.eventType || '').replace(/_/g, ' ').toLowerCase()}.`
+      : 'Nothing has happened on this account yet.',
+  ].join(' ');
 
   return (
     <div className="space-y-4">
@@ -247,98 +260,42 @@ export default function PaperTradingBot() {
         <p className="mt-2 flex items-center gap-1.5 text-[10.5px] text-slate-500"><ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />Paper only — no real money, no exchange. {ap.multiAssetEnabled ? 'BTC + approved altcoins' : 'BTC spot'}, virtual USDC, long-only{ap.tradingProfile ? ` · ${ap.tradingProfile}` : ''}.</p>
       </div>
 
-      {/* Background Autopilot status */}
-      {acct.mode === 'PAPER_AUTOPILOT' && (
-        <div className="rounded-2xl border border-violet-500/30 bg-violet-500/[0.06] p-4">
-          <div className="mb-2 flex items-center justify-between">
-            <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-violet-300"><Bot className="h-3.5 w-3.5" />Paper Autopilot {ap.autopilotEnabled && acct.runtimeState === 'RUNNING' ? 'running' : (acct.runtimeState !== 'RUNNING' ? 'paused' : 'unavailable')}</p>
-            <div className="flex items-center gap-1.5">
-              {ap.multiAssetEnabled && ap.tradingProfile && <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-bold text-violet-200">{ap.tradingProfile}</span>}
-              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ap.workerState === 'running' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>worker: {ap.workerState || 'unknown'}</span>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-slate-400 sm:grid-cols-3">
-            {[['Last background check', fmtTs(ap.lastCheckAt)], ['Last decision processed', ap.lastDecisionProcessed ? String(ap.lastDecisionProcessed).slice(0, 10) + '…' : '—'], ['Last simulated trade', fmtTs(ap.lastTradeAt)], ['Next evaluation', fmtTs(ap.nextEvalAt)], ['Worker last run', fmtTs(ap.workerLastRunAt)]].map(([k, v], i) => (
-              <div key={i}><span className="block text-[10px] uppercase tracking-wide text-slate-500">{k}</span><span className="font-semibold text-slate-200">{v}</span></div>
-            ))}
-          </div>
-          <p className="mt-2 text-[10.5px] text-slate-500">Runs continuously on the server — you can close the app. {acct.runtimeState !== 'RUNNING' ? 'Paused: no new entries; protective exits still run.' : 'Pause any time to stop new entries.'}</p>
-        </div>
-      )}
-
-      {/* Account value summary */}
+      {/* M-F: plain-English summary — the eight things that matter, in words.
+          Every calculation, diagnostic and id behind them is preserved in
+          More → Technical Centre → Paper Engine (moved, not removed). */}
       <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-        <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Account value <span className="ml-1 text-slate-600">· marks {eq.markStatus}</span></p>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 text-[12px]">
-          {[['Equity', eq.value], ['Cash', eq.cash], ['Realized P&L', eq.realizedPnl], ['Unrealized P&L', eq.unrealizedPnl], ['Fees', eq.fees], ['Drawdown', (eq.drawdownPct != null ? eq.drawdownPct + '%' : '—')]].map(([k, v], i) => (
-            <div key={i} className="rounded-lg border border-slate-800 bg-slate-950/60 p-2"><p className="text-slate-500">{k}</p><p className="font-mono font-semibold text-slate-200">{k.includes('%') || k === 'Drawdown' ? v : (k.includes('P&L') || k === 'Fees' || k === 'Equity' || k === 'Cash') ? usd(v) : v}</p></div>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Where you stand</p>
+          <button onClick={() => onNav && onNav('paperengine')}
+            className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300">
+            Technical detail<ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        </div>
+        <p className="max-w-[85ch] text-[13.5px] leading-relaxed text-slate-200">{plainSummary}</p>
+        <div className="mt-3 grid grid-cols-2 gap-2 text-[12px] sm:grid-cols-4">
+          {[['Mode', modeLabel],
+            ['Status', running ? 'Running' : ((acct.runtimeState || 'Paused').replace(/_/g, ' ').toLowerCase())],
+            ['Account value', eq.value != null ? usd(eq.value) : 'unavailable'],
+            ['Free to invest', usd(eq.deployableCash)],
+            ['Open positions', String(positions.length)],
+            ['Risk condition', riskCondition],
+            ['Price data', freshnessPlain],
+            ['Last action', lastActionPlain]].map(([k, v], i) => (
+            <div key={i} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+              <p className="text-[10px] uppercase tracking-wide text-slate-500">{k}</p>
+              <p className="truncate font-semibold text-slate-200" title={String(v)}>{v}</p>
+            </div>
           ))}
         </div>
+        {acct.mode === 'PAPER_AUTOPILOT' && (
+          <p className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-400">
+            <Bot className="h-3.5 w-3.5 text-violet-300" />
+            {running
+              ? 'Autopilot runs on the server — you can close the app and it keeps working.'
+              : 'Autopilot is paused: no new entries, but protective exits still run.'}
+          </p>
+        )}
       </div>
-
-      {/* M5.1 — Portfolio allocation panel (value vs limit) */}
-      {alloc && (
-        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Portfolio allocation</p>
-            <div className="flex flex-wrap items-center gap-1.5">
-              <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-bold text-violet-200">{alloc.profile}</span>
-              <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-semibold text-slate-300">regime {alloc.regime} · ceiling {alloc.regimeDeployCeilingPct}%</span>
-            </div>
-          </div>
-          {!alloc.available && <p className="mb-2 flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Live valuation unavailable (a held asset lacks a fresh mark) — limits shown, current values paused.</p>}
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            <LimitBar label="Deployed" valuePct={alloc.deployed?.pct} limitPct={alloc.deployed?.limitPct} />
-            <LimitBar label="BTC exposure" valuePct={alloc.btc?.pct} limitPct={alloc.btc?.limitPct} />
-            <LimitBar label="Altcoin exposure" valuePct={alloc.altcoins?.pct} limitPct={alloc.altcoins?.limitPct} />
-            <LimitBar label="Combined open risk" valuePct={alloc.openRisk?.pct} limitPct={alloc.openRisk?.limitPct} />
-            <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2">
-              <div className="flex items-baseline justify-between text-[11px]"><span className="text-slate-400">Open positions</span><span className="font-mono font-semibold text-slate-200">{alloc.positions?.count} / {alloc.positions?.limit}</span></div>
-              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-800"><div className="h-full bg-sky-400" style={{ width: ((Math.min(1, (alloc.positions?.count || 0) / (alloc.positions?.limit || 8))) * 100).toFixed(0) + '%' }} /></div>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2"><p className="text-[11px] text-slate-400">Protected USDC</p><p className="font-mono text-[12px] font-semibold text-emerald-300">{usd(alloc.protectedUsdc)}</p></div>
-              <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2"><p className="text-[11px] text-slate-400">Free USDC</p><p className="font-mono text-[12px] font-semibold text-slate-200">{usd(alloc.freeUsdc)}</p></div>
-            </div>
-          </div>
-          {rankSnap && (
-            <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[10.5px] text-slate-500">
-              <Info className="h-3.5 w-3.5" />
-              {rankSnap.available
-                ? <>Ranks: {rankSnap.source || 'discovery'} · snapshot {String(rankSnap.snapshotId || '').slice(0, 8)}… · {rankSnap.fresh ? 'fresh' : 'stale'} {rankSnap.observedAt ? '· ' + fmtTs(rankSnap.observedAt) : ''}</>
-                : <span className="text-amber-300">Live market-cap ranking unavailable — new altcoin sizing uses the conservative speculative cap.</span>}
-            </p>
-          )}
-        </div>
-      )}
-
-      {/* M5.1 — Rotation activity */}
-      {rotations.length > 0 && (
-        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-          <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Rotation activity</p>
-          <div className="space-y-2">
-            {rotations.map((r) => (
-              <div key={r._id || (r.reducedAsset + r.at)} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-[12px]">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="font-bold text-white">{r.reducedAsset}</span>
-                  <ArrowRight className="h-3.5 w-3.5 text-slate-500" />
-                  <span className="font-bold text-white">{r.targetAsset}</span>
-                  <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-bold ${r.status === 'COMPLETED' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>{r.status === 'COMPLETED' ? 'completed' : 'reduced — awaiting buy'}</span>
-                </div>
-                <p className="mt-1 leading-relaxed text-slate-300">{r.headline}</p>
-                <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10.5px] text-slate-500">
-                  <span>scores {r.reducedScore} → {r.targetScore}</span>
-                  <span>regime {r.regime}</span>
-                  {r.allocationMovedUsd != null && <span>moved {usd(r.allocationMovedUsd)}</span>}
-                  {r.newPositionBoundBy && <span>bound by {String(r.newPositionBoundBy).replace(/_/g, ' ').toLowerCase()}</span>}
-                  <span>ranks {String(r.rankingSnapshotId || '—').slice(0, 8)}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
 
       {/* Approval outcome banner */}
       {msg && (
@@ -373,7 +330,6 @@ export default function PaperTradingBot() {
             {positions.map((p) => (
               <div key={p.paperPositionId} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-[12px]">
                 <span className="max-w-[45%] truncate font-bold text-white">{p.asset}</span>
-                {p.tier && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-slate-300">{p.tier}{p.marketCapRank ? ` · #${p.marketCapRank}` : ''}{p.rankAvailable === false ? ' · rank n/a' : ''}</span>}
                 <span className="text-slate-400">{Number(p.netQuantity).toLocaleString(undefined, { maximumFractionDigits: 8 })} @ {usd(p.averageEntryPrice)}</span>
                 <span className="text-slate-500">now {usd(p.currentPrice)}</span>
                 <span className={num(p.unrealizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}>uPnL {usd(p.unrealizedPnl)}</span>
@@ -399,13 +355,11 @@ export default function PaperTradingBot() {
         </div>
       </div>
 
-      {/* Assumptions */}
-      {dash?.assumptions && (
-        <p className="flex items-start gap-1 text-[10px] leading-relaxed text-slate-600">
-          <Info className="mt-0.5 h-3 w-3 shrink-0" />
-          Conservative execution model {dash.assumptions.executionProfileId}: {dash.assumptions.feeBps}bps fee, {dash.assumptions.spreadBps}bps spread, {dash.assumptions.slippageBps}bps slippage. Paper trading — never conflated with backtests or your real portfolio, and it can never place a live order.
-        </p>
-      )}
+      <p className="flex items-start gap-1 text-[10.5px] leading-relaxed text-slate-600">
+        <Info className="mt-0.5 h-3 w-3 shrink-0" />
+        Paper trading only — virtual money, no exchange keys, and it can never place a live order. Execution costs,
+        allocation limits, worker diagnostics and the full evidence chain live in More → Technical Centre → Paper Engine.
+      </p>
     </div>
   );
 }

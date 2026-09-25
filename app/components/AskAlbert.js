@@ -2,20 +2,13 @@
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
-  Send, Loader2, ShieldCheck, ChevronDown, Sparkles, Activity, Wallet, FlaskConical,
-  Database, MessageCircle, Info,
+  Send, Loader2, ShieldCheck, ChevronDown, ChevronRight, Sparkles, MessageCircle, Info,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { API_BASE } from '../lib/api';
 
 const FRESH_COLOR = { FRESH: 'text-emerald-400', STALE: 'text-amber-400', MISSING: 'text-red-400', UNKNOWN: 'text-slate-400' };
-const money = (v) => {
-  const n = v == null || v === '' ? null : Number(v);
-  if (n == null || Number.isNaN(n)) return '—';
-  return '$' + n.toLocaleString(undefined, { maximumFractionDigits: n >= 1000 ? 0 : 2 });
-};
 function sectionFromDeepLink(dl) {
   if (!dl) return null;
   try { return new URLSearchParams(dl.split('?')[1] || '').get('section'); } catch (e) { return null; }
@@ -93,46 +86,44 @@ function TechnicalDetails({ msg }) {
   return (
     <div className="mt-2">
       <button onClick={() => setOpen((o) => !o)} className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-slate-300">
-        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />Technical details
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />How Albert answered
       </button>
       {open && (
         <div className="mt-1.5 space-y-1.5 rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 text-[11px] text-slate-400">
           <p><span className="text-slate-500">Model:</span> <span className="font-mono text-slate-300">{msg.model || '—'}</span></p>
-          <p><span className="text-slate-500">Read functions consulted:</span> {(msg.contextFunctions || []).join(', ') || 'none'}</p>
-          {(msg.evidence || []).length > 0 && (
-            <div>
-              <p className="text-slate-500">Evidence sources:</p>
-              <ul className="mt-0.5 space-y-0.5">
-                {msg.evidence.map((e, i) => (
-                  <li key={i} className="font-mono text-slate-300">{e.sourceId} · {e.freshness} · asOf {e.asOf || 'n/a'}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <p><span className="text-slate-500">Owner-scoped read functions consulted:</span> {(msg.contextFunctions || []).join(', ') || 'none'}</p>
+          <p className="text-slate-500">Each evidence chip above links to the screen that owns that number — open it for the full technical read-out.</p>
         </div>
       )}
     </div>
   );
 }
 
-function StatePanel({ sop }) {
-  if (!sop) return null;
-  const m = sop.market || {}; const p = sop.portfolio || {}; const pa = sop.paper || {};
-  const dq = sop.dataQuality?.status || 'HEALTHY';
-  const Row = ({ icon: Icon, label, value, color }) => (
-    <div className="flex items-center gap-2.5 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
-      <Icon className="h-4 w-4 shrink-0 text-slate-500" />
-      <div className="min-w-0 flex-1"><p className="text-[10px] uppercase tracking-wider text-slate-500">{label}</p><p className={`truncate text-sm font-bold ${color || 'text-white'}`}>{value}</p></div>
-    </div>
+function ScopePanel({ sop, onNav }) {
+  // M-F: no duplicated state summary here. Albert home owns the plain status,
+  // the Technical Centre owns the engine read-outs. This panel states the
+  // BOUNDARY Albert answers inside, and links to the single source of each number.
+  const connected = !!sop;
+  const Link = ({ to, children }) => (
+    <button onClick={() => onNav && onNav(to)} className="inline-flex items-center gap-1 text-[12px] font-semibold text-sky-400 hover:text-sky-300">
+      {children}<ChevronRight className="h-3.5 w-3.5" />
+    </button>
   );
   return (
-    <div className="space-y-2.5">
-      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><Info className="h-3.5 w-3.5" />Current state Albert can see</p>
-      <Row icon={Activity} label="Market stance" value={m.regime || 'Unknown'} color={m.freshness === 'FRESH' ? 'text-emerald-400' : 'text-amber-400'} />
-      <Row icon={Wallet} label="Paper value" value={money(p.totalValue)} />
-      <Row icon={FlaskConical} label="Mode" value={pa.mode || '—'} />
-      <Row icon={Database} label="Data status" value={dq === 'HEALTHY' ? 'Healthy' : dq === 'DEGRADED' ? 'Degraded' : 'Limited'} color={dq === 'HEALTHY' ? 'text-emerald-400' : dq === 'BLOCKED' ? 'text-red-400' : 'text-amber-400'} />
-      <p className="text-[10px] leading-relaxed text-slate-600">Albert answers strictly from this owner-scoped, paper-only state. He never invents numbers, and cannot place, change or approve trades.</p>
+    <div className="space-y-3">
+      <p className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><Info className="h-3.5 w-3.5" />What Albert can and cannot do</p>
+      <ul className="space-y-1.5 text-[12.5px] leading-relaxed text-slate-300">
+        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />He reads only your own paper-only state of play — never another account.</li>
+        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />He never invents a number: every figure is quoted from the engine, with evidence.</li>
+        <li className="flex gap-2"><ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />He cannot place, change or approve a trade. Anything that changes your account comes back as a card you confirm.</li>
+      </ul>
+      <div className="flex flex-col items-start gap-1.5 border-t border-slate-800 pt-2.5">
+        <Link to="home">Your current status on Albert home</Link>
+        <Link to="paperengine">Engine detail in Technical Centre</Link>
+      </div>
+      <p className={`text-[10.5px] ${connected ? 'text-slate-600' : 'text-amber-400'}`}>
+        {connected ? 'Connected to your live state of play.' : 'Your state of play is unavailable right now — Albert will say so rather than guess.'}
+      </p>
     </div>
   );
 }
@@ -274,7 +265,7 @@ export default function AskAlbert({ onNav }) {
 
         {/* State + evidence side panel (desktop/laptop) */}
         <div className="hidden lg:block">
-          <Card className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800"><StatePanel sop={sop} /></Card>
+          <Card className="border-0 bg-slate-900 p-4 ring-1 ring-slate-800"><ScopePanel sop={sop} onNav={onNav} /></Card>
           <p className="mt-3 px-1 text-center text-[11px] text-slate-600">Paper trading only — Albert has read-only visibility. He explains the deterministic engine; he never invents or alters trades.</p>
         </div>
       </div>

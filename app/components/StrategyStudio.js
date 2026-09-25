@@ -150,6 +150,34 @@ function Builder({ onSaved, onCancel }) {
   );
 }
 
+function Methodology({ bt, contractHash }) {
+  // M-F: methodology, hashes and cost assumptions are COLLAPSED (not removed) so the
+  // result stays readable while every integrity value remains one click away.
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button onClick={() => setOpen((o) => !o)} className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-slate-300">
+        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />Methodology, costs &amp; integrity
+      </button>
+      {open && (
+        <div className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1.5 rounded-lg border border-slate-800 bg-slate-950/60 p-2.5 text-[11px] sm:grid-cols-3">
+          {[['Benchmark', bt.benchmark], ['Fees paid', `$${bt.feesPaidUsd}`], ['Slippage', `${bt.slippageBps} bps`],
+            ['Data coverage', `${bt.dataCoveragePct}%`], ['Sample', `${bt.sampleSizeDays} days`],
+            ['Backtest version', bt.backtestVersion], ['Contract hash', contractHash], ['Data hash', bt.dataHash]].map(([k, v]) => (
+            <div key={k} className="min-w-0">
+              <span className="block text-[10px] uppercase tracking-wide text-slate-500">{k}</span>
+              <span className="block truncate font-mono font-semibold text-slate-200" title={String(v)}>{v == null ? '—' : String(v)}</span>
+            </div>
+          ))}
+          <p className="col-span-full text-[10px] leading-relaxed text-slate-500">
+            Deterministic historical replay of daily candles, bound to this exact contract version and data snapshot — the same inputs always produce the same result, and Albert never manufactures these numbers.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Detail({ sid, onChange }) {
   const [s, setS] = useState(null);
   const [accounts, setAccounts] = useState([]);
@@ -190,7 +218,7 @@ function Detail({ sid, onChange }) {
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h3 className="text-base font-bold text-white">{s.name}</h3>
         <Badge variant="outline" className={`border-slate-700 text-[11px] ${STATE_COLOR[st] || 'text-slate-300'}`}>{(st || '').replace(/_/g, ' ')}</Badge>
-        <span className="text-[11px] text-slate-500">v{s.version} · hash {s.contractHash}</span>
+        <span className="text-[11px] text-slate-500">v{s.version}</span>
       </div>
       <p className="text-[13px] text-slate-300">{s.summary}</p>
 
@@ -212,12 +240,23 @@ function Detail({ sid, onChange }) {
           <Button size="sm" onClick={runBt} disabled={btBusy} className="ml-auto h-7 gap-1 bg-slate-700 px-2.5 text-[12px] hover:bg-slate-600">{btBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}Run backtest</Button>
         </div>
         {bt && !bt.error && (
-          <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {[['Return', `${bt.totalReturnPct}%`], ['Benchmark', `${bt.benchmarkReturnPct}%`], ['Max drawdown', `${bt.maxDrawdownPct}%`], ['Sample', `${bt.sampleSizeDays}d`],
-              ['Data coverage', `${bt.dataCoveragePct}%`], ['Fees', `$${bt.feesPaidUsd}`], ['Slippage', `${bt.slippageBps}bps`], ['Version', bt.backtestVersion]].map(([l, v]) => (
-              <div key={l} className="rounded-lg border border-slate-800 bg-slate-950/50 p-2.5"><p className="text-[10px] uppercase tracking-wider text-slate-500">{l}</p><p className="text-sm font-bold text-white">{v}</p></div>
-            ))}
-            <p className="col-span-full text-[10px] text-slate-500">Deterministic historical replay ({bt.benchmark}). Bound to contract hash {s.contractHash} · data {bt.dataHash}. Albert never manufactures these numbers.</p>
+          <div className="mt-2 space-y-2">
+            {/* Decision-useful results stay in plain sight. */}
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {[['Strategy return', `${bt.totalReturnPct}%`],
+                ['Bitcoin over the same period', `${bt.benchmarkReturnPct}%`],
+                ['Worst drawdown', `${bt.maxDrawdownPct}%`],
+                ['Tested period', `${bt.sampleSizeDays} days · ${bt.dataCoveragePct}% covered`]].map(([l, v]) => (
+                <div key={l} className="rounded-lg border border-slate-800 bg-slate-950/50 p-2.5">
+                  <p className="text-[10px] uppercase tracking-wider text-slate-500">{l}</p>
+                  <p className="text-sm font-bold text-white">{v}</p>
+                </div>
+              ))}
+            </div>
+            <p className="max-w-[80ch] text-[12.5px] leading-relaxed text-slate-300">
+              Over the last {bt.sampleSizeDays} days this plan would have returned {bt.totalReturnPct}% versus {bt.benchmarkReturnPct}% for simply holding Bitcoin, with a worst peak-to-trough fall of {bt.maxDrawdownPct}%. Trading costs are already deducted. Past behaviour is not a promise.
+            </p>
+            <Methodology bt={bt} contractHash={s.contractHash} />
           </div>
         )}
         {bt && bt.error && <p className="mt-2 text-[12px] text-amber-400">No historical data available for these assets right now.</p>}

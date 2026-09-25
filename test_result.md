@@ -12325,3 +12325,94 @@ agent_communication:
 #   binding, #4 immutable-binding hash revalidation, #5 multi-asset manual controls) + the unmocked
 #   acceptance sequence are now DONE. STILL PENDING (additive, not a blocker): Albert owner-scoped
 #   READ-ONLY context (7 functions). Recommend a short live paper observation before production autopilot.
+
+#====================================================================================================
+# MILESTONE M-F — Simplification + final regression (DEPLOYMENT GATE)   [main agent]
+#====================================================================================================
+# 1) SIMPLIFICATION (moved, never deleted). New Technical Centre screen `paperengine`
+#    ("More -> Technical Centre -> Trading Evidence -> Paper Engine",
+#    app/app/components/PaperEngineTechnical.js) now owns every engine read-out that used to be
+#    duplicated on the Albert-first surfaces: worker diagnostics, allocation-vs-limit bars, ranking
+#    provenance, rotation internals, execution assumptions (bps), account-value detail,
+#    reconciliation status, raw ledger and the full fill -> strategy version -> canonical decision ->
+#    market-observation evidence chain (per position, expandable).
+#      * PaperTradingBot.js: allocation panel + rotation internals + autopilot diagnostics + bps
+#        assumptions REMOVED from the primary surface, replaced by a plain-English "Where you stand"
+#        card (mode, running/paused, equity, free USDC, open positions, risk condition, price-data
+#        freshness, last action) + "Technical detail ->" link. Modes/proposals/positions/activity kept.
+#      * AlbertHome.js: duplicated positions table -> one plain sentence (assets + unrealised, or an
+#        honest "valuation unavailable"), everything else unchanged.
+#      * AskAlbert.js: duplicated state panel -> "What Albert can and cannot do" scope panel with links
+#        to Albert home + Technical Centre; provenance disclosure renamed "How Albert answered" and the
+#        duplicated evidence-source list dropped (chips already carry source + freshness).
+#      * StrategyStudio.js: results stay in plain sight (strategy return, Bitcoin over the same period,
+#        worst drawdown, tested period + coverage, one plain sentence); methodology, fees, slippage,
+#        backtest version, contract hash and data hash COLLAPSED into "Methodology, costs & integrity".
+#      * server.py: dashboard gains additive `strategy` block (bound ACTIVE strategy: id/name/version/
+#        hash/status/assets); state-of-play `paper.assignedStrategy` now reads it (no more "None
+#        assigned" while a strategy is live).
+#
+# 2) ENDPOINT AUDIT + HARDENING (the one material finding of M-F). ~70 legacy user-owned/mutating
+#    routes accepted a CLIENT-SUPPLIED pid with NO authentication (e.g. POST /api/v1/albert/mandate
+#    could be rewritten by anyone, which governs what the paper engine may do; also portfolio, chat,
+#    watchlist, notifications, baskets, legacy strategies, price alerts, voice prefs, decisions,
+#    welcome/weekly briefs, lifecycle, deployment-plan, discovery). ALL now require
+#    Depends(get_current_user) and derive pid from owner_pid(user) — any client pid is ignored
+#    (verified: unauth -> 401, forged pid -> own data). Global/cost-bearing routes (refresh,
+#    news/refresh, chat, tts, email/*, bitmark/run, alert-engine config+scan, simulate-shock,
+#    reconcile-signals, settings/models, admin/overview, audit, chat/history) now require a session
+#    too; id-addressed legacy docs (baskets, strategies, price alerts) are owner-scoped in the query.
+#    `_require_session(request)` added for the one route declared before get_current_user.
+#    Left public by design: /api/auth/google, /api/auth/logout, /api/auth/config, email unsubscribe,
+#    and the market-data GETs (no user-owned data).
+#
+# 3) LIVE UNMOCKED SHAKEDOWN — backend/scripts/mf_shakedown.py  => 24/24 PASS (browser closed).
+#    Real Kraken observation BTC:kraken:2026-09-25T13:43:51; dedicated account "M-F Shakedown"
+#    (pa_a0c21c0edc72, $100k, PAPER_AUTOPILOT) — the two existing accounts untouched. Strategy
+#    st_a3c59c7be0bf v1 hash 6672c70b3ac8 (BTC 100%) validated -> saved -> backtested (+20.44% vs BTC
+#    +20.62%, dd 28.77%, 199d, 100% coverage, dataHash a193ad039110) -> assigned -> PAPER_ACTIVE.
+#    Canonical BTC BUY (actionable+eligible+fresh, score 81.1) AND the strategy universe both
+#    authorised -> EXACTLY ONE fill (0.00914371 BTC @ 84,006.37, fee 3.08, cash 99,228.79) with an
+#    immutable StrategyDecisionSnapshot (outcome EXECUTED, bothAuthorized true). 9 other canonical
+#    BUYs (SOL/XRP/ETH/AVAX/ADA/DOT/DOGE/LINK/LTC) were OBSERVED and never entered (outside universe).
+#    Same-observation replay, worker restart and two concurrent workers produced NO duplicate.
+#    3 dashboard reads + state-of-play changed nothing. reconcile_multi ok for cash/fees/realizedPnl/
+#    accountSequence/qty:BTC/costBasis:BTC.
+#
+# 4) DEGRADATION HONESTY — backend/scripts/mf_degradation.py => 11/11 PASS: stale marks (no entry,
+#    equity UNAVAILABLE, holdings retained), missing mark (fails closed, EQUITY_UNAVAILABLE),
+#    stale canonical decision (no trade, observation left unconsumed to retry), ranking feed
+#    unavailable (conservative SPEC cap, availability=false, BTC keeps tier by identity), conflicting
+#    price sources (3-venue outlier-trimmed median, CoinGecko down reported honestly, confidence HIGH).
+#
+# 5) KILL SWITCHES — backend/scripts/mf_killswitch.py => 8/8 PASS: PAPER_EXECUTION_ENABLED=false,
+#    PAPER_AUTOPILOT_ENABLED=false, account pause (entries blocked, protective exits still run),
+#    mode=OBSERVE, strategy PAUSED (binding disappears) and re-activate (same version + hash).
+#
+# 6) EXECUTION PATH — one active path only: APScheduler `_paper_autopilot_worker` -> per-account DB
+#    lease -> `_autopilot_process_account_multi`. The legacy BTC-only `_autopilot_process_account` is
+#    reachable only with PAPER_MULTI_ASSET_ENABLED=false. The only economic mutations are
+#    apply_buy_atomic/apply_sell_atomic from (a) the worker, (b) proposal approve, (c) manual close —
+#    all authenticated, owner-scoped, confirm + idempotency gated.
+#
+# 7) ALBERT'S ACCESS — 6 allowlisted owner-scoped READ functions + an owner-resolved evidence lookup;
+#    no tool/function calling, no DB access, no HTTP, no mutation route. Conversational changes go
+#    through POST /paper/command, which is deterministic, read-only and returns a TYPED confirmation
+#    card; the user's Confirm performs the typed mutation (verified live end-to-end in the UI).
+#
+# 8) JOURNEYS (authenticated screenshots, 1920): Albert briefing -> Evidence -> Technical Centre ->
+#    back; Ask Albert owner-scoped answer with FRESH evidence chips; Strategies plain results +
+#    collapsed methodology; Paper Trading plain summary + Resume; Paper Engine full evidence chain.
+#    Confirmation card -> "Done — your paper account was updated".
+#
+# 9) REGRESSION: pytest tests/ -> 109 passed (no regressions from the hardening). `yarn build` ->
+#    Compiled successfully. Allowlist = exactly the two owners, enforced at login AND per request.
+#
+# KNOWN LIMITATIONS (named plainly): (a) uvicorn runs with --reload in preview; a reload while the
+#    scheduler/websocket threads are live can hang the old process and make the API briefly
+#    unresponsive (production must run WITHOUT --reload). (b) CoinGecko was intermittently down during
+#    M-F — handled honestly (3-venue median, ranking falls back to the conservative cap). (c) Pre-
+#    existing logged noise: compute_cycle_context HALVINGS unpack + a news-summary JSON parse, both
+#    caught, unrelated to the paper engine. (d) The autonomous frontend/backend testing agents were
+#    NOT run in M-F; verification used the live shakedown, degradation + kill-switch harnesses, the
+#    109-test suite, a clean production build and authenticated screenshots.

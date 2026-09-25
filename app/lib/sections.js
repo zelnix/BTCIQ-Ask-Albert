@@ -58,6 +58,8 @@ const SECTIONS = [
     blurb: 'Admin passcode for manual forecast runs, plus Ask Albert’s about & compliance information. (Live data-source status now lives in the Admin screen.)' },
   { id: 'paper', label: 'Paper Bot', icon: FlaskConical,
     blurb: 'Forward-test Albert’s engine with virtual money — no exchange keys, no real orders. Choose Observe, Ask-me-first, or Run Paper Autopilot (a background worker that trades continuously even when the app is closed). Watch simulated fills, positions, equity and an honest activity ledger. Paper results are never mixed with backtests or your real portfolio.' },
+  { id: 'paperengine', label: 'Paper Engine', icon: Wrench,
+    blurb: 'The engine behind Paper Trading, in full technical detail: background-worker diagnostics, allocation-versus-limit calculations, market-cap ranking provenance, rotation internals, execution assumptions, reconciliation status and the complete fill → strategy version → canonical decision → market-observation evidence chain. Read-only — this screen never places or changes a paper trade.' },
   { id: 'checkup', label: 'App Checkup', icon: Stethoscope,
     blurb: 'Not sure if something is broken? Albert checks the parts of BTCIQ needed for the app to work — connectivity, services, market-data freshness, the engine and your session — then explains in plain English what (if anything) is wrong, how confident he is, and the single best next step. Reads health only; never changes your data.' },
   { id: 'admin', label: 'Admin', icon: ShieldCheck,
@@ -107,7 +109,7 @@ const PRIMARY_NAV = [
 const TECH_GROUPS = [
   { label: 'Market Intelligence', ids: ['briefing', 'overview', 'forecasts', 'market-intel', 'drivers', 'crossmarket', 'analogs', 'news', 'macro'] },
   { label: 'Portfolio & Risk', ids: ['risk', 'leverage', 'events', 'smartmoney'] },
-  { label: 'Trading Evidence', ids: ['performance', 'alert-engine'] },
+  { label: 'Trading Evidence', ids: ['performance', 'paperengine', 'alert-engine'] },
   { label: 'On-chain & Flows', ids: ['whales', 'institutional', 'network', 'timemachine'] },
   { label: 'Data Trust', ids: ['dataaudit', 'alerts'] },
   { label: 'System', ids: ['admin', 'checkup', 'settings'] },

@@ -245,24 +245,17 @@ function Managing({ sop, onNav, onEvidence }) {
         <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-500">Pending</p><p className="text-sm font-bold text-white">{(paper.pendingProposals || []).length}</p></div>
       </div>
       {positions.length > 0 && (
-        <div className="mt-3 overflow-hidden rounded-lg border border-slate-800">
-          <table className="w-full text-[13px]">
-            <thead className="bg-slate-950/60 text-[10px] uppercase tracking-wider text-slate-500"><tr><th className="px-3 py-1.5 text-left font-medium">Asset</th><th className="px-3 py-1.5 text-right font-medium">Qty</th><th className="px-3 py-1.5 text-right font-medium">Avg entry</th><th className="px-3 py-1.5 text-right font-medium">Unreal. P&L</th></tr></thead>
-            <tbody>
-              {positions.slice(0, 5).map((p, i) => {
-                const up = pct(p.unrealizedPnl);
-                return (
-                  <tr key={p.paperPositionId || i} className="border-t border-slate-800/70">
-                    <td className="px-3 py-1.5 font-semibold text-slate-200">{p.asset}</td>
-                    <td className="px-3 py-1.5 text-right font-mono text-slate-300">{p.netQuantity}</td>
-                    <td className="px-3 py-1.5 text-right font-mono text-slate-400">{money(p.averageEntryPrice)}</td>
-                    <td className={`px-3 py-1.5 text-right font-mono ${up == null ? 'text-slate-500' : up >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{p.unrealizedPnl != null ? money(p.unrealizedPnl) : '—'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        // M-F: no duplicated positions table here — Paper Trading owns the list and
+        // the Technical Centre owns the per-position evidence. Albert just says it plainly.
+        <p className="mt-3 max-w-[80ch] text-[13px] leading-relaxed text-slate-300">
+          {(() => {
+            const names = positions.slice(0, 4).map((x) => x.asset).join(', ');
+            const more = positions.length > 4 ? ` and ${positions.length - 4} more` : '';
+            const known = positions.every((x) => x.unrealizedPnl != null);
+            const total = known ? positions.reduce((t, x) => t + Number(x.unrealizedPnl), 0) : null;
+            return `He is holding ${names}${more}, ${total == null ? 'with live valuation of at least one holding unavailable, so he is not quoting a P&L' : `currently ${total >= 0 ? 'up' : 'down'} ${money(Math.abs(total))} unrealised`}, each watched against its invalidation level.`;
+          })()}
+        </p>
       )}
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12px] text-slate-400">
         {lastAct && <span className="flex items-center gap-1"><Activity className="h-3.5 w-3.5 text-slate-500" />Last: {lastAct.note || lastAct.type} <span className="text-slate-600">· {timeAgo(lastAct.recordedAt || lastAct.effectiveAt)}</span></span>}
