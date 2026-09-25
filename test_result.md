@@ -11831,3 +11831,52 @@ agent_communication:
       floats-as-strings in paper v1 (noted). Advanced spec pieces deferred for v1: OCO/limit orders,
       reconciliation jobs, background scheduler (ticks run lazily on dashboard read), multi-asset paper.
 
+
+#====================================================================================================
+# Ask-Albert Code Review Remediation — MILESTONE 1: SAFETY CONTAINMENT (backend)
+#====================================================================================================
+# agent: main
+# status: IMPLEMENTED + self-tested via pytest (native, credit-efficient). Awaiting user review before M2.
+# scope (M1 only): authentication + server-derived ownership on all new user-owned routes;
+#   real HTTP status codes; truthful diagnostics (no fabricated PASS); paper EXECUTION disabled by flag.
+#
+# Files changed:
+#   - backend/server.py:
+#       * owner_pid(user) helper + PAPER_EXECUTION_ENABLED / PAPER_AUTOPILOT_ENABLED flags (both OFF).
+#       * Added Depends(get_current_user) + owner-scoped queries to: paper/* (accounts, dashboard, mode,
+#         lifecycle, proposal, close, trade-log, evidence), diagnostics/* (checkups, runs, get, action,
+#         verify, reports), driver-alerts/subs (GET+POST), equity-history, paper-portfolio, paper-reset,
+#         trader-home, performance. Client pid/ownerId no longer authoritative (ignored).
+#       * Real status codes: 401 (no session, via dependency), 404 (unknown/non-owned), 409 (conflict/
+#         not-open/expired/breaker-resume), 422 (bad schema/mode/horizon), 503 (execution disabled).
+#       * Diagnostics honesty: fabricated PASS replaced with NOT_TESTABLE for app.version/runtime/cache,
+#         network.internet/tls, engine.health (no dry-run harness), provider.rate_limit, portfolio.sync;
+#         mandate.sync added; auth.session.validity now derived from the validated session; every check
+#         carries source + redaction_count; summary never says "Everything checks out" when a check is
+#         NOT_TESTABLE ("Some checks could not be completed"); run totals redaction_count.
+#       * Support-report notes sanitised (secrets/tokens/emails/URLs redacted, bounded) + structured,
+#         owner-scoped report doc.
+#       * Paper dashboard integrity never HEALTHY (LIMITED_NO_WORKER), executionWorker=NONE,
+#         reconciliation=NONE, lastReconciledAt=null, executionEnabled/autopilotEnabled surfaced.
+#       * _paper_tick autopilot branch cannot execute while flags OFF (logs EXEC_DISABLED).
+#       * resume cannot clear a PAUSED_RISK_BREAKER (409).
+#   - backend/config.py: TTL index on diagnostics_reports_col.expiresAt (auto-delete) + owner indexes.
+#   - backend/tests/test_m1_containment.py (NEW): 19 tests.
+#
+# Test evidence: cd /app/backend && python -m pytest tests/test_m1_containment.py -v  => 19 passed.
+#   Covers: 401 on 8 protected routes; expired session 401; legacy ?pid= cannot authenticate;
+#   client pid/ownerId cannot set owner; cross-user dashboard/mode/lifecycle/trade-log = 404;
+#   guessed account/run/proposal IDs = 404; diagnostics NOT_TESTABLE matrix + source/redaction fields +
+#   "not everything checks out"; report redaction (>=3) + cross-user report 404; paper integrity != HEALTHY;
+#   approve blocked by 503 while execution disabled (cancel still 200); driver-alerts 422 + owner-scope.
+#
+# Deliberately DEFERRED to later milestones (per approved 3-stage plan):
+#   - M2: canonical decision binding (remove Market-Driver->BUY/SELL shortcut in _paper_desired_action),
+#     mandate/reserve/sizing gates, Decimal128 accounting, atomic CAS approval + idempotency, high-water
+#     drawdown, missing-price equity truth. M3: consolidated acceptance (frontend build + full regression).
+#   - Paper execution stays OFF for the entire remediation (labelled "disabled pending remediation and
+#     acceptance"), not enabled until baseline receives explicit ACCEPT.
+#
+# NOTE: No frontend rewrite required for M1 — components call same-origin /api (session cookie auto-sent)
+#   and already degrade gracefully on non-200. Unauthenticated use of these routes now correctly 401s.
+

@@ -3600,6 +3600,35 @@ def get_current_user(request: Request,
     return user
 
 
+def owner_pid(user: dict) -> str:
+    """Canonical server-derived owner identifier for every user-owned route.
+
+    Mirrors the frontend's `'u_' + uid` scoping so all previously-created
+    per-user data (paper accounts, diagnostics runs, driver-alert subs, equity
+    snapshots) remains readable. The client can never select or override this —
+    identity comes only from the validated session (see get_current_user)."""
+    return f"u_{user['_id']}"
+
+
+def _remediation_flag(name: str, default: bool) -> bool:
+    """Server-controlled feature flag (env-overridable). Used to keep simulated
+    paper EXECUTION and AUTOPILOT disabled for the whole Ask-Albert remediation.
+    Paper execution stays OFF (single-doc atomic accounting is built and the
+    baseline is explicitly ACCEPTed in a later milestone) — this is a deliberate
+    'disabled pending remediation and acceptance' state, not a store limitation."""
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return v.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+# Both default OFF for the entire remediation programme.
+PAPER_EXECUTION_ENABLED = _remediation_flag('PAPER_EXECUTION_ENABLED', False)
+PAPER_AUTOPILOT_ENABLED = _remediation_flag('PAPER_AUTOPILOT_ENABLED', False)
+PAPER_EXEC_DISABLED_MSG = ('Paper execution is disabled pending remediation and '
+                           'acceptance. No simulated fills are placed in this build.')
+
+
 @app.post('/api/auth/google')
 def auth_google(payload: dict = Body(...)):
     """Verify a Google ID-token credential, upsert the user, and set a session cookie."""
@@ -5549,13 +5578,13 @@ def data_audit_live():
 
 
 @app.get('/api/v1/albert/trader-home')
-def albert_trader_home(pid: str = '', symbol: str = 'BTC'):
+def albert_trader_home(symbol: str = 'BTC', user: dict = Depends(get_current_user)):
     """Trader Home cockpit aggregation — one authenticated, user-scoped payload that
     assembles the deterministic signal, drivers, historical edge, execution posture,
     the user's portfolio impact, data integrity, and a plain-first executive brief by
     REUSING existing engine outputs (no duplicated decision logic). Honest about
-    freshness; paper/advisory only."""
-    pid = (pid or '').strip()[:80]
+    freshness; paper/advisory only. Identity is server-derived from the session."""
+    pid = owner_pid(user)
     symbol = (symbol or 'BTC').strip().upper()[:6]
     now_iso = datetime.datetime.utcnow().isoformat()
 
@@ -5969,9 +5998,10 @@ def _compute_performance_module(pid: str = '', symbol: str = 'BTC', fee_pct: flo
 
 
 @app.get('/api/v1/albert/performance')
-def albert_performance(pid: str = '', symbol: str = 'BTC', fee_pct: float = 0.4):
+def albert_performance(symbol: str = 'BTC', fee_pct: float = 0.4,
+                       user: dict = Depends(get_current_user)):
     try:
-        pid = (pid or '').strip()[:80]
+        pid = owner_pid(user)
         return _compute_performance_module(pid, symbol, fee_pct)
     except Exception:  # noqa
         traceback.print_exc()
@@ -6555,26 +6585,25 @@ def _evaluate_driver_alerts(pid):
 
 
 @app.get('/api/v1/albert/driver-alerts/subs')
-def albert_driver_alert_subs(pid: str = ''):
-    pid = (pid or '').strip()[:80]
+def albert_driver_alert_subs(user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
     out = {h: False for h in _MD_WEIGHTS}
-    if pid:
-        try:
-            for s in driver_alert_subs_col.find({'pid': pid}):
-                if s.get('horizon') in out:
-                    out[s['horizon']] = bool(s.get('enabled'))
-        except Exception:  # noqa
-            traceback.print_exc()
+    try:
+        for s in driver_alert_subs_col.find({'pid': pid}):
+            if s.get('horizon') in out:
+                out[s['horizon']] = bool(s.get('enabled'))
+    except Exception:  # noqa
+        traceback.print_exc()
     return {'status': 'ready', 'subscriptions': out, 'horizons': list(_MD_WEIGHTS.keys())}
 
 
 @app.post('/api/v1/albert/driver-alerts/subs')
-def albert_driver_alert_subs_set(payload: dict = Body(...)):
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+def albert_driver_alert_subs_set(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
     hz = (str(payload.get('horizon') or '')).strip().upper()
     enabled = bool(payload.get('enabled'))
-    if not pid or hz not in _MD_WEIGHTS:
-        return {'error': 'pid and valid horizon required'}
+    if hz not in _MD_WEIGHTS:
+        raise HTTPException(status_code=422, detail='A valid horizon is required.')
     try:
         driver_alert_subs_col.update_one(
             {'_id': f'{pid}|{hz}'},
@@ -6586,7 +6615,7 @@ def albert_driver_alert_subs_set(payload: dict = Body(...)):
             _evaluate_driver_alerts(pid)
     except Exception:  # noqa
         traceback.print_exc()
-        return {'status': 'error'}
+        raise HTTPException(status_code=503, detail='Could not update the subscription right now.')
     return {'status': 'ready', 'horizon': hz, 'enabled': enabled}
 
 
@@ -6602,11 +6631,33 @@ _DIAG_CATEGORY_ORDER = ['CONNECTIVITY', 'AUTH_SESSION', 'BTCIQ_SERVICE', 'ENGINE
                         'USER_INPUT', 'UNKNOWN']
 
 
-def _diag_check(cid, category, result, evidence_code, t0, note=''):
+def _diag_check(cid, category, result, evidence_code, t0, note='',
+                source='SERVER_OBSERVED', redactions=0):
     return {'check_id': cid, 'category': category, 'result': result,
             'evidence_code': evidence_code, 'note': note,
+            'source': source, 'redaction_count': int(redactions),
             'observed_at': datetime.datetime.utcnow().isoformat(),
             'duration_ms': int((time.time() - t0) * 1000)}
+
+
+_REPORT_REDACT_PATTERNS = [
+    re.compile(r'(?i)\b(?:bearer|token|secret|api[_-]?key|password|passwd|pwd|cookie|authorization)\b\s*[:=]?\s*\S+'),
+    re.compile(r'[A-Za-z0-9._-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'),          # emails
+    re.compile(r'https?://\S+'),                                          # urls (may carry params/tokens)
+    re.compile(r'\b(?:eyJ[A-Za-z0-9_-]{10,})\b'),                          # JWT-ish
+    re.compile(r'\b(?:sk|pk|rk)_[A-Za-z0-9]{8,}\b'),                       # provider secret keys
+]
+
+
+def _sanitize_report_note(raw):
+    """Redact secrets/tokens/emails/URLs from a free-text user note and bound its
+    length before storage. Returns (clean_text, redaction_count)."""
+    text = str(raw or '')[:2000]
+    redactions = 0
+    for pat in _REPORT_REDACT_PATTERNS:
+        text, n = pat.subn('[redacted]', text)
+        redactions += n
+    return text.strip()[:1000], redactions
 
 
 def _run_diagnostics(mode='checkup', client=None, context=None, pid=''):
@@ -6615,17 +6666,31 @@ def _run_diagnostics(mode='checkup', client=None, context=None, pid=''):
     checks = []
     redaction_count = 0
 
-    # --- Client-reported (informational; server can't verify device internals) ---
+    # --- Client-reported / device-owned: the server cannot verify these, so we
+    #     report NOT_TESTABLE rather than a fabricated PASS (evidence before claim).
     t = time.time()
-    checks.append(_diag_check('app.version.compatibility', 'CLIENT_APP', 'PASS', 'APP_VERSION_OK', t,
-                              f"App {client.get('app_version', 'n/a')} build {client.get('build_number', 'n/a')}."))
-    checks.append(_diag_check('app.runtime.integrity', 'CLIENT_APP', 'PASS', 'RUNTIME_OK', t))
-    checks.append(_diag_check('app.cache.integrity', 'CLIENT_APP', 'PASS', 'CACHE_OK', t))
+    checks.append(_diag_check('app.version.compatibility', 'CLIENT_APP', 'NOT_TESTABLE',
+                              'NO_VERSION_POLICY', t,
+                              'No server-owned supported-version policy to compare against.',
+                              source='CLIENT_REPORTED'))
+    checks.append(_diag_check('app.runtime.integrity', 'CLIENT_APP', 'NOT_TESTABLE', 'CLIENT_OWNED', t,
+                              'Runtime integrity is a device-side check; not observed by the server.',
+                              source='CLIENT_REPORTED'))
+    checks.append(_diag_check('app.cache.integrity', 'CLIENT_APP', 'NOT_TESTABLE', 'CLIENT_OWNED', t,
+                              'Local feature-cache integrity cannot be inferred server-side.',
+                              source='CLIENT_REPORTED'))
 
-    # --- Connectivity + TLS: the request reached us over HTTPS, so these pass ----
+    # --- Connectivity + TLS: a proxied request reaching FastAPI does NOT prove
+    #     general device internet health or the device-to-edge TLS hop.
     t = time.time()
-    checks.append(_diag_check('network.internet.reachability', 'CONNECTIVITY', 'PASS', 'REACHABLE', t))
-    checks.append(_diag_check('network.btciq.tls', 'CONNECTIVITY', 'PASS', 'TLS_OK', t))
+    checks.append(_diag_check('network.internet.reachability', 'CONNECTIVITY', 'NOT_TESTABLE',
+                              'NOT_SERVER_OBSERVABLE', t,
+                              'Reaching the server only proves this one hop, not device internet health.',
+                              source='CLIENT_REPORTED'))
+    checks.append(_diag_check('network.btciq.tls', 'CONNECTIVITY', 'NOT_TESTABLE',
+                              'EDGE_HOP_NOT_OBSERVABLE', t,
+                              'Device-to-edge TLS is distinct from the edge-to-FastAPI hop and is not observed here.',
+                              source='CLIENT_REPORTED'))
 
     # --- Service liveness + readiness (Mongo ping) -------------------------------
     t = time.time()
@@ -6638,13 +6703,15 @@ def _run_diagnostics(mode='checkup', client=None, context=None, pid=''):
     except Exception:  # noqa
         checks.append(_diag_check('service.readiness', 'BTCIQ_SERVICE', 'FAIL', 'DB_UNREACHABLE', t))
 
-    # --- Auth session -------------------------------------------------------------
+    # --- Auth session: derived from a validated server session (the calling route
+    #     required get_current_user); a non-empty PID string is NOT accepted as proof.
     t = time.time()
     if pid:
-        checks.append(_diag_check('auth.session.validity', 'AUTH_SESSION', 'PASS', 'PID_PRESENT', t))
+        checks.append(_diag_check('auth.session.validity', 'AUTH_SESSION', 'PASS', 'SESSION_VALID', t,
+                                  'Request carried a valid, unexpired server session.'))
     else:
-        checks.append(_diag_check('auth.session.validity', 'AUTH_SESSION', 'WARN', 'NO_PID',
-                                  t, 'No signed-in identity supplied to the check.'))
+        checks.append(_diag_check('auth.session.validity', 'AUTH_SESSION', 'NOT_TESTABLE', 'NO_SESSION',
+                                  t, 'No validated session was available to this check.'))
 
     # --- Engine + market data (from the latest run) ------------------------------
     t = time.time()
@@ -6654,8 +6721,16 @@ def _run_diagnostics(mode='checkup', client=None, context=None, pid=''):
     except Exception:  # noqa
         run = {}
     if run:
-        checks.append(_diag_check('engine.input_contract', 'ENGINE', 'PASS', 'INPUTS_OK', t))
-        checks.append(_diag_check('engine.health', 'ENGINE', 'PASS', 'ENGINE_OK', t))
+        # Input contract: validate the versioned structure of the stored run.
+        contract_ok = bool(run.get('decision')) and bool(run.get('created_at') or run.get('as_of'))
+        checks.append(_diag_check('engine.input_contract', 'ENGINE',
+                                  'PASS' if contract_ok else 'WARN',
+                                  'INPUTS_OK' if contract_ok else 'INPUTS_INCOMPLETE', t,
+                                  '' if contract_ok else 'Latest run is missing required decision/timestamp fields.'))
+        # Engine health: a stored run merely EXISTING is not proof the engine is
+        # healthy. Without a bounded dry-run harness this is honestly NOT_TESTABLE.
+        checks.append(_diag_check('engine.health', 'ENGINE', 'NOT_TESTABLE', 'NO_DRY_RUN', t,
+                                  'No bounded synthetic/dry-run engine check is available in this build.'))
         age_h = _md_iso_age_hours(run.get('created_at') or run.get('as_of'))
         t = time.time()
         if age_h is None:
@@ -6671,7 +6746,10 @@ def _run_diagnostics(mode='checkup', client=None, context=None, pid=''):
         checks.append(_diag_check('market_data.completeness', 'MARKET_DATA', 'PASS' if complete else 'WARN',
                                   'COMPLETE' if complete else 'PARTIAL', t))
     else:
-        checks.append(_diag_check('engine.health', 'ENGINE', 'FAIL', 'NO_RUN', t, 'No engine run available.'))
+        checks.append(_diag_check('engine.input_contract', 'ENGINE', 'NOT_TESTABLE', 'NO_RUN', t,
+                                  'No engine run available to validate the input contract.'))
+        checks.append(_diag_check('engine.health', 'ENGINE', 'NOT_TESTABLE', 'NO_DRY_RUN', t,
+                                  'No engine run and no dry-run harness available.'))
         checks.append(_diag_check('market_data.freshness', 'MARKET_DATA', 'FAIL', 'NO_DATA', t))
 
     # --- External providers (reuse data_audit freshness) -------------------------
@@ -6688,19 +6766,32 @@ def _run_diagnostics(mode='checkup', client=None, context=None, pid=''):
             checks.append(_diag_check('provider.health', 'EXTERNAL_PROVIDER', 'PASS', 'PROVIDERS_OK', t))
     except Exception:  # noqa
         checks.append(_diag_check('provider.health', 'EXTERNAL_PROVIDER', 'WARN', 'AUDIT_ERROR', t))
-    checks.append(_diag_check('provider.rate_limit', 'EXTERNAL_PROVIDER', 'PASS', 'WITHIN_LIMITS', time.time()))
+    checks.append(_diag_check('provider.rate_limit', 'EXTERNAL_PROVIDER', 'NOT_TESTABLE',
+                              'NO_QUOTA_EVIDENCE', time.time(),
+                              'No provider quota/rate-limit telemetry is recorded to evidence this.'))
 
-    # --- Portfolio / mandate sync (fast DB read — avoid live re-pricing here) ----
+    # --- Portfolio / mandate sync ------------------------------------------------
     t = time.time()
     if pid:
+        # Sync requires comparing an authorised client revision against the server
+        # revision. Absence of a client revision is documented separately from a
+        # successful sync — so this is NOT_TESTABLE, never a fabricated PASS.
+        checks.append(_diag_check('portfolio.sync', 'SYNC', 'NOT_TESTABLE', 'NO_CLIENT_REVISION', t,
+                                  'No authorised client portfolio revision was supplied to compare.'))
+        t = time.time()
         try:
-            pdoc = paper_portfolio_col.find_one({'_id': pid}, {'holdings': 1}) or {}
-            checks.append(_diag_check('portfolio.sync', 'SYNC', 'PASS' if pdoc else 'WARN',
-                                      'PORTFOLIO_OK' if pdoc else 'PORTFOLIO_EMPTY', t))
+            mdoc = mandate_col.find_one({'pid': pid}) or mandate_col.find_one({'_id': pid})
+            if mdoc:
+                checks.append(_diag_check('mandate.sync', 'SYNC', 'PASS', 'MANDATE_PRESENT', t,
+                                          'A Trading Mandate is configured for this account.'))
+            else:
+                checks.append(_diag_check('mandate.sync', 'SYNC', 'NOT_TESTABLE', 'MANDATE_ABSENT', t,
+                                          'No Trading Mandate is configured yet for this account.'))
         except Exception:  # noqa
-            checks.append(_diag_check('portfolio.sync', 'SYNC', 'WARN', 'PORTFOLIO_ERROR', t))
+            checks.append(_diag_check('mandate.sync', 'SYNC', 'NOT_TESTABLE', 'MANDATE_READ_ERROR', t))
     else:
-        checks.append(_diag_check('portfolio.sync', 'SYNC', 'SKIP', 'NO_PID', t))
+        checks.append(_diag_check('portfolio.sync', 'SYNC', 'NOT_TESTABLE', 'NO_SESSION', t))
+        checks.append(_diag_check('mandate.sync', 'SYNC', 'NOT_TESTABLE', 'NO_SESSION', t))
 
     # --- Explanation service (LLM configured?) -----------------------------------
     t = time.time()
@@ -6708,10 +6799,13 @@ def _run_diagnostics(mode='checkup', client=None, context=None, pid=''):
                               'LLM_READY' if _HAS_LLM else 'LLM_UNCONFIGURED', t,
                               '' if _HAS_LLM else 'Plain-English explanations fall back to templates.'))
 
-    # --- Notifications (client-owned; informational) -----------------------------
+    # --- Notifications (device/client-owned permission + registration) -----------
     if mode == 'checkup' and (context.get('include_optional_notifications') or client.get('include_optional_notifications')):
-        checks.append(_diag_check('notifications.permission', 'PERMISSION', 'SKIP', 'CLIENT_OWNED', time.time()))
-        checks.append(_diag_check('notifications.registration', 'PERMISSION', 'SKIP', 'CLIENT_OWNED', time.time()))
+        checks.append(_diag_check('notifications.permission', 'PERMISSION', 'NOT_TESTABLE', 'CLIENT_OWNED',
+                                  time.time(), 'Notification permission is a device state not observed server-side.',
+                                  source='CLIENT_REPORTED'))
+        checks.append(_diag_check('notifications.registration', 'PERMISSION', 'NOT_TESTABLE', 'CLIENT_OWNED',
+                                  time.time(), source='CLIENT_REPORTED'))
 
     # --- Diagnose: worst failing category wins -----------------------------------
     fails = [c for c in checks if c['result'] == 'FAIL']
@@ -6747,11 +6841,18 @@ def _run_diagnostics(mode='checkup', client=None, context=None, pid=''):
                             "You haven't added any paper positions.", 'none', 'Understood'),
     }
     if primary is None:
-        outcome, title = 'healthy', 'Everything checks out'
-        plain = "Albert checked the core parts of BTCIQ and they're all working."
-        category, public_code, cause_plain = 'UNKNOWN', 'OK000', 'No problem detected.'
+        not_testable = [c for c in checks if c['result'] == 'NOT_TESTABLE']
+        if not_testable:
+            outcome, title = 'partial', 'Some checks could not be completed'
+            plain = ("The parts Albert can verify are working. Some checks couldn't be "
+                     "completed on the server, so this isn't a clean bill of health.")
+            confidence = 'UNKNOWN'
+        else:
+            outcome, title = 'healthy', 'Everything checks out'
+            plain = "Albert checked the core parts of BTCIQ and they're all working."
+            confidence = 'CONFIRMED'
+        category, public_code, cause_plain = 'UNKNOWN', 'OK000', plain
         action_id, action_label = 'none', 'Done'
-        confidence = 'CONFIRMED'
     else:
         ev = primary['evidence_code']
         cat, code, title, cause_plain, action_id, action_label = CATALOG.get(
@@ -6770,11 +6871,19 @@ def _run_diagnostics(mode='checkup', client=None, context=None, pid=''):
             confidence = 'POSSIBLE'
 
     run_id = 'diag_' + uuid.uuid4().hex[:16]
+    redaction_count = sum(int(c.get('redaction_count') or 0) for c in checks)
+    n_not_testable = sum(1 for c in checks if c['result'] == 'NOT_TESTABLE')
     result = {
         'run_id': run_id, 'mode': mode, 'status': 'completed',
         'started_at': checks[0]['observed_at'] if checks else datetime.datetime.utcnow().isoformat(),
         'completed_at': datetime.datetime.utcnow().isoformat(),
-        'summary': {'outcome': outcome, 'title': title, 'plain_meaning': plain, 'confidence': confidence},
+        'summary': {'outcome': outcome, 'title': title, 'plain_meaning': plain,
+                    'confidence': confidence, 'checks_incomplete': n_not_testable > 0,
+                    'not_testable_count': n_not_testable,
+                    'counts': {'pass': sum(1 for c in checks if c['result'] == 'PASS'),
+                               'warn': sum(1 for c in checks if c['result'] == 'WARN'),
+                               'fail': sum(1 for c in checks if c['result'] == 'FAIL'),
+                               'not_testable': n_not_testable}},
         'diagnosis': {'category': category, 'public_code': public_code,
                       'ruleset_version': DIAG_RULESET_VERSION,
                       'evidence_refs': [c['check_id'] for c in checks if c['result'] in ('FAIL', 'WARN')]},
@@ -6796,53 +6905,61 @@ def _run_diagnostics(mode='checkup', client=None, context=None, pid=''):
 
 
 @app.post('/api/v1/albert/diagnostics/checkups')
-def albert_diagnostics_checkup(payload: dict = Body(default={})):
-    pid = (str((payload or {}).get('pid') or '')).strip()[:80]
-    res = _run_diagnostics('checkup', (payload or {}).get('client') or payload, payload, pid)
+def albert_diagnostics_checkup(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
+    res = _run_diagnostics('checkup', (payload or {}).get('client') or {}, payload, pid)
     return {'status': 'ready', **res}
 
 
 @app.post('/api/v1/albert/diagnostics/runs')
-def albert_diagnostics_run(payload: dict = Body(default={})):
-    pid = (str((payload or {}).get('pid') or '')).strip()[:80]
+def albert_diagnostics_run(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
     res = _run_diagnostics('contextual', (payload or {}).get('client') or {}, (payload or {}).get('context') or payload, pid)
     return {'status': 'ready', **res}
 
 
 @app.get('/api/v1/albert/diagnostics/runs/{run_id}')
-def albert_diagnostics_get(run_id: str):
-    doc = diagnostics_runs_col.find_one({'_id': run_id}, {'_id': 0})
+def albert_diagnostics_get(run_id: str, user: dict = Depends(get_current_user)):
+    doc = diagnostics_runs_col.find_one({'_id': run_id, 'ownerPid': owner_pid(user)}, {'_id': 0})
     if not doc:
-        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'Unknown diagnostic run.'}}
+        raise HTTPException(status_code=404, detail='Unknown diagnostic run.')
     return {'status': 'ready', **doc}
 
 
 @app.post('/api/v1/albert/diagnostics/runs/{run_id}/actions/{action_id}')
-def albert_diagnostics_action(run_id: str, action_id: str, payload: dict = Body(default={})):
-    # Remediation broker: only SAFE, whitelisted actions. Most are client-directed;
-    # the server never executes arbitrary or trading-critical changes.
+def albert_diagnostics_action(run_id: str, action_id: str, payload: dict = Body(default={}),
+                              user: dict = Depends(get_current_user)):
+    # Remediation broker: actions are bound to the originating owner-scoped run and
+    # are only SAFE, whitelisted, client-directed directives. The server never
+    # executes arbitrary or trading-critical changes here.
+    run = diagnostics_runs_col.find_one({'_id': run_id, 'ownerPid': owner_pid(user)})
+    if not run:
+        raise HTTPException(status_code=404, detail='Unknown diagnostic run.')
     SAFE = {'retry': 're-run the checks', 'clear_cache': 'clear local cache (client)',
             'reconnect': 'reconnect (client)', 'sign_in': 'sign in (client)', 'none': 'no action'}
     if action_id not in SAFE:
-        return {'status': 'error', 'error': {'code': 'ACTION_NOT_ALLOWED', 'message': 'That action is not permitted.'}}
+        raise HTTPException(status_code=422, detail='That action is not permitted.')
     if action_id in ('sign_in',) and not (payload or {}).get('confirmed'):
-        return {'status': 'error', 'error': {'code': 'CONFIRMATION_REQUIRED', 'message': 'This action needs your confirmation.'}}
+        # Business response (not an error envelope); the client must confirm first.
+        return {'status': 'confirmation_required', 'action_id': action_id,
+                'message': 'This action needs your confirmation.'}
     return {'status': 'ready', 'action_id': action_id, 'directive': SAFE[action_id],
             'owner': 'client' if action_id != 'retry' else 'server'}
 
 
 @app.post('/api/v1/albert/diagnostics/runs/{run_id}/verify')
-def albert_diagnostics_verify(run_id: str, payload: dict = Body(default={})):
-    prev = diagnostics_runs_col.find_one({'_id': run_id})
+def albert_diagnostics_verify(run_id: str, payload: dict = Body(default={}),
+                              user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
+    prev = diagnostics_runs_col.find_one({'_id': run_id, 'ownerPid': pid})
     if not prev:
-        return {'status': 'error', 'error': {'code': 'EXPIRED', 'message': 'This diagnosis has expired.'}}
-    pid = prev.get('ownerPid', '')
-    fresh = _run_diagnostics(prev.get('mode', 'checkup'), prev.get('technical_details', {}), {}, pid)
+        raise HTTPException(status_code=404, detail='This diagnosis has expired or was not found.')
+    fresh = _run_diagnostics(prev.get('mode', 'checkup'), {}, {}, pid)
     prev_cat = (prev.get('diagnosis') or {}).get('category')
     new_out = fresh['summary']['outcome']
     if new_out == 'healthy':
         verdict = 'fixed'
-    elif (fresh.get('diagnosis') or {}).get('category') == prev_cat and new_out != 'healthy':
+    elif (fresh.get('diagnosis') or {}).get('category') == prev_cat and new_out not in ('healthy', 'partial'):
         verdict = 'still_failing'
     else:
         verdict = 'unable_to_verify'
@@ -6850,15 +6967,28 @@ def albert_diagnostics_verify(run_id: str, payload: dict = Body(default={})):
 
 
 @app.post('/api/v1/albert/diagnostics/runs/{run_id}/reports')
-def albert_diagnostics_report(run_id: str, payload: dict = Body(default={})):
-    if not diagnostics_runs_col.find_one({'_id': run_id}):
-        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'Unknown diagnostic run.'}}
+def albert_diagnostics_report(run_id: str, payload: dict = Body(default={}),
+                              user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
+    run = diagnostics_runs_col.find_one({'_id': run_id, 'ownerPid': pid})
+    if not run:
+        raise HTTPException(status_code=404, detail='Unknown diagnostic run.')
+    note, redactions = _sanitize_report_note((payload or {}).get('user_note', ''))
     rid = 'rpt_' + uuid.uuid4().hex[:12]
-    expires = (datetime.datetime.utcnow() + datetime.timedelta(days=14)).isoformat()
+    now = datetime.datetime.utcnow()
+    expires = now + datetime.timedelta(days=14)
+    summ = run.get('summary') or {}
+    diag = run.get('diagnosis') or {}
     diagnostics_reports_col.update_one({'_id': rid}, {'$set': {
-        '_id': rid, 'run_id': run_id, 'createdAt': datetime.datetime.utcnow().isoformat(),
-        'expiresAt': expires, 'note': (payload or {}).get('user_note', '')[:2000]}}, upsert=True)
-    return {'status': 'ready', 'report_id': rid, 'expiresAt': expires}
+        '_id': rid, 'run_id': run_id, 'ownerPid': pid,
+        'createdAt': now.isoformat(), 'expiresAt': expires,
+        'schemaVersion': 'diag-report-v1',
+        'note': note, 'redactionCount': redactions,
+        'summary': {'outcome': summ.get('outcome'), 'title': summ.get('title'),
+                    'confidence': summ.get('confidence')},
+        'category': diag.get('category'), 'publicCode': diag.get('public_code')}}, upsert=True)
+    return {'status': 'ready', 'report_id': rid, 'expiresAt': expires.isoformat(),
+            'redactionCount': redactions}
 
 
 # ===================== Paper-Trading Bot (v1, paper-only) =====================
@@ -7058,6 +7188,10 @@ def _paper_tick(acct):
                           f"Proposed {action} BTC — awaiting your approval.")
         return
     if mode == 'PAPER_AUTOPILOT':
+        if not (PAPER_EXECUTION_ENABLED and PAPER_AUTOPILOT_ENABLED):
+            _paper_ledger_add(acct_id, 'EXEC_DISABLED', 'account', acct_id, None, None,
+                              'Autopilot is disabled during remediation — no simulated trade executed.')
+            return
         res, err = _paper_execute(acct, action, notional or 0, source='autopilot', decision=decision)
         if err and err not in ('NO_POSITION', 'INSUFFICIENT_CASH'):
             _paper_ledger_add(acct_id, 'EXEC_SKIPPED', 'account', acct_id, None, None, f"Autopilot skipped: {err}.")
@@ -7077,13 +7211,11 @@ def _paper_get(acct_id, pid):
 
 
 @app.post('/api/v1/albert/paper/accounts')
-def paper_create_account(payload: dict = Body(...)):
-    pid = (str(payload.get('pid') or payload.get('ownerId') or '')).strip()[:80]
-    if not pid:
-        return {'error': {'code': 'AUTH_REQUIRED', 'message': 'Sign in to create a paper account.'}}
+def paper_create_account(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
     mode = payload.get('mode', 'APPROVAL_REQUIRED')
     if mode not in ('OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT'):
-        mode = 'APPROVAL_REQUIRED'
+        raise HTTPException(status_code=422, detail='Invalid mode.')
     start = _num(payload.get('startingCash')) or 100000.0
     acct = {
         'paperAccountId': 'pa_' + uuid.uuid4().hex[:12], 'ownerId': pid,
@@ -7101,23 +7233,22 @@ def paper_create_account(payload: dict = Body(...)):
 
 
 @app.get('/api/v1/albert/paper/accounts')
-def paper_list_accounts(pid: str = ''):
-    pid = (pid or '').strip()[:80]
+def paper_list_accounts(user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
     out = []
-    if pid:
-        for a in paper_accounts_col.find({'ownerId': pid}).sort('createdAt', -1):
-            eq = _paper_equity(a)
-            out.append({**_paper_acct_public(a), 'equity': eq['value'], 'drawdownPct': eq['drawdownPct'],
-                        'openPositions': len(_paper_positions(a['paperAccountId']))})
+    for a in paper_accounts_col.find({'ownerId': pid}).sort('createdAt', -1):
+        eq = _paper_equity(a)
+        out.append({**_paper_acct_public(a), 'equity': eq['value'], 'drawdownPct': eq['drawdownPct'],
+                    'openPositions': len(_paper_positions(a['paperAccountId']))})
     return {'status': 'ready', 'accounts': out}
 
 
 @app.get('/api/v1/albert/paper/accounts/{acct_id}/dashboard')
-def paper_dashboard(acct_id: str, pid: str = ''):
-    pid = (pid or '').strip()[:80]
+def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
     a = _paper_get(acct_id, pid)
     if not a:
-        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No such paper account.'}}
+        raise HTTPException(status_code=404, detail='No such paper account.')
     _paper_tick(a)
     a = paper_accounts_col.find_one({'paperAccountId': acct_id})  # refresh post-tick
     eq = _paper_equity(a)
@@ -7131,6 +7262,15 @@ def paper_dashboard(acct_id: str, pid: str = ''):
     closed = list(paper_positions_col.find({'paperAccountId': acct_id, 'status': 'CLOSED'}, {'_id': 0}))
     wins = sum(1 for c in closed if (_num(c.get('realizedPnl')) or 0) > 0)
     eqc = {k: v for k, v in eq.items() if not k.startswith('_')}
+    # Truthful integrity: there is NO durable worker or reconciliation process in
+    # this build, so the account is never labelled HEALTHY and lastReconciledAt is
+    # null (reconciliation did not actually run). Execution is disabled by flag.
+    if not PAPER_EXECUTION_ENABLED:
+        pause_reason = 'PAPER_EXECUTION_DISABLED_PENDING_REMEDIATION'
+    elif not eq['_fresh']:
+        pause_reason = 'STALE_MARKS'
+    else:
+        pause_reason = None
     return {'status': 'ready', 'paperOnly': True, 'asOf': datetime.datetime.utcnow().isoformat(),
             'account': _paper_acct_public(a), 'equity': eqc, 'positions': positions,
             'openOrders': [], 'pendingProposals': proposals, 'recentActivity': activity,
@@ -7138,38 +7278,49 @@ def paper_dashboard(acct_id: str, pid: str = ''):
                             'winRatePct': round(wins / len(closed) * 100, 1) if closed else None,
                             'realizedPnl': eqc['realizedPnl'], 'fees': eqc['fees']},
             'assumptions': PAPER_EXEC_PROFILE,
-            'integrity': {'status': 'HEALTHY' if eq['_fresh'] else 'DEGRADED_STALE_MARKS',
+            'integrity': {'status': 'LIMITED_NO_WORKER',
                           'marketData': 'CURRENT' if eq['_fresh'] else 'STALE',
-                          'executionWorker': 'LAZY_ON_READ',
-                          'lastReconciledAt': datetime.datetime.utcnow().isoformat()}}
+                          'executionWorker': 'NONE',
+                          'reconciliation': 'NONE',
+                          'lastReconciledAt': None,
+                          'executionEnabled': PAPER_EXECUTION_ENABLED,
+                          'autopilotEnabled': PAPER_AUTOPILOT_ENABLED,
+                          'primaryPauseReason': pause_reason}}
 
 
 @app.patch('/api/v1/albert/paper/accounts/{acct_id}/mode')
-def paper_set_mode(acct_id: str, payload: dict = Body(...)):
-    pid = (str(payload.get('pid') or '')).strip()[:80]
-    a = _paper_get(acct_id, pid)
+def paper_set_mode(acct_id: str, payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    a = _paper_get(acct_id, owner_pid(user))
     if not a:
-        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No such paper account.'}}
+        raise HTTPException(status_code=404, detail='No such paper account.')
     mode = payload.get('mode')
     if mode not in ('OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT'):
-        return {'status': 'error', 'error': {'code': 'BAD_MODE', 'message': 'Invalid mode.'}}
+        raise HTTPException(status_code=422, detail='Invalid mode.')
     paper_accounts_col.update_one({'paperAccountId': acct_id},
-                                  {'$set': {'mode': mode}, '$inc': {'version': 1, 'mandateVersion': 0}})
+                                  {'$set': {'mode': mode}, '$inc': {'version': 1}})
     _paper_ledger_add(acct_id, 'MODE_CHANGED', 'account', acct_id, None, None, f"Mode set to {mode}.")
-    return {'status': 'ready', 'mode': mode}
+    note = None
+    if mode == 'PAPER_AUTOPILOT' and not (PAPER_EXECUTION_ENABLED and PAPER_AUTOPILOT_ENABLED):
+        note = 'Autopilot is disabled during remediation — no simulated trades will be placed.'
+    return {'status': 'ready', 'mode': mode, 'note': note}
 
 
 @app.post('/api/v1/albert/paper/accounts/{acct_id}/{cmd}')
-def paper_lifecycle(acct_id: str, cmd: str, payload: dict = Body(default={})):
+def paper_lifecycle(acct_id: str, cmd: str, payload: dict = Body(default={}),
+                    user: dict = Depends(get_current_user)):
     if cmd not in ('pause', 'resume', 'archive'):
-        return {'status': 'error', 'error': {'code': 'BAD_CMD', 'message': 'Unknown command.'}}
-    pid = (str((payload or {}).get('pid') or '')).strip()[:80]
-    a = _paper_get(acct_id, pid)
+        raise HTTPException(status_code=422, detail='Unknown command.')
+    a = _paper_get(acct_id, owner_pid(user))
     if not a:
-        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No such paper account.'}}
+        raise HTTPException(status_code=404, detail='No such paper account.')
     if cmd == 'pause':
         paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'runtimeState': 'PAUSED_BY_USER'}})
     elif cmd == 'resume':
+        # A plain resume must not clear an unresolved risk-breaker pause; that
+        # requires an explicit reviewed reset (see paper-reset).
+        if a.get('runtimeState') == 'PAUSED_RISK_BREAKER':
+            raise HTTPException(status_code=409,
+                                detail='This account is paused by the drawdown breaker and needs a reviewed reset.')
         paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'runtimeState': 'RUNNING'}})
     else:
         paper_accounts_col.update_one({'paperAccountId': acct_id},
@@ -7179,30 +7330,35 @@ def paper_lifecycle(acct_id: str, cmd: str, payload: dict = Body(default={})):
 
 
 @app.post('/api/v1/albert/paper/proposals/{proposal_id}/{cmd}')
-def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(default={})):
+def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(default={}),
+                          user: dict = Depends(get_current_user)):
     if cmd not in ('approve', 'cancel'):
-        return {'status': 'error', 'error': {'code': 'BAD_CMD', 'message': 'Unknown command.'}}
+        raise HTTPException(status_code=422, detail='Unknown command.')
     prop = paper_proposals_col.find_one({'proposalId': proposal_id})
-    if not prop:
-        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No such proposal.'}}
-    pid = (str((payload or {}).get('pid') or '')).strip()[:80]
-    a = _paper_get(prop['paperAccountId'], pid)
-    if not a:
-        return {'status': 'error', 'error': {'code': 'AUTH', 'message': 'Not your proposal.'}}
+    pid = owner_pid(user)
+    # Resolve the parent account owner-scoped BEFORE acting; a non-owned or unknown
+    # proposal is indistinguishable (404) so existence is not revealed.
+    a = _paper_get(prop['paperAccountId'], pid) if prop else None
+    if not prop or not a:
+        raise HTTPException(status_code=404, detail='No such proposal.')
     if prop.get('status') != 'CREATED':
-        return {'status': 'error', 'error': {'code': 'PROPOSAL_NOT_OPEN', 'message': 'Proposal is no longer open.'}}
-    # Expiry check.
+        raise HTTPException(status_code=409, detail='Proposal is no longer open.')
     try:
         if datetime.datetime.fromisoformat(prop['expiresAt']) < datetime.datetime.utcnow():
             paper_proposals_col.update_one({'proposalId': proposal_id}, {'$set': {'status': 'EXPIRED'}})
-            return {'status': 'error', 'error': {'code': 'PROPOSAL_EXPIRED', 'message': 'This proposal expired — a fresh one will appear.'}}
+            raise HTTPException(status_code=409, detail='This proposal expired — a fresh one will appear.')
+    except HTTPException:
+        raise
     except Exception:  # noqa
         pass
     if cmd == 'cancel':
         paper_proposals_col.update_one({'proposalId': proposal_id}, {'$set': {'status': 'CANCELLED_BY_USER'}})
         _paper_ledger_add(a['paperAccountId'], 'PROPOSAL_CANCELLED', 'proposal', proposal_id, None, None, 'You skipped this paper trade.')
         return {'status': 'ready', 'proposalStatus': 'CANCELLED_BY_USER'}
-    # Approve -> fresh revalidation, then simulated execution.
+    # Approve -> simulated EXECUTION. Disabled by feature flag for the whole
+    # remediation (the atomic accounting core is not yet built + accepted).
+    if not PAPER_EXECUTION_ENABLED:
+        raise HTTPException(status_code=503, detail=PAPER_EXEC_DISABLED_MSG)
     action, decision, fresh_ok = _paper_desired_action()
     if not fresh_ok or action != prop['side']:
         paper_proposals_col.update_one({'proposalId': proposal_id}, {'$set': {'status': 'REJECTED_ON_REVALIDATION'}})
@@ -7213,41 +7369,43 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
     notional = _num(prop.get('notionalValue')) or 0
     res, err = _paper_execute(a, prop['side'], notional, source='approval', decision=decision)
     if err:
-        return {'status': 'error', 'error': {'code': err, 'message': f'Could not execute: {err}.'}}
+        raise HTTPException(status_code=409, detail=f'Could not execute: {err}.')
     paper_proposals_col.update_one({'proposalId': proposal_id},
                                    {'$set': {'status': 'APPROVED', 'approvedAt': datetime.datetime.utcnow().isoformat()}})
     return {'status': 'ready', 'proposalStatus': 'APPROVED', 'fill': {k: (round(v, 4) if isinstance(v, float) else v) for k, v in (res or {}).items()}}
 
 
 @app.post('/api/v1/albert/paper/positions/{position_id}/close')
-def paper_close_position(position_id: str, payload: dict = Body(default={})):
+def paper_close_position(position_id: str, payload: dict = Body(default={}),
+                         user: dict = Depends(get_current_user)):
     pos = paper_positions_col.find_one({'paperPositionId': position_id})
-    if not pos or pos.get('status') != 'OPEN':
-        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No open position.'}}
-    pid = (str((payload or {}).get('pid') or '')).strip()[:80]
-    a = _paper_get(pos['paperAccountId'], pid)
-    if not a:
-        return {'status': 'error', 'error': {'code': 'AUTH', 'message': 'Not your position.'}}
+    pid = owner_pid(user)
+    a = _paper_get(pos['paperAccountId'], pid) if pos else None
+    if not pos or not a or pos.get('status') != 'OPEN':
+        raise HTTPException(status_code=404, detail='No open position.')
+    if not PAPER_EXECUTION_ENABLED:
+        raise HTTPException(status_code=503, detail=PAPER_EXEC_DISABLED_MSG)
     res, err = _paper_execute(a, 'SELL', 0, source='manual_close')
     if err:
-        return {'status': 'error', 'error': {'code': err, 'message': f'Could not close: {err}.'}}
+        raise HTTPException(status_code=409, detail=f'Could not close: {err}.')
     return {'status': 'ready', 'closed': {k: (round(v, 4) if isinstance(v, float) else v) for k, v in (res or {}).items()}}
 
 
 @app.get('/api/v1/albert/paper/accounts/{acct_id}/trade-log')
-def paper_trade_log(acct_id: str, pid: str = ''):
-    a = _paper_get(acct_id, (pid or '').strip()[:80])
+def paper_trade_log(acct_id: str, user: dict = Depends(get_current_user)):
+    a = _paper_get(acct_id, owner_pid(user))
     if not a:
-        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No such account.'}}
+        raise HTTPException(status_code=404, detail='No such account.')
     closed = list(paper_positions_col.find({'paperAccountId': acct_id, 'status': 'CLOSED'}, {'_id': 0}).sort('closedAt', -1))
     return {'status': 'ready', 'paperOnly': True, 'trades': closed}
 
 
 @app.get('/api/v1/albert/paper/trades/{position_id}/evidence')
-def paper_trade_evidence(position_id: str, pid: str = ''):
+def paper_trade_evidence(position_id: str, user: dict = Depends(get_current_user)):
     pos = paper_positions_col.find_one({'paperPositionId': position_id}, {'_id': 0})
-    if not pos:
-        return {'status': 'error', 'error': {'code': 'NOT_FOUND', 'message': 'No such trade.'}}
+    a = _paper_get(pos['paperAccountId'], owner_pid(user)) if pos else None
+    if not pos or not a:
+        raise HTTPException(status_code=404, detail='No such trade.')
     fills = list(paper_ledger_col.find({'paperAccountId': pos['paperAccountId'], 'entityId': position_id}, {'_id': 0}).sort('accountSequence', 1))
     return {'status': 'ready', 'paperOnly': True, 'position': pos,
             'decisionSnapshotId': pos.get('entryDecisionSnapshotId'),
@@ -9695,10 +9853,8 @@ def _equity_history_stats(pid):
 
 
 @app.get('/api/v1/albert/equity-history')
-def albert_equity_history(pid: str = ''):
-    pid = (pid or '').strip()[:80]
-    if not pid:
-        return {'status': 'ready', 'sampleCount': 0, 'series': []}
+def albert_equity_history(user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
     _record_equity_snapshot(pid)
     return {'status': 'ready', **_equity_history_stats(pid)}
 
@@ -9928,21 +10084,17 @@ def albert_orders_list(pid: str = '', limit: int = 50):
 
 
 @app.get('/api/v1/albert/paper-portfolio')
-def albert_paper_portfolio(pid: str = '', accountId: str = 'paper'):
-    pid = (pid or '').strip()[:80]
-    if not pid:
-        return {'error': 'pid required'}
+def albert_paper_portfolio(accountId: str = 'paper', user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
     materialized = _paper_ledger.materialize(pid, accountId)
     recon = _paper_ledger.reconcile(pid, accountId)
     return {'status': 'ready', 'paperPortfolio': materialized, 'reconciliation': recon}
 
 
 @app.post('/api/v1/albert/paper-reset')
-def albert_paper_reset(payload: dict = Body(...)):
-    pid = (str(payload.get('pid') or '')).strip()[:80]
-    if not pid:
-        return {'error': 'pid required'}
-    _paper_ledger.reset(pid, payload.get('accountId') or 'paper')
+def albert_paper_reset(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)
+    _paper_ledger.reset(pid, (payload or {}).get('accountId') or 'paper')
     # Phase G: a paper reset also clears the drawdown high-water mark + protection state.
     _portfolio_risk_repo.reset(pid)
     return {'status': 'reset'}

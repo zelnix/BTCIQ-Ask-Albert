@@ -196,6 +196,10 @@ diagnostics_runs_col = db['albert_diagnostics_runs']      # {_id: run_id, ...ful
 diagnostics_reports_col = db['albert_diagnostics_reports']  # {_id: report_id, run_id, expiresAt}
 try:
     diagnostics_runs_col.create_index([('createdAt', -1)])
+    diagnostics_runs_col.create_index([('ownerPid', 1), ('createdAt', -1)])
+    # TTL: expire (auto-delete) shareable support reports at their expiresAt.
+    diagnostics_reports_col.create_index('expiresAt', expireAfterSeconds=0)
+    diagnostics_reports_col.create_index([('ownerPid', 1), ('createdAt', -1)])
 except Exception:  # noqa
     pass
 
