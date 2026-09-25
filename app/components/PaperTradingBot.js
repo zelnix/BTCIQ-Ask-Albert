@@ -68,7 +68,7 @@ export default function PaperTradingBot() {
     try {
       const r = await fetch(`${API_BASE}/v1/albert/paper/accounts`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pid, name: 'BTC Forward Test', startingCash: '100000', mode }),
+        body: JSON.stringify({ pid, name: 'Multi-Asset Forward Test', startingCash: '100000', mode }),
       });
       const j = await r.json();
       if (j.paperAccountId) { setAcctId(j.paperAccountId); await loadAccounts(); }
@@ -220,7 +220,7 @@ export default function PaperTradingBot() {
           <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />{acct.runtimeState.replace(/_/g, ' ')}</p>
         )}
         {integ.marketData === 'STALE' && <p className="mt-2 flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Market marks are stale — new paper entries are paused until data refreshes.</p>}
-        <p className="mt-2 flex items-center gap-1.5 text-[10.5px] text-slate-500"><ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />Paper only — no real money, no exchange. BTC spot, virtual USDC, long-only.</p>
+        <p className="mt-2 flex items-center gap-1.5 text-[10.5px] text-slate-500"><ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />Paper only — no real money, no exchange. {ap.multiAssetEnabled ? 'BTC + approved altcoins' : 'BTC spot'}, virtual USDC, long-only{ap.tradingProfile ? ` · ${ap.tradingProfile}` : ''}.</p>
       </div>
 
       {/* Background Autopilot status */}
@@ -228,7 +228,10 @@ export default function PaperTradingBot() {
         <div className="rounded-2xl border border-violet-500/30 bg-violet-500/[0.06] p-4">
           <div className="mb-2 flex items-center justify-between">
             <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-violet-300"><Bot className="h-3.5 w-3.5" />Paper Autopilot {ap.autopilotEnabled && acct.runtimeState === 'RUNNING' ? 'running' : (acct.runtimeState !== 'RUNNING' ? 'paused' : 'unavailable')}</p>
-            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ap.workerState === 'running' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>worker: {ap.workerState || 'unknown'}</span>
+            <div className="flex items-center gap-1.5">
+              {ap.multiAssetEnabled && ap.tradingProfile && <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-bold text-violet-200">{ap.tradingProfile}</span>}
+              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ap.workerState === 'running' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>worker: {ap.workerState || 'unknown'}</span>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-slate-400 sm:grid-cols-3">
             {[['Last background check', fmtTs(ap.lastCheckAt)], ['Last decision processed', ap.lastDecisionProcessed ? String(ap.lastDecisionProcessed).slice(0, 10) + '…' : '—'], ['Last simulated trade', fmtTs(ap.lastTradeAt)], ['Next evaluation', fmtTs(ap.nextEvalAt)], ['Worker last run', fmtTs(ap.workerLastRunAt)]].map(([k, v], i) => (

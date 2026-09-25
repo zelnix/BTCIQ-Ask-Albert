@@ -12019,3 +12019,55 @@ agent_communication:
 # Remaining limitations: worker is an in-process APScheduler job (single backend process; DB lease guards
 #   multi-process); authenticated visual screenshot still blocked by the preview /api-proxy artifact.
 
+
+#====================================================================================================
+# MILESTONE 5 — Expert Multi-Asset Trader (AGGRESSIVE_EXPERIENCED_V1)  [main agent, pytest-only]
+#====================================================================================================
+# Goal: evolve the M4 BTC-only paper Autopilot into an experienced BTC + approved-altcoin portfolio
+# trader — deterministic, exact-Decimal, canonical-only, fully virtual. Built on the saved M4 baseline
+# WITHOUT breaking the 60 M1–M4 tests (all still pass).
+#
+# NEW modules (pure, no floats, no DB, no network):
+#   backend/albert/paper/profiles.py  — AGGRESSIVE_EXPERIENCED_V1 config (all Decimal); cap tiers by
+#     rank (BTC / LARGE<=10 / MID<=50 / SPEC); per-asset exec profiles (price precision + fee/spread/
+#     slippage bps + liquidityScale); eligibility (STABLECOIN / WRAPPED_DUPLICATE / LEVERAGED_TOKEN /
+#     EXCLUDED / NOT_IN_APPROVED / MANDATE_INCOMPLETE / STALE_DATA); regime exposure bands.
+#   backend/albert/paper/portfolio.py — compute_portfolio_equity (honest multi-asset valuation; any
+#     missing held mark => equity UNAVAILABLE, fail closed); rank_opportunities (deterministic:
+#     -score,-confidence,symbol); allocate (per-asset tier caps, total-altcoin cap, max-8 concurrent,
+#     protected USDC, per-trade risk 1.5/2.5/3% high-conviction, combined open risk 12%, regime deploy
+#     bands, liquidity/vol scaling; sizing only REDUCES); plan_rotation (deterministic EXIT of weakest
+#     laggard to free a slot/capital — SELL only, never exceeds cash/risk).
+#
+# core.py generalisation (NON-breaking; all defaults = BTC so M1–M4 unchanged):
+#   _lot_for/position_qty (keep _btc_lot/account_position_qty); apply_buy_atomic/apply_sell_atomic gain
+#   optional asset + price_q; sim_fill_p + size_buy/size_sell (per-asset conservative fills);
+#   materialize_multi_from_ledger + reconcile_multi (per-asset ledger replay).
+#
+# server.py: flag PAPER_MULTI_ASSET_ENABLED (default ON); _envelope_to_canonical extracted;
+#   _paper_canonical_decisions(pid) [all liquid-universe + held assets]; _paper_mark(sym) [BTC=run
+#   ticker, others=live spot, observed 'now']; _autopilot_process_account_multi (M5 worker path, keeps
+#   M4 legacy fn intact for its tests); worker dispatches multi when flag ON; dashboard + accounts list
+#   now value/render every asset; autopilot status exposes multiAssetEnabled + tradingProfile.
+#   Per-asset idempotency key auto:<acct>:<sym>:<sid> + processedDecisionSnapshots/marketObservationCursors
+#   maps preserve restart/two-worker safety and the later-observation rule.
+#
+# Frontend (PaperTradingBot.js): positions already per-asset (p.asset); copy now says
+#   "BTC + approved altcoins" + AGGRESSIVE_EXPERIENCED_V1 badge in the Autopilot panel.
+#
+# Config (/app/.env): PAPER_MULTI_ASSET_ENABLED=true (alongside EXECUTION+AUTOPILOT true).
+#
+# Tests (pytest-only, per user credit constraint): backend/tests/test_m5_multiasset.py (NEW, 15).
+#   Full suite:  PAPER_EXECUTION_ENABLED=true PAPER_AUTOPILOT_ENABLED=true PAPER_MULTI_ASSET_ENABLED=true \
+#                python -m pytest tests/  -> 75 passed (M1 19 + M2 27 + M3 4 + M4 10 + M5 15).
+#   Proven (M5): BTC + approved altcoin trade automatically; excluded (mandate) + wrapped/stable/leveraged
+#   cannot trade; high-score-but-not-actionable and actionable-but-ineligible never trade (discovery alone
+#   never manufactures a trade); identical inputs => identical ranking (order-independent); stronger
+#   opportunity wins the only slot; illiquid/speculative gets a smaller allocation than large-cap; total
+#   + altcoin exposure caps enforced; aggressive profile deploys more than a conservative one; rotation
+#   only frees capital and never exceeds cash/risk; restart / duplicate worker cannot double an asset
+#   trade; missing mark => equity unavailable (positions retained); no ccxt/api_key/create_order/withdraw
+#   path in the engine (entirely virtual). Existing 60 M1–M4 tests continue passing.
+#
+# Not in scope this milestone (deferred): OCO/limit orders; live discovery-rank wiring (uses static rank
+#   fallback + engine universe today); read-only exchange integration.

@@ -3626,6 +3626,9 @@ def _remediation_flag(name: str, default: bool) -> bool:
 # Both default OFF for the entire remediation programme.
 PAPER_EXECUTION_ENABLED = _remediation_flag('PAPER_EXECUTION_ENABLED', False)
 PAPER_AUTOPILOT_ENABLED = _remediation_flag('PAPER_AUTOPILOT_ENABLED', False)
+# M5 Expert Multi-Asset Trader. When ON the background worker manages a multi-asset
+# portfolio (BTC + approved altcoins). Default ON alongside M4 flags.
+PAPER_MULTI_ASSET_ENABLED = _remediation_flag('PAPER_MULTI_ASSET_ENABLED', True)
 PAPER_EXEC_DISABLED_MSG = ('Paper execution is disabled pending remediation and '
                            'acceptance. No simulated fills are placed in this build.')
 
@@ -7010,6 +7013,8 @@ PAPER_ENGINE_VERSION = 'paper-bot-v1.0.0'
 # approvals are single-document atomic + idempotent. Execution stays OFF in
 # deployment (PAPER_EXECUTION_ENABLED); the path is exercised under isolated test config.
 from albert.paper import core as _paper_core  # noqa: E402
+from albert.paper import portfolio as _paper_portfolio  # noqa: E402
+from albert.paper import profiles as _paper_profiles  # noqa: E402
 
 PAPER_EXEC_PROFILE = {'executionProfileId': _paper_core.EXEC_PROFILE['executionProfileId'],
                       'feeBps': int(_paper_core.EXEC_PROFILE['feeBps']),
@@ -7078,21 +7083,10 @@ def _paper_equity(acct, persist=False):
             '_equity': info['equity']}
 
 
-def _paper_canonical_decision(pid):
-    """Fetch the CURRENT immutable canonical BTC decision snapshot for this owner.
-    Market Driver Intelligence is NOT consulted here — it is evidence only and can
-    never manufacture an action. Returns None (fail CLOSED) when the decision is
-    absent, mutable, incomplete, unsupported or its ids/hash are missing."""
-    try:
-        snap = _albert_decisions(pid)
-        try:
-            _decision_history_repo.reconcile(pid, snap)  # stabilise ids
-        except Exception:  # noqa
-            pass
-        env = _decision_history_repo.get_current(pid, 'BTC')
-    except Exception:  # noqa
-        traceback.print_exc()
-        return None
+def _envelope_to_canonical(env):
+    """Convert a stored immutable decision envelope into the canonical dict the
+    paper engine consumes. Returns None (fail CLOSED) when identity/ids/hash are
+    incomplete. Carries the asset + score/confidence/regime so M5 can rank."""
     if not env:
         return None
     action = env.get('call') or env.get('action')
@@ -7100,7 +7094,7 @@ def _paper_canonical_decision(pid):
     h = env.get('decisionInputsHash'); dt = env.get('marketDataTimestamp')
     ev = env.get('engineVersion')
     if not (did and sid and h and dt and ev):
-        return None  # incomplete identity -> fail closed
+        return None
     try:
         age_h = _md_iso_age_hours(dt)
         age_min = (age_h * 60.0) if age_h is not None else None
@@ -7116,11 +7110,13 @@ def _paper_canonical_decision(pid):
     risk_verdict = 'ALLOW' if (env.get('eligible') and mc.get('withinCap')
                                and mc.get('withinRiskBudget') and not mc.get('excluded')) else 'BLOCK'
     return {
-        'asset': 'BTC', 'action': action, 'actionable': action in ('BUY', 'SELL'),
+        'asset': (env.get('symbol') or 'BTC'), 'action': action, 'actionable': action in ('BUY', 'SELL'),
         'decisionSnapshotId': sid, 'decisionId': did, 'decisionInputsHash': h,
         'engineVersion': ev, 'ruleVersion': ev,
         'mandateVersion': env.get('mandateVersion'), 'portfolioVersion': env.get('portfolioVersion'),
-        'regimeSnapshotId': env.get('regimeSnapshotId'),
+        'regimeSnapshotId': env.get('regimeSnapshotId'), 'regime': env.get('regime'),
+        'score': env.get('opportunityScore') if env.get('opportunityScore') is not None else env.get('score'),
+        'confidence': env.get('confidence'), 'rank': env.get('rank'),
         'currentPrice': env.get('currentPrice'), 'invalidationPrice': env.get('invalidation'),
         'marketSnapshot': {'price': env.get('currentPrice'), 'ts': dt,
                            'regimeSnapshotId': env.get('regimeSnapshotId')},
@@ -7129,6 +7125,63 @@ def _paper_canonical_decision(pid):
         'sellPlan': env.get('sellPlan'), 'recommendedDeltaUsd': env.get('recommendedDeltaUsd'),
         'decisionTime': dt, 'availableAt': dt, 'expiresAt': expires, 'fresh': fresh,
     }
+
+
+def _paper_canonical_decision(pid):
+    """Fetch the CURRENT immutable canonical BTC decision snapshot for this owner.
+    Market Driver Intelligence is NOT consulted here — it is evidence only and can
+    never manufacture an action. Returns None (fail CLOSED) when the decision is
+    absent, mutable, incomplete, unsupported or its ids/hash are missing."""
+    try:
+        snap = _albert_decisions(pid)
+        try:
+            _decision_history_repo.reconcile(pid, snap)  # stabilise ids
+        except Exception:  # noqa
+            pass
+        env = _decision_history_repo.get_current(pid, 'BTC')
+    except Exception:  # noqa
+        traceback.print_exc()
+        return None
+    return _envelope_to_canonical(env)
+
+
+def _paper_canonical_decisions(pid):
+    """M5: CURRENT immutable canonical decisions for EVERY asset in the engine's
+    liquid universe (+ any held). Builds/reconciles the snapshot once, then reads
+    every stabilised per-asset envelope. Only canonical decisions are returned —
+    discovery scores alone can never appear here. Returns list[canonical dict]."""
+    out = []
+    try:
+        snap = _albert_decisions(pid)
+        try:
+            _decision_history_repo.reconcile(pid, snap)
+        except Exception:  # noqa
+            pass
+        for d in (snap.get('decisions') or []):
+            env = _decision_history_repo.get_current(pid, d.get('symbol'))
+            can = _envelope_to_canonical(env)
+            if can:
+                out.append(can)
+    except Exception:  # noqa
+        traceback.print_exc()
+    return out
+
+
+def _paper_mark(sym):
+    """Current mark for any asset as (Decimal|None, fresh:bool, ts_iso). BTC uses
+    the authoritative run ticker (with age check); other assets use the live spot
+    price (observed 'now', so any decision made earlier is an independent later
+    observation)."""
+    sym = (sym or 'BTC').upper()
+    if sym == 'BTC':
+        return _paper_btc_mark()
+    try:
+        px = _spot_price(sym)
+        if px:
+            return _paper_core.D(px), True, datetime.datetime.utcnow().isoformat()
+    except Exception:  # noqa
+        pass
+    return None, False, None
 
 
 def _paper_proposal_public(prop):
@@ -7158,6 +7211,8 @@ def _paper_autopilot_status(a):
             'lastTradeAt': ap.get('lastTradeAt'),
             'nextEvalAt': nxt,
             'autopilotEnabled': PAPER_AUTOPILOT_ENABLED, 'executionEnabled': PAPER_EXECUTION_ENABLED,
+            'multiAssetEnabled': PAPER_MULTI_ASSET_ENABLED,
+            'tradingProfile': _paper_profiles.AGGRESSIVE_EXPERIENCED_V1['profileId'] if PAPER_MULTI_ASSET_ENABLED else 'BTC_SPOT_V1',
             'paperOnly': True}
 
 
@@ -7333,6 +7388,278 @@ def _autopilot_process_account(acct):
         paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lastProcessedDecisionSnapshotId': sid}})
 
 
+def _autopilot_process_account_multi(acct):
+    """M5 Expert Multi-Asset Trader tick for ONE paper account.
+
+    Reuses the M4 durability guarantees (per-account lease upstream, single-doc
+    atomic + idempotent fills, later-observation rule) but manages a MULTI-ASSET
+    portfolio (BTC + approved altcoins) driven ONLY by canonical decisions and the
+    deterministic capital allocator. Discovery scores alone never trade here.
+    Independent of any browser/dashboard.
+    """
+    acct_id = acct['paperAccountId']; pid = acct['ownerId']
+    now_iso = datetime.datetime.utcnow().isoformat()
+    _autopilot_set_vis(acct_id, lastCheckAt=now_iso)
+    if acct.get('archivedAt'):
+        return
+    mandate = _albert_deps.get_mandate(pid) or {}
+    excluded = set(mandate.get('excluded_coins') or [])
+    approved = set(mandate.get('approved_coins') or [])
+
+    # Canonical decisions for every asset in the liquid universe (+held).
+    decisions = _paper_canonical_decisions(pid)
+    dec_by_sym = {(d.get('asset') or '').upper(): d for d in decisions}
+
+    # Marks for every held + candidate asset.
+    held_syms = [(l.get('asset') or '').upper() for l in (acct.get('lots') or [])
+                 if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0]
+    universe = list(dict.fromkeys(held_syms + list(dec_by_sym.keys())))
+    marks = {}; mark_ts = {}
+    for sym in universe:
+        px, fresh, ts = _paper_mark(sym)
+        marks[sym] = (px, fresh); mark_ts[sym] = ts
+
+    equity_info = _paper_portfolio.compute_portfolio_equity(acct, marks)
+
+    # 1) High-water + portfolio drawdown breaker (verified valuation only).
+    if equity_info['available'] and equity_info['equity'] is not None:
+        _paper_core.update_high_water(paper_accounts_col, acct_id, pid, equity_info['equity'])
+        max_dd = _paper_core.D(mandate.get('max_drawdown_pct'))
+        dd = equity_info['drawdownPct']
+        if (max_dd is not None and dd is not None and dd <= (-max_dd)
+                and acct.get('runtimeState') == 'RUNNING'):
+            paper_accounts_col.update_one({'paperAccountId': acct_id},
+                                          {'$set': {'runtimeState': 'PAUSED_RISK_BREAKER'}})
+            _paper_ledger_add(acct_id, 'RISK_BREAKER', 'account', acct_id, None, None,
+                              'Portfolio drawdown %s%% breached your limit — new entries paused.'
+                              % _paper_core.dstr(dd, _paper_core.PCT_Q))
+            _autopilot_notify(pid, acct_id, 'Paper drawdown breaker tripped',
+                              'New paper entries are paused; protective exits continue.', 'warning')
+            acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+
+    # 2) Protective invalidation exits per held asset (run even when paused).
+    if PAPER_EXECUTION_ENABLED:
+        for lot in list(acct.get('lots') or []):
+            sym = (lot.get('asset') or '').upper()
+            qty = _paper_core.D(lot.get('qty')) or Decimal('0')
+            inv = _paper_core.D(lot.get('invalidationPrice'))
+            px, fresh = marks.get(sym, (None, False))
+            if qty <= 0 or inv is None or px is None or not fresh or px >= inv:
+                continue
+            prof = _paper_profiles.asset_profile(sym, (dec_by_sym.get(sym) or {}).get('rank'))
+            sizing = _paper_core.size_sell(sym, qty, px, profile=prof, price_q=prof['priceQ'])
+            if sizing.get('reject'):
+                continue
+            res, err, _ = _paper_core.apply_sell_atomic(
+                paper_accounts_col, acct_id, pid, sizing, source='auto_invalidation',
+                idem_key='inv:%s:%s' % (lot.get('lotId'), mark_ts.get(sym)), asset=sym)
+            if not err:
+                _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
+                _autopilot_notify(pid, acct_id, 'Paper position auto-exited (invalidation)',
+                                  '%s fell below the engine invalidation — position closed. Paper only.' % sym,
+                                  'warning')
+        acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+        equity_info = _paper_portfolio.compute_portfolio_equity(acct, marks)
+
+    if not decisions:
+        return
+    mode = acct.get('mode')
+    processed = dict(acct.get('processedDecisionSnapshots') or {})   # {asset: snapshotId}
+    cursors = dict(acct.get('marketObservationCursors') or {})       # {asset: ts}
+    regime = next((d.get('regime') for d in decisions if d.get('regime')), 'RANGE')
+
+    # Build the set of NEW, actionable, eligible, independently-observed candidates.
+    candidates = []
+    newly_seen = {}   # asset -> sid (to mark processed after the tick)
+    for d in decisions:
+        sym = (d.get('asset') or '').upper()
+        sid = d.get('decisionSnapshotId')
+        if processed.get(sym) == sid:
+            continue  # already handled this immutable snapshot for this asset
+        if not d.get('actionable'):
+            newly_seen[sym] = sid   # WAIT/HOLD: record + consume, never trade
+            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', sid, None, None,
+                              'Observed %s %s — no trade.' % (sym, d.get('action')))
+            continue
+        px, fresh = marks.get(sym, (None, False))
+        # stale decision / unverified mark: leave snapshot UNCONSUMED to retry later
+        if not d.get('fresh') or px is None or not fresh:
+            continue
+        ts = mark_ts.get(sym)
+        try:
+            if ts and d.get('decisionTime') and not (ts > d['decisionTime']):
+                continue  # not an independent later observation
+        except Exception:  # noqa
+            continue
+        cur = cursors.get(sym)
+        if cur and ts and not (ts > cur):
+            continue
+        # eligibility: only canonical + profile-eligible assets can ever trade
+        elig, _reason = _paper_profiles.eligible_for_trading(
+            sym, data_ok=fresh, excluded=excluded, approved=approved,
+            mandate_complete=(d.get('mandateChecks') or {}).get('mandateComplete', True))
+        if d.get('action') == 'BUY' and not (elig and d.get('eligible')):
+            newly_seen[sym] = sid   # ineligible BUY: record, never trade
+            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', sid, None, None,
+                              'Observed %s BUY but not eligible to trade — skipped.' % sym)
+            continue
+        candidates.append({'symbol': sym, 'action': d.get('action'),
+                           'score': d.get('score'), 'confidence': d.get('confidence'),
+                           'rank': d.get('rank'), 'recommendedDeployNowUsd': d.get('recommendedDeployNowUsd'),
+                           'invalidationPrice': d.get('invalidationPrice'),
+                           'sellPlan': d.get('sellPlan'), 'held': sym in held_syms,
+                           '_sid': sid, '_canonical': d})
+
+    if mode == 'OBSERVE':
+        for c in candidates:
+            newly_seen[c['symbol']] = c['_sid']
+            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', c['_sid'], None, None,
+                              'Observed %s %s signal — observe-only mode.' % (c['symbol'], c['action']))
+        _persist_multi_cursors(acct_id, processed, newly_seen, cursors)
+        if newly_seen:
+            _autopilot_set_vis(acct_id, lastDecisionProcessed=now_iso)
+        return
+
+    if mode == 'APPROVAL_REQUIRED':
+        for c in candidates:
+            sym = c['symbol']
+            if paper_proposals_col.find_one({'paperAccountId': acct_id, 'asset': sym, 'status': 'CREATED'}):
+                continue  # one open proposal per asset
+            can = c['_canonical']
+            px, _ = marks.get(sym, (None, False))
+            prof = _paper_profiles.asset_profile(sym, c.get('rank'))
+            if c['action'] == 'BUY':
+                alloc = _paper_portfolio.allocate(acct=acct, equity_info=equity_info,
+                                                  candidates=[c], regime=regime, marks=marks)
+                intent = next((i for i in alloc['intents'] if i['symbol'] == sym and i['action'] in ('BUY', 'ADD')), None)
+                if not intent:
+                    newly_seen[sym] = c['_sid']; continue
+                sizing = _paper_core.size_buy(sym, intent['notional'], px, profile=prof, price_q=prof['priceQ'])
+            else:
+                pos = next((p for p in equity_info['positions'] if p['symbol'] == sym), None)
+                if not pos:
+                    newly_seen[sym] = c['_sid']; continue
+                sizing = _paper_core.size_sell(sym, pos['qty'], px, profile=prof, price_q=prof['priceQ'])
+            if sizing.get('reject'):
+                newly_seen[sym] = c['_sid']; continue
+            _paper_make_proposal_multi(acct_id, pid, c['action'], can, sizing, sym)
+            newly_seen[sym] = c['_sid']
+            _autopilot_notify(pid, acct_id, 'Paper trade needs your approval',
+                              'Albert proposes a %s %s — review it in Paper Bot. Paper only.' % (c['action'], sym))
+        _persist_multi_cursors(acct_id, processed, newly_seen, cursors)
+        if newly_seen:
+            _autopilot_set_vis(acct_id, lastDecisionProcessed=now_iso)
+        return
+
+    if mode == 'PAPER_AUTOPILOT':
+        if not (PAPER_EXECUTION_ENABLED and PAPER_AUTOPILOT_ENABLED):
+            for c in candidates:
+                newly_seen[c['symbol']] = c['_sid']
+                _paper_ledger_add(acct_id, 'AUTO_DISABLED', 'decision', c['_sid'], None, None,
+                                  'Autopilot is disabled by configuration — no trade.')
+            _persist_multi_cursors(acct_id, processed, newly_seen, cursors)
+            return
+        paused = acct.get('runtimeState') != 'RUNNING'
+        # SELLs (reduce-only) allowed even when paused; BUYs suppressed while paused.
+        alloc_candidates = [c for c in candidates if c['action'] == 'SELL' or not paused]
+        alloc = _paper_portfolio.allocate(acct=acct, equity_info=equity_info,
+                                          candidates=alloc_candidates, regime=regime, marks=marks)
+        traded_syms = set()
+        for intent in alloc['intents']:
+            sym = intent['symbol']
+            can = dec_by_sym.get(sym) or {}
+            sid = (next((c['_sid'] for c in candidates if c['symbol'] == sym), can.get('decisionSnapshotId'))
+                   or 'rot_%s' % sym)
+            px, fresh2 = marks.get(sym, (None, False))
+            prof = _paper_profiles.asset_profile(sym, can.get('rank'))
+            idem = 'auto:%s:%s:%s' % (acct_id, sym, sid)
+            if intent['action'] in ('BUY', 'ADD'):
+                sizing = _paper_core.size_buy(sym, intent['notional'], px, profile=prof, price_q=prof['priceQ'])
+                if sizing.get('reject'):
+                    continue
+                res, err, _ = _paper_core.apply_buy_atomic(
+                    paper_accounts_col, acct_id, pid, acct.get('version'), idem, 'auto_%s_%s' % (sym, sid),
+                    sizing, can, base_currency=acct.get('baseCurrency', 'USDC'), asset=sym, price_q=prof['priceQ'])
+                if not err:
+                    traded_syms.add(sym)
+                    _autopilot_notify(pid, acct_id, 'Paper Autopilot bought %s' % sym,
+                                      'Auto-executed a simulated %s on %s. Paper only — no real money.'
+                                      % (intent['action'], sym))
+                    acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+            else:  # TRIM / EXIT / SELL (reduce-only)
+                pos = next((p for p in equity_info['positions'] if p['symbol'] == sym and p['qty'] > 0), None)
+                if not pos or px is None or not fresh2:
+                    continue
+                frac = intent.get('fraction') or Decimal('1')
+                sell_qty = _paper_core.q_qty(pos['qty'] * frac)
+                sizing = _paper_core.size_sell(sym, sell_qty, px, profile=prof, price_q=prof['priceQ'])
+                if sizing.get('reject'):
+                    continue
+                res, err, _ = _paper_core.apply_sell_atomic(
+                    paper_accounts_col, acct_id, pid, sizing, source='auto_%s' % intent.get('reason', 'sell'),
+                    idem_key=idem, proposal_id='auto_%s_%s' % (sym, sid), canonical=can, asset=sym)
+                if not err:
+                    traded_syms.add(sym)
+                    _autopilot_notify(pid, acct_id, 'Paper Autopilot reduced %s' % sym,
+                                      'Auto-executed a simulated %s on %s. Paper only — no real money.'
+                                      % (intent['action'], sym))
+                    acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+        # Consume snapshots + advance cursors for every candidate we evaluated this tick.
+        for c in candidates:
+            if c['action'] == 'BUY' and paused:
+                continue  # leave BUY snapshot unconsumed so resume can act
+            newly_seen[c['symbol']] = c['_sid']
+            if c['symbol'] in traded_syms:
+                cursors[c['symbol']] = mark_ts.get(c['symbol'])
+        if traded_syms:
+            _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
+        _persist_multi_cursors(acct_id, processed, newly_seen, cursors)
+        if newly_seen:
+            _autopilot_set_vis(acct_id, lastDecisionProcessed=now_iso)
+
+
+def _persist_multi_cursors(acct_id, processed, newly_seen, cursors):
+    """Persist per-asset processed-snapshot map + market-observation cursors."""
+    if not newly_seen and not cursors:
+        return
+    processed = dict(processed); processed.update(newly_seen)
+    paper_accounts_col.update_one(
+        {'paperAccountId': acct_id},
+        {'$set': {'processedDecisionSnapshots': processed, 'marketObservationCursors': cursors}})
+
+
+def _paper_make_proposal_multi(acct_id, pid, side, canonical, sizing, asset):
+    """Create ONE proposal for a specific asset, immutably bound to the canonical
+    decision snapshot (M5 multi-asset variant of _paper_make_proposal)."""
+    if side == 'BUY':
+        notional = _paper_core.dstr(sizing['notional']); qprev = _paper_core.qty_dstr(sizing['qty'])
+    else:
+        notional = _paper_core.dstr(_paper_core.q_cash(sizing['qty'] * sizing['fillPx']))
+        qprev = _paper_core.qty_dstr(sizing['qty'])
+    prop = {
+        'proposalId': 'prop_' + uuid.uuid4().hex[:12], 'paperAccountId': acct_id, 'ownerId': pid,
+        'asset': asset, 'side': side, 'orderType': 'MARKET',
+        'decisionSnapshotId': canonical['decisionSnapshotId'], 'decisionId': canonical['decisionId'],
+        'decisionInputsHash': canonical['decisionInputsHash'], 'engineVersion': canonical['engineVersion'],
+        'mandateVersion': canonical['mandateVersion'], 'version': 0,
+        'notionalValue': notional, 'quantityPreview': qprev,
+        'estimatedFees': _paper_core.dstr(sizing['fee']),
+        'referencePrice': _paper_core.dstr(sizing['fillPx'], _paper_profiles.asset_profile(asset).get('priceQ', _paper_core.PRICE_Q)),
+        'invalidationPrice': (_paper_core.dstr(_paper_core.D(canonical['invalidationPrice']))
+                              if canonical.get('invalidationPrice') else None),
+        'gateTrace': sizing.get('trace', []),
+        'reason': 'Canonical %s decision for %s (engine %s).' % (side, asset, canonical['engineVersion']),
+        'status': 'CREATED', 'createdAt': datetime.datetime.utcnow().isoformat(),
+        'expiresAt': canonical.get('expiresAt') or (datetime.datetime.utcnow()
+                     + datetime.timedelta(minutes=PAPER_PROPOSAL_TTL_MIN)).isoformat(),
+        'paperOnly': True}
+    paper_proposals_col.insert_one(dict(prop))
+    _paper_ledger_add(acct_id, 'PROPOSAL_CREATED', 'proposal', prop['proposalId'], None, None,
+                      'Proposed %s %s — awaiting your approval.' % (side, asset))
+    return prop
+
+
+
 def _paper_autopilot_worker():
     """Durable background job: process every non-archived paper account once,
     under a per-account DB lease. Independent of any frontend activity."""
@@ -7348,7 +7675,10 @@ def _paper_autopilot_worker():
                 continue  # another worker holds the lease
             try:
                 fresh_acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
-                _autopilot_process_account(fresh_acct)
+                if PAPER_MULTI_ASSET_ENABLED:
+                    _autopilot_process_account_multi(fresh_acct)
+                else:
+                    _autopilot_process_account(fresh_acct)
             except Exception:  # noqa
                 traceback.print_exc()
             finally:
@@ -7453,9 +7783,22 @@ def paper_list_accounts(user: dict = Depends(get_current_user)):
     pid = owner_pid(user)
     out = []
     for a in paper_accounts_col.find({'ownerId': pid}).sort('createdAt', -1):
-        eq = _paper_equity(a)
-        out.append({**_paper_acct_public(a), 'equity': eq['value'], 'equityAvailable': eq['available'],
-                    'drawdownPct': eq['drawdownPct'], 'openPositions': len(_paper_positions(a))})
+        if PAPER_MULTI_ASSET_ENABLED:
+            marks = {}
+            for l in (a.get('lots') or []):
+                if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0:
+                    sym = (l.get('asset') or 'BTC').upper()
+                    mpx, mfresh, _ts = _paper_mark(sym)
+                    marks[sym] = (mpx, mfresh)
+            pe = _paper_portfolio.compute_portfolio_equity(a, marks)
+            out.append({**_paper_acct_public(a), 'equity': pe['equityStr'],
+                        'equityAvailable': pe['available'],
+                        'drawdownPct': _paper_core.dstr(pe['drawdownPct'], _paper_core.PCT_Q) if pe['drawdownPct'] is not None else None,
+                        'openPositions': pe['openPositionsCount']})
+        else:
+            eq = _paper_equity(a)
+            out.append({**_paper_acct_public(a), 'equity': eq['value'], 'equityAvailable': eq['available'],
+                        'drawdownPct': eq['drawdownPct'], 'openPositions': len(_paper_positions(a))})
     return {'status': 'ready', 'accounts': out}
 
 
@@ -7468,22 +7811,61 @@ def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
     a.pop('_id', None)
     # READ-ONLY: opening/refreshing the dashboard must never trade or re-evaluate.
     # All trading is done by the background worker (_paper_autopilot_worker).
-    recon = _paper_core.reconcile(a)
-    eq = _paper_equity(a, persist=False)
-    px = eq['_px']
-    positions = []
-    for p in _paper_positions(a):
-        qty = _paper_core.D(p.get('qty')) or Decimal('0')
-        avg = _paper_core.D(p.get('avgEntry')) or Decimal('0')
-        upnl = (qty * (px - avg)) if (px is not None and eq['_fresh']) else None
-        positions.append({
-            'paperPositionId': p.get('lotId'), 'asset': 'BTC',
-            'netQuantity': _paper_core.qty_dstr(qty), 'averageEntryPrice': _paper_core.dstr(avg),
-            'costBasis': _paper_core.dstr(p.get('costBasis')),
-            'entryDecisionSnapshotId': p.get('entryDecisionSnapshotId'),
-            'invalidationPrice': _paper_core.dstr(p.get('invalidationPrice')) if p.get('invalidationPrice') is not None else None,
-            'currentPrice': _paper_core.dstr(px) if (px is not None and eq['_fresh']) else None,
-            'unrealizedPnl': _paper_core.dstr(upnl) if upnl is not None else None})
+    if PAPER_MULTI_ASSET_ENABLED:
+        recon = _paper_core.reconcile_multi(a)
+        held_syms = [(l.get('asset') or 'BTC').upper() for l in (a.get('lots') or [])
+                     if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0]
+        marks = {}
+        for sym in held_syms:
+            mpx, mfresh, _ts = _paper_mark(sym)
+            marks[sym] = (mpx, mfresh)
+        pe = _paper_portfolio.compute_portfolio_equity(a, marks)
+        lots_by_id = {(l.get('asset') or '').upper(): l for l in (a.get('lots') or [])}
+        positions = []
+        unreal_total = Decimal('0'); unreal_known = True
+        for p in pe['positions']:
+            sym = p['symbol']; lot = lots_by_id.get(sym, {})
+            pq = _paper_profiles.asset_profile(sym).get('priceQ', _paper_core.PRICE_Q)
+            if p['unrealized'] is not None:
+                unreal_total += p['unrealized']
+            else:
+                unreal_known = False
+            positions.append({
+                'paperPositionId': lot.get('lotId'), 'asset': sym,
+                'netQuantity': _paper_core.qty_dstr(p['qty']),
+                'averageEntryPrice': _paper_core.dstr(p['avgEntry'], pq),
+                'costBasis': _paper_core.dstr(lot.get('costBasis')),
+                'entryDecisionSnapshotId': lot.get('entryDecisionSnapshotId'),
+                'invalidationPrice': _paper_core.dstr(p['invalidation'], pq) if p.get('invalidation') is not None else None,
+                'currentPrice': _paper_core.dstr(p['markPx'], pq) if p['markFresh'] else None,
+                'unrealizedPnl': _paper_core.dstr(p['unrealized']) if p['unrealized'] is not None else None})
+
+        def _s(v, q=_paper_core.CASH_Q):
+            return _paper_core.dstr(v, q) if v is not None else None
+        eq = {'available': pe['available'],
+              'markStatus': 'CURRENT' if pe['available'] else ('STALE' if held_syms else 'FLAT'),
+              'value': pe['equityStr'], 'cash': _s(pe['cash']),
+              'protectedReserve': _s(pe['protectedReserve']), 'deployableCash': _s(pe['deployableCash']),
+              'realizedPnl': _s(pe['realizedPnl']), 'fees': _s(pe['fees']),
+              'unrealizedPnl': _s(unreal_total) if unreal_known else None,
+              'drawdownPct': _s(pe['drawdownPct'], _paper_core.PCT_Q), 'highWater': _s(pe['highWater'])}
+    else:
+        recon = _paper_core.reconcile(a)
+        eq = _paper_equity(a, persist=False)
+        px = eq['_px']
+        positions = []
+        for p in _paper_positions(a):
+            qty = _paper_core.D(p.get('qty')) or Decimal('0')
+            avg = _paper_core.D(p.get('avgEntry')) or Decimal('0')
+            upnl = (qty * (px - avg)) if (px is not None and eq['_fresh']) else None
+            positions.append({
+                'paperPositionId': p.get('lotId'), 'asset': 'BTC',
+                'netQuantity': _paper_core.qty_dstr(qty), 'averageEntryPrice': _paper_core.dstr(avg),
+                'costBasis': _paper_core.dstr(p.get('costBasis')),
+                'entryDecisionSnapshotId': p.get('entryDecisionSnapshotId'),
+                'invalidationPrice': _paper_core.dstr(p.get('invalidationPrice')) if p.get('invalidationPrice') is not None else None,
+                'currentPrice': _paper_core.dstr(px) if (px is not None and eq['_fresh']) else None,
+                'unrealizedPnl': _paper_core.dstr(upnl) if upnl is not None else None})
     proposals = [_paper_proposal_public(pr) for pr in
                  paper_proposals_col.find({'paperAccountId': acct_id, 'status': 'CREATED'}, {'_id': 0})]
     activity = sorted((a.get('ledger') or []), key=lambda e: e.get('recordedAt') or e.get('effectiveAt') or '',
