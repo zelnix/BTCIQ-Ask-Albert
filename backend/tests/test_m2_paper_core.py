@@ -331,18 +331,23 @@ def _h(tok):
     return {'Authorization': 'Bearer ' + tok}
 
 
-def test_http_autopilot_mode_rejected_on_create(http_user):
+def test_http_autopilot_mode_allowed_on_create(http_user):
+    # M4 restored Autopilot as a selectable mode.
     r = requests.post(BASE + '/api/v1/albert/paper/accounts', headers=_h(http_user['tok']),
-                      json={'mode': 'PAPER_AUTOPILOT', 'name': 'nope'})
-    assert r.status_code == 422
+                      json={'mode': 'PAPER_AUTOPILOT', 'name': 'auto'})
+    assert r.status_code == 200 and r.json()['mode'] == 'PAPER_AUTOPILOT'
 
 
-def test_http_autopilot_rejected_on_set_mode(http_user):
+def test_http_autopilot_allowed_on_set_mode(http_user):
     acct = requests.post(BASE + '/api/v1/albert/paper/accounts', headers=_h(http_user['tok']),
                          json={'name': 'modeacct'}).json()
     r = requests.patch(BASE + '/api/v1/albert/paper/accounts/%s/mode' % acct['paperAccountId'],
                        headers=_h(http_user['tok']), json={'mode': 'PAPER_AUTOPILOT'})
-    assert r.status_code == 422
+    assert r.status_code == 200
+
+    r2 = requests.patch(BASE + '/api/v1/albert/paper/accounts/%s/mode' % acct['paperAccountId'],
+                        headers=_h(http_user['tok']), json={'mode': 'NONSENSE'})
+    assert r2.status_code == 422
 
 
 def test_http_dashboard_execution_flag(http_user):
@@ -351,8 +356,9 @@ def test_http_dashboard_execution_flag(http_user):
     d = requests.get(BASE + '/api/v1/albert/paper/accounts/%s/dashboard' % acct['paperAccountId'],
                      headers=_h(http_user['tok'])).json()
     exec_on = os.environ.get('PAPER_EXECUTION_ENABLED', '').lower() in ('1', 'true', 'yes', 'on')
+    auto_on = os.environ.get('PAPER_AUTOPILOT_ENABLED', '').lower() in ('1', 'true', 'yes', 'on')
     assert d['integrity']['executionEnabled'] is exec_on
-    assert d['integrity']['autopilotEnabled'] is False   # Autopilot always OFF
+    assert d['integrity']['autopilotEnabled'] is auto_on
 
 
 def _seed_proposal(acct_id, pid, expires_delta_min=30, snap='snapX'):

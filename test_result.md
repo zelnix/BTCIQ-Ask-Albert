@@ -11976,3 +11976,46 @@ agent_communication:
 #    Default new-account mode = OBSERVE. BTC spot only, virtual USDC only. Set PAPER_EXECUTION_ENABLED=false
 #    to instantly disable all simulated fills.
 
+
+#====================================================================================================
+# Ask-Albert Code Review Remediation — MILESTONE 4: BACKGROUND PAPER AUTOPILOT
+#====================================================================================================
+# agent: main | status: IMPLEMENTED + self-tested. Execution + Autopilot ENABLED in deployment.
+#
+# Durable background worker (server.py, added to the existing APScheduler in _startup):
+#   - Job 'paper_autopilot' runs every 60s, coalesce=True, max_instances=1, independent of any browser.
+#   - _paper_autopilot_worker(): iterates non-archived paper accounts (OBSERVE/APPROVAL/AUTOPILOT),
+#     takes a per-account DB lease (leaseToken + leaseExpiresAt) so only one worker touches an account.
+#   - _autopilot_process_account(): high-water + drawdown breaker (verified valuation only) -> protective
+#     invalidation exit (runs even when paused) -> new canonical snapshot handling. Processes each
+#     immutable snapshot at most once (lastProcessedDecisionSnapshotId). Executes only on a VERIFIED mark
+#     observed strictly AFTER the decision time and after marketObservationCursor (independent observation).
+#     BUY->run_entry_gates+apply_buy_atomic; SELL/TRIM/EXIT->run_exit_gates+apply_sell_atomic; WAIT/HOLD
+#     record only; stale/expired -> no trade (snapshot left unconsumed to retry); AUTOPILOT idempotency key
+#     'auto:<acct>:<sid>' => restart/duplicate-safe. OBSERVE logs; APPROVAL creates one bound proposal.
+#     Paused: no new entries (BUY snapshot left unconsumed); protective exits continue. Owner notified via
+#     new paper_notif_col (surfaced in the existing notifications feed).
+#   - Visibility: account.autopilot {lastCheckAt,lastDecisionProcessed,lastTradeAt} + dashboard.autopilot
+#     {workerState,workerLastRunAt,nextEvalAt,mode,runtimeState,executionEnabled,autopilotEnabled}.
+#
+# Dashboard/GET is now READ-ONLY: removed _paper_tick from paper_dashboard; _paper_equity(persist=False)
+#   so reads never move the high-water mark or write. Opening/refreshing never trades or re-evaluates.
+# Modes restored: OBSERVE / APPROVAL_REQUIRED / PAPER_AUTOPILOT (create+set-mode) + Pause (lifecycle).
+# Frontend (PaperTradingBot.js): Autopilot mode restored; live "Paper Autopilot running/paused/unavailable"
+#   status panel (last check / last decision / last trade / next eval / worker state); Paper-only label kept.
+#
+# Config (/app/.env): PAPER_EXECUTION_ENABLED=true, PAPER_AUTOPILOT_ENABLED=true. BTC spot, virtual USDC,
+#   long-only, owner-scoped, no exchange/real-money path.
+#
+# Tests: backend/tests/test_m4_autopilot.py (NEW, 10) drive the REAL worker processor (decision+mark
+#   monkeypatched; no browser). Full suite with both flags ON:
+#   PAPER_EXECUTION_ENABLED=true PAPER_AUTOPILOT_ENABLED=true python -m pytest tests/  -> 60 passed
+#   (M1 19 + M2 27 + M3 4 + M4 10). Proven: trades with dashboard closed; one decision <=1 effect; two
+#   workers cannot duplicate; restart no repeat; WAIT/HOLD never trade; stale decision/price never trade;
+#   independent observation required; mandate/reserve reject; SELL/TRIM auto-reduce; pause stops entries;
+#   dashboard reads create no economic events. Live proof: a seeded AUTOPILOT account (no dashboard ever
+#   opened) had autopilot.lastCheckAt + lastDecisionProcessed set after one 60s cycle; lease released.
+#
+# Remaining limitations: worker is an in-process APScheduler job (single backend process; DB lease guards
+#   multi-process); authenticated visual screenshot still blocked by the preview /api-proxy artifact.
+

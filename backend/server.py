@@ -66,7 +66,7 @@ from config import (
     driver_alert_subs_col, driver_alert_state_col, driver_alerts_col,
     diagnostics_runs_col, diagnostics_reports_col,
     paper_accounts_col, paper_proposals_col, paper_orders_col,
-    paper_positions_col, paper_ledger_col,
+    paper_positions_col, paper_ledger_col, paper_notif_col,
     users_col, auth_sessions_col, GOOGLE_CLIENT_ID,
 )
 from email_service import send_email, resend_configured
@@ -5301,6 +5301,11 @@ def _startup():
         scheduler.add_job(_refresh_whale_tx_bg, 'interval', minutes=30, id='whale_tx_refresh')
         # Price-watch alerts created from Albert chat: check crossings every 60s.
         scheduler.add_job(_check_price_watches, 'interval', seconds=60, id='price_watch_check')
+        # Background Paper Autopilot: the durable worker that trades paper accounts
+        # WITHOUT any browser/dashboard being open. Runs every 60s, one instance.
+        scheduler.add_job(_paper_autopilot_worker, 'interval', seconds=60, id='paper_autopilot',
+                          replace_existing=True, coalesce=True, max_instances=1,
+                          next_run_time=datetime.datetime.now() + datetime.timedelta(seconds=20))
         # Albert Trading Strategies: track active playbooks, fire nudges & paper-trade fills.
         scheduler.add_job(_strategy_eval_job, 'interval', seconds=60, id='strategy_eval',
                           replace_existing=True, coalesce=True, max_instances=1)
@@ -7049,12 +7054,13 @@ def _paper_positions(acct):
             if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0]
 
 
-def _paper_equity(acct):
-    """Public equity view backed by exact-Decimal core valuation. Persists the
-    high-water mark ONLY from a complete, verified valuation."""
+def _paper_equity(acct, persist=False):
+    """Public equity view backed by exact-Decimal core valuation. Read-only by
+    default (GET/dashboard never writes). Only the background worker persists the
+    high-water mark, and ONLY from a complete, verified valuation."""
     px, fresh, _ = _paper_btc_mark()
     info = _paper_core.compute_equity(acct, px, fresh)
-    if info['available'] and info['equity'] is not None:
+    if persist and info['available'] and info['equity'] is not None:
         _paper_core.update_high_water(paper_accounts_col, acct['paperAccountId'], acct['ownerId'], info['equity'])
 
     def _s(v, q=_paper_core.CASH_Q):
@@ -7129,63 +7135,227 @@ def _paper_proposal_public(prop):
     return {k: v for k, v in (prop or {}).items() if k != '_id'}
 
 
-def _paper_tick(acct):
-    """Advance one paper account: verified valuation + high-water + breaker, then
-    OBSERVE/APPROVAL only. Canonical decisions drive everything; WAIT/HOLD create
-    nothing; AUTOPILOT and any other mode do nothing (disabled in M2)."""
-    if acct.get('runtimeState') != 'RUNNING' or acct.get('archivedAt'):
+# ------------------------- Background Paper Autopilot -------------------------
+# A durable worker (APScheduler job, max_instances=1) runs independently of any
+# browser/dashboard. It is the ONLY thing that trades. GET/dashboard is read-only.
+_AUTOPILOT = {'lastRunAt': None, 'state': 'starting', 'intervalSec': 60}
+
+
+def _paper_autopilot_status(a):
+    ap = a.get('autopilot') or {}
+    nxt = None
+    if _AUTOPILOT['lastRunAt']:
+        try:
+            nxt = (datetime.datetime.fromisoformat(_AUTOPILOT['lastRunAt'])
+                   + datetime.timedelta(seconds=_AUTOPILOT['intervalSec'])).isoformat()
+        except Exception:  # noqa
+            nxt = None
+    return {'mode': a.get('mode'), 'runtimeState': a.get('runtimeState'),
+            'workerState': _AUTOPILOT['state'],
+            'workerLastRunAt': _AUTOPILOT['lastRunAt'],
+            'lastCheckAt': ap.get('lastCheckAt'),
+            'lastDecisionProcessed': ap.get('lastDecisionProcessed'),
+            'lastTradeAt': ap.get('lastTradeAt'),
+            'nextEvalAt': nxt,
+            'autopilotEnabled': PAPER_AUTOPILOT_ENABLED, 'executionEnabled': PAPER_EXECUTION_ENABLED,
+            'paperOnly': True}
+
+
+def _autopilot_notify(pid, acct_id, title, message, severity='info'):
+    try:
+        paper_notif_col.insert_one({'_id': 'pn_' + uuid.uuid4().hex[:16], 'pid': pid,
+                                    'paperAccountId': acct_id, 'ts': datetime.datetime.utcnow().isoformat(),
+                                    'title': title, 'message': message, 'severity': severity, 'seen': False})
+    except Exception:  # noqa
+        traceback.print_exc()
+
+
+def _autopilot_acquire_lease(acct_id, ttl_sec=110):
+    """DB lease so only ONE worker processes an account at a time."""
+    token = 'lease_' + uuid.uuid4().hex[:16]
+    now = datetime.datetime.utcnow()
+    doc = paper_accounts_col.find_one_and_update(
+        {'paperAccountId': acct_id,
+         '$or': [{'leaseExpiresAt': {'$exists': False}}, {'leaseExpiresAt': None},
+                 {'leaseExpiresAt': {'$lt': now.isoformat()}}]},
+        {'$set': {'leaseToken': token, 'leaseExpiresAt': (now + datetime.timedelta(seconds=ttl_sec)).isoformat()}})
+    return token if doc is not None else None
+
+
+def _autopilot_release_lease(acct_id, token):
+    paper_accounts_col.update_one({'paperAccountId': acct_id, 'leaseToken': token},
+                                  {'$set': {'leaseToken': None, 'leaseExpiresAt': None}})
+
+
+def _autopilot_set_vis(acct_id, **fields):
+    paper_accounts_col.update_one({'paperAccountId': acct_id},
+                                  {'$set': {('autopilot.' + k): v for k, v in fields.items()}})
+
+
+def _autopilot_process_account(acct):
+    """Process ONE paper account for the current tick. Reused by the worker only."""
+    acct_id = acct['paperAccountId']; pid = acct['ownerId']
+    now_iso = datetime.datetime.utcnow().isoformat()
+    _autopilot_set_vis(acct_id, lastCheckAt=now_iso)
+    if acct.get('archivedAt'):
         return
-    mode = acct.get('mode')
-    if mode not in ('OBSERVE', 'APPROVAL_REQUIRED'):
-        return  # PAPER_AUTOPILOT / live / discretionary are disabled in M2
-    pid = acct['ownerId']; acct_id = acct['paperAccountId']
-    px, fresh, _ = _paper_btc_mark()
-    info = _paper_core.compute_equity(acct, px, fresh)
+    px, fresh, mark_ts = _paper_btc_mark()
     mandate = _albert_deps.get_mandate(pid) or {}
+    info = _paper_core.compute_equity(acct, px, fresh)
+
+    # 1) High-water + drawdown breaker (verified valuation only).
     if info['available'] and info['equity'] is not None:
         _paper_core.update_high_water(paper_accounts_col, acct_id, pid, info['equity'])
         max_dd = _paper_core.D(mandate.get('max_drawdown_pct'))
-        if max_dd is not None and info['drawdownPct'] is not None and info['drawdownPct'] <= (-max_dd):
+        if (max_dd is not None and info['drawdownPct'] is not None and info['drawdownPct'] <= (-max_dd)
+                and acct.get('runtimeState') == 'RUNNING'):
             paper_accounts_col.update_one({'paperAccountId': acct_id},
                                           {'$set': {'runtimeState': 'PAUSED_RISK_BREAKER'}})
             _paper_ledger_add(acct_id, 'RISK_BREAKER', 'account', acct_id, None, None,
-                              'Drawdown %s%% breached your limit — entries paused.'
+                              'Drawdown %s%% breached your limit — new entries paused.'
                               % _paper_core.dstr(info['drawdownPct'], _paper_core.PCT_Q))
-            return
+            _autopilot_notify(pid, acct_id, 'Paper drawdown breaker tripped',
+                              'New paper entries are paused; protective exits continue.', 'warning')
+
+    # 2) Protective invalidation exit — runs even when paused (safe exit).
+    acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+    lot = _paper_core._btc_lot(acct)
+    if (lot and px is not None and fresh and PAPER_EXECUTION_ENABLED and lot.get('invalidationPrice') is not None
+            and px < _paper_core.D(lot.get('invalidationPrice'))):
+        ex = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh, full=True)
+        if not ex.get('reject'):
+            res, err, _ = _paper_core.apply_sell_atomic(paper_accounts_col, acct_id, pid, ex,
+                                                        source='auto_invalidation',
+                                                        idem_key='inv:%s:%s' % (lot.get('lotId'), mark_ts))
+            if not err:
+                _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
+                _autopilot_notify(pid, acct_id, 'Paper position auto-exited (invalidation)',
+                                  'Price fell below the engine invalidation — position closed. Paper only.', 'warning')
+        acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+
+    # 3) New canonical decision (process each snapshot at most once).
     canonical = _paper_canonical_decision(pid)
     if not canonical:
-        return  # fail closed
-    if not canonical['actionable']:
-        if mode == 'OBSERVE':
-            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', canonical['decisionSnapshotId'], None, None,
-                              'Observed %s — observe-only mode (no entry).' % canonical['action'])
         return
-    # refresh acct for embedded-state gate evaluation
-    acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
-    if canonical['action'] == 'BUY':
-        if mode == 'OBSERVE':
-            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', canonical['decisionSnapshotId'], None, None,
-                              'Observed BUY signal — observe-only mode.')
+    sid = canonical['decisionSnapshotId']
+    if acct.get('lastProcessedDecisionSnapshotId') == sid:
+        return  # already handled this immutable snapshot
+    mode = acct.get('mode')
+
+    # Not actionable (WAIT/HOLD): record + mark processed (no trade, ever).
+    if not canonical['actionable']:
+        _paper_ledger_add(acct_id, 'OBSERVED', 'decision', sid, None, None,
+                          'Observed %s — no trade.' % canonical['action'])
+        _autopilot_set_vis(acct_id, lastDecisionProcessed=sid)
+        paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lastProcessedDecisionSnapshotId': sid}})
+        return
+
+    # Stale/expired decision or unverified mark: place NO trade; retry later (do NOT
+    # consume the snapshot so a later fresh, INDEPENDENT observation can act).
+    if not canonical['fresh'] or px is None or not fresh:
+        return
+    # Independent observation: execute only on a verified mark observed strictly
+    # AFTER the decision (and after the last used observation) — never the same data.
+    try:
+        if mark_ts and canonical.get('decisionTime') and not (mark_ts > canonical['decisionTime']):
             return
-        has_open = bool(paper_proposals_col.find_one({'paperAccountId': acct_id, 'status': 'CREATED'}))
-        if has_open:
-            return  # duplicate-intent protection: one open proposal at a time
-        sizing = _paper_core.run_entry_gates(acct=acct, canonical=canonical, mark_px=px, mark_fresh=fresh,
-                                             mandate=mandate, equity_info=info, has_open_intent=False)
-        if sizing.get('reject'):
-            return
-        _paper_make_proposal(acct_id, pid, 'BUY', canonical, sizing)
-    elif canonical['action'] == 'SELL':
-        if mode == 'OBSERVE':
-            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', canonical['decisionSnapshotId'], None, None,
-                              'Observed SELL signal — observe-only mode.')
-            return
+    except Exception:  # noqa
+        return
+    cursor = acct.get('marketObservationCursor')
+    if cursor and mark_ts and not (mark_ts > cursor):
+        return
+
+    if mode == 'OBSERVE':
+        _paper_ledger_add(acct_id, 'OBSERVED', 'decision', sid, None, None,
+                          'Observed %s signal — observe-only mode.' % canonical['action'])
+        _autopilot_set_vis(acct_id, lastDecisionProcessed=sid)
+        paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lastProcessedDecisionSnapshotId': sid}})
+        return
+
+    if mode == 'APPROVAL_REQUIRED':
         if paper_proposals_col.find_one({'paperAccountId': acct_id, 'status': 'CREATED'}):
+            return  # one open proposal at a time
+        if canonical['action'] == 'BUY':
+            s = _paper_core.run_entry_gates(acct=acct, canonical=canonical, mark_px=px, mark_fresh=fresh,
+                                            mandate=mandate, equity_info=info, has_open_intent=False)
+        else:
+            s = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh, canonical=canonical)
+        if not s.get('reject'):
+            _paper_make_proposal(acct_id, pid, canonical['action'], canonical, s)
+            _autopilot_notify(pid, acct_id, 'Paper trade needs your approval',
+                              'Albert proposes a %s — review it in Paper Bot. Paper only.' % canonical['action'])
+        _autopilot_set_vis(acct_id, lastDecisionProcessed=sid)
+        paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lastProcessedDecisionSnapshotId': sid}})
+        return
+
+    if mode == 'PAPER_AUTOPILOT':
+        # Paused: no new ENTRIES. (Protective exits already ran above.) Do not
+        # consume BUY snapshots so resume can still act while the decision is fresh.
+        paused = acct.get('runtimeState') != 'RUNNING'
+        if not (PAPER_EXECUTION_ENABLED and PAPER_AUTOPILOT_ENABLED):
+            _paper_ledger_add(acct_id, 'AUTO_DISABLED', 'decision', sid, None, None,
+                              'Autopilot is disabled by configuration — no trade.')
+            _autopilot_set_vis(acct_id, lastDecisionProcessed=sid)
+            paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lastProcessedDecisionSnapshotId': sid}})
             return
-        sizing = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh, canonical=canonical)
-        if sizing.get('reject'):
-            return
-        _paper_make_proposal(acct_id, pid, 'SELL', canonical, sizing)
+        idem = 'auto:%s:%s' % (acct_id, sid)   # restart/duplicate-safe
+        if canonical['action'] == 'BUY':
+            if paused:
+                return  # entries paused; leave snapshot unconsumed
+            s = _paper_core.run_entry_gates(acct=acct, canonical=canonical, mark_px=px, mark_fresh=fresh,
+                                            mandate=mandate, equity_info=info, has_open_intent=False)
+            if s.get('reject'):
+                _paper_ledger_add(acct_id, 'AUTO_SKIPPED', 'decision', sid, None, None,
+                                  'Autopilot skipped BUY: %s.' % s['reject'])
+            else:
+                res, err, _ = _paper_core.apply_buy_atomic(paper_accounts_col, acct_id, pid, acct.get('version'),
+                                                          idem, 'auto_' + sid, s, canonical,
+                                                          base_currency=acct.get('baseCurrency', 'USDC'))
+                if not err:
+                    _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
+                    paper_accounts_col.update_one({'paperAccountId': acct_id},
+                                                  {'$set': {'marketObservationCursor': mark_ts}})
+                    _autopilot_notify(pid, acct_id, 'Paper Autopilot bought BTC',
+                                      'Auto-executed a simulated BUY on a fresh decision. Paper only — no real money.')
+        else:  # SELL / EXIT / TRIM (reduce-only) — allowed even if paused
+            s = _paper_core.run_exit_gates(acct=acct, mark_px=px, mark_fresh=fresh, canonical=canonical)
+            if not s.get('reject'):
+                res, err, _ = _paper_core.apply_sell_atomic(paper_accounts_col, acct_id, pid, s,
+                                                            source='auto', idem_key=idem, proposal_id='auto_' + sid,
+                                                            canonical=canonical)
+                if not err:
+                    _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
+                    paper_accounts_col.update_one({'paperAccountId': acct_id},
+                                                  {'$set': {'marketObservationCursor': mark_ts}})
+                    _autopilot_notify(pid, acct_id, 'Paper Autopilot reduced BTC',
+                                      'Auto-executed a simulated %s. Paper only — no real money.' % canonical['action'])
+        _autopilot_set_vis(acct_id, lastDecisionProcessed=sid)
+        paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lastProcessedDecisionSnapshotId': sid}})
+
+
+def _paper_autopilot_worker():
+    """Durable background job: process every non-archived paper account once,
+    under a per-account DB lease. Independent of any frontend activity."""
+    _AUTOPILOT['state'] = 'running'
+    _AUTOPILOT['lastRunAt'] = datetime.datetime.utcnow().isoformat()
+    try:
+        cur = paper_accounts_col.find({'archivedAt': None,
+                                       'mode': {'$in': ['OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT']}})
+        for acct in cur:
+            acct_id = acct['paperAccountId']
+            token = _autopilot_acquire_lease(acct_id)
+            if not token:
+                continue  # another worker holds the lease
+            try:
+                fresh_acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
+                _autopilot_process_account(fresh_acct)
+            except Exception:  # noqa
+                traceback.print_exc()
+            finally:
+                _autopilot_release_lease(acct_id, token)
+    except Exception:  # noqa
+        _AUTOPILOT['state'] = 'delayed'
+        traceback.print_exc()
 
 
 def _paper_make_proposal(acct_id, pid, side, canonical, sizing):
@@ -7255,8 +7425,8 @@ def paper_create_account(payload: dict = Body(...), user: dict = Depends(get_cur
     pid = owner_pid(user)
     mode = payload.get('mode', 'OBSERVE')  # default to the safest mode (Observe)
     # M2 mode boundary: only OBSERVE + APPROVAL_REQUIRED. AUTOPILOT is disabled.
-    if mode not in ('OBSERVE', 'APPROVAL_REQUIRED'):
-        raise HTTPException(status_code=422, detail='Only OBSERVE and APPROVAL_REQUIRED are available.')
+    if mode not in ('OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT'):
+        raise HTTPException(status_code=422, detail='Unknown mode.')
     start = _paper_core.q_cash(payload.get('startingCash')) or Decimal('100000.00')
     try:
         mandate = _albert_deps.get_mandate(pid) or {}
@@ -7295,10 +7465,11 @@ def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
     a = _paper_get(acct_id, pid)
     if not a:
         raise HTTPException(status_code=404, detail='No such paper account.')
-    _paper_tick(a)
-    a = paper_accounts_col.find_one({'paperAccountId': acct_id})  # refresh post-tick
+    a.pop('_id', None)
+    # READ-ONLY: opening/refreshing the dashboard must never trade or re-evaluate.
+    # All trading is done by the background worker (_paper_autopilot_worker).
     recon = _paper_core.reconcile(a)
-    eq = _paper_equity(a)
+    eq = _paper_equity(a, persist=False)
     px = eq['_px']
     positions = []
     for p in _paper_positions(a):
@@ -7347,7 +7518,8 @@ def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
                           'lastReconciledAt': datetime.datetime.utcnow().isoformat() if recon['ok'] else None,
                           'executionEnabled': PAPER_EXECUTION_ENABLED,
                           'autopilotEnabled': PAPER_AUTOPILOT_ENABLED,
-                          'primaryPauseReason': pause_reason}}
+                          'primaryPauseReason': pause_reason},
+            'autopilot': _paper_autopilot_status(a)}
 
 
 @app.patch('/api/v1/albert/paper/accounts/{acct_id}/mode')
@@ -7356,8 +7528,8 @@ def paper_set_mode(acct_id: str, payload: dict = Body(...), user: dict = Depends
     if not a:
         raise HTTPException(status_code=404, detail='No such paper account.')
     mode = payload.get('mode')
-    if mode not in ('OBSERVE', 'APPROVAL_REQUIRED'):
-        raise HTTPException(status_code=422, detail='Only OBSERVE and APPROVAL_REQUIRED are available.')
+    if mode not in ('OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT'):
+        raise HTTPException(status_code=422, detail='Unknown mode.')
     paper_accounts_col.update_one({'paperAccountId': acct_id},
                                   {'$set': {'mode': mode}, '$inc': {'version': 1}})
     _paper_ledger_add(acct_id, 'MODE_CHANGED', 'account', acct_id, None, None, f"Mode set to {mode}.")
@@ -10564,6 +10736,14 @@ def _albert_notifications(pid, limit=40):
     """Build the merged, most-recent-first per-pid notification list."""
     seen = _notif_seen_ids(pid)
     items = []
+    # -1) Paper Autopilot trade/approval notifications (background worker).
+    try:
+        for a in paper_notif_col.find({'pid': pid}).sort('ts', -1).limit(20):
+            items.append({'id': a.get('_id'), 'category': 'paper', 'severity': a.get('severity', 'info'),
+                          'symbol': 'BTC', 'ts': a.get('ts'), 'title': a.get('title'),
+                          'message': a.get('message'), 'action': 'paper', 'seen': a.get('_id') in seen})
+    except Exception:  # noqa
+        traceback.print_exc()
     # 0) Market-driver flip alerts (opt-in) — evaluate then read the emitted feed.
     try:
         _evaluate_driver_alerts(pid)

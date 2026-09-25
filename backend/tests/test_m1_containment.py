@@ -234,8 +234,9 @@ def test_paper_dashboard_integrity_not_healthy(users):
     assert integ['executionWorker'] == 'NONE'          # no durable worker ever
     assert integ['reconciliation'] in ('MATCH', 'MISMATCH')  # real replay comparison now runs
     exec_on = os.environ.get('PAPER_EXECUTION_ENABLED', '').lower() in ('1', 'true', 'yes', 'on')
+    auto_on = os.environ.get('PAPER_AUTOPILOT_ENABLED', '').lower() in ('1', 'true', 'yes', 'on')
     assert integ['executionEnabled'] is exec_on
-    assert integ['autopilotEnabled'] is False          # Autopilot stays OFF regardless
+    assert integ['autopilotEnabled'] is auto_on
 
 
 def test_approve_blocked_while_execution_disabled(users):

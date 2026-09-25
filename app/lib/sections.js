@@ -56,7 +56,7 @@ const SECTIONS = [
   { id: 'settings', label: 'Settings', icon: Cpu,
     blurb: 'Admin passcode for manual forecast runs, plus Ask Albert’s about & compliance information. (Live data-source status now lives in the Admin screen.)' },
   { id: 'paper', label: 'Paper Bot', icon: FlaskConical,
-    blurb: 'Forward-test Albert’s engine with virtual money — no exchange keys, no real orders. Choose Observe or Ask-me-first (Autopilot is unavailable); review and approve each paper trade; watch simulated fills, positions, equity and an honest activity ledger. Paper results are never mixed with backtests or your real portfolio.' },
+    blurb: 'Forward-test Albert’s engine with virtual money — no exchange keys, no real orders. Choose Observe, Ask-me-first, or Run Paper Autopilot (a background worker that trades continuously even when the app is closed). Watch simulated fills, positions, equity and an honest activity ledger. Paper results are never mixed with backtests or your real portfolio.' },
   { id: 'checkup', label: 'App Checkup', icon: Stethoscope,
     blurb: 'Not sure if something is broken? Albert checks the parts of BTCIQ needed for the app to work — connectivity, services, market-data freshness, the engine and your session — then explains in plain English what (if anything) is wrong, how confident he is, and the single best next step. Reads health only; never changes your data.' },
   { id: 'admin', label: 'Admin', icon: ShieldCheck,

@@ -6,7 +6,7 @@
 import React from 'react';
 import { API_BASE, getPid } from '../lib/api';
 import {
-  Loader2, FlaskConical, Play, Pause, Eye, HandCoins, ShieldCheck, CheckCircle2,
+  Loader2, FlaskConical, Play, Pause, Bot, Eye, HandCoins, ShieldCheck, CheckCircle2,
   XCircle, TrendingUp, AlertTriangle, Info, ArrowRight,
 } from 'lucide-react';
 
@@ -15,6 +15,7 @@ const num = (v) => (v == null ? 0 : Number(v));
 const MODES = [
   { id: 'OBSERVE', label: 'Observe only', desc: 'Albert logs signals but never trades.', Icon: Eye },
   { id: 'APPROVAL_REQUIRED', label: 'Ask me first', desc: 'Albert proposes; you approve each paper trade.', Icon: HandCoins },
+  { id: 'PAPER_AUTOPILOT', label: 'Run Paper Autopilot', desc: 'Albert trades automatically in the background — paper only.', Icon: Bot },
 ];
 
 function PaperBadge() {
@@ -183,6 +184,8 @@ export default function PaperTradingBot() {
   const activity = dash?.recentActivity || [];
   const integ = dash?.integrity || {};
   const perf = dash?.performance || {};
+  const ap = dash?.autopilot || {};
+  const fmtTs = (t) => { try { return t ? new Date(t).toLocaleTimeString() : '—'; } catch (e) { return '—'; } };
 
   return (
     <div className="space-y-4">
@@ -217,8 +220,24 @@ export default function PaperTradingBot() {
           <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />{acct.runtimeState.replace(/_/g, ' ')}</p>
         )}
         {integ.marketData === 'STALE' && <p className="mt-2 flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Market marks are stale — new paper entries are paused until data refreshes.</p>}
-        <p className="mt-2 flex items-center gap-1.5 text-[10.5px] text-slate-500"><ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />Autopilot is unavailable — every paper trade needs your approval. BTC spot, virtual USDC only.</p>
+        <p className="mt-2 flex items-center gap-1.5 text-[10.5px] text-slate-500"><ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />Paper only — no real money, no exchange. BTC spot, virtual USDC, long-only.</p>
       </div>
+
+      {/* Background Autopilot status */}
+      {acct.mode === 'PAPER_AUTOPILOT' && (
+        <div className="rounded-2xl border border-violet-500/30 bg-violet-500/[0.06] p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-violet-300"><Bot className="h-3.5 w-3.5" />Paper Autopilot {ap.autopilotEnabled && acct.runtimeState === 'RUNNING' ? 'running' : (acct.runtimeState !== 'RUNNING' ? 'paused' : 'unavailable')}</p>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${ap.workerState === 'running' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>worker: {ap.workerState || 'unknown'}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] text-slate-400 sm:grid-cols-3">
+            {[['Last background check', fmtTs(ap.lastCheckAt)], ['Last decision processed', ap.lastDecisionProcessed ? String(ap.lastDecisionProcessed).slice(0, 10) + '…' : '—'], ['Last simulated trade', fmtTs(ap.lastTradeAt)], ['Next evaluation', fmtTs(ap.nextEvalAt)], ['Worker last run', fmtTs(ap.workerLastRunAt)]].map(([k, v], i) => (
+              <div key={i}><span className="block text-[10px] uppercase tracking-wide text-slate-500">{k}</span><span className="font-semibold text-slate-200">{v}</span></div>
+            ))}
+          </div>
+          <p className="mt-2 text-[10.5px] text-slate-500">Runs continuously on the server — you can close the app. {acct.runtimeState !== 'RUNNING' ? 'Paused: no new entries; protective exits still run.' : 'Pause any time to stop new entries.'}</p>
+        </div>
+      )}
 
       {/* Account value summary */}
       <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">

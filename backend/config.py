@@ -203,6 +203,13 @@ try:
 except Exception:  # noqa
     pass
 
+# Paper Autopilot owner notifications (surfaced via the existing notifications feed).
+paper_notif_col = db['albert_paper_notifications']
+try:
+    paper_notif_col.create_index([('pid', 1), ('ts', -1)])
+except Exception:  # noqa
+    pass
+
 # Paper-Trading Bot (paper-only; NO exchange keys, NO live orders ever).
 paper_accounts_col = db['albert_paper_accounts']
 paper_proposals_col = db['albert_paper_proposals']
