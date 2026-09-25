@@ -8321,6 +8321,252 @@ def paper_trade_evidence(position_id: str, user: dict = Depends(get_current_user
             'executionProfile': PAPER_EXEC_PROFILE, 'ledger': _paper_jsonify(fills),
             'note': 'Paper simulation evidence — not a live exchange fill.'}
 
+# =====================================================================
+# ALBERT STATE OF PLAY  (M-A: single authenticated, owner-scoped aggregate)
+# One backend source of truth for Albert Home + Ask Albert context. Identity is
+# ALWAYS server-derived from the session (never a client-supplied pid). Reads from
+# canonical services only (paper dashboard, mandate, regime, strategies) — it does
+# NOT recompute engine values, and never lets the LLM fill missing fields.
+# =====================================================================
+def _sop_regime_block():
+    """Market regime + freshness from the canonical regime store (cheap read)."""
+    try:
+        doc = regime_col.find_one({'_id': 'albert_regime'}) or {}
+    except Exception:  # noqa
+        doc = {}
+    regime = (doc.get('regime') or 'UNKNOWN')
+    conf = doc.get('confidence')
+    if conf is None:
+        conf = doc.get('confidence_pct')
+    as_of = doc.get('updated_at') or doc.get('asOf') or doc.get('created_at')
+    freshness = 'MISSING'
+    if as_of:
+        try:
+            age_h = (datetime.datetime.utcnow() - datetime.datetime.fromisoformat(str(as_of).replace('Z', ''))).total_seconds() / 3600.0
+            freshness = 'FRESH' if age_h <= 26 else 'STALE'
+        except Exception:  # noqa
+            freshness = 'FRESH' if regime != 'UNKNOWN' else 'MISSING'
+    elif regime != 'UNKNOWN':
+        freshness = 'FRESH'
+    return {'regime': regime, 'confidence': conf, 'asOf': as_of,
+            'freshness': freshness, 'decisionSnapshotId': doc.get('decisionSnapshotId')}
+
+
+def _sop_select_account(pid, requested=None):
+    """Resolve the canonical selected paper account for this owner. A client may
+    REQUEST an id, but it is only honoured when it belongs to this owner."""
+    if requested:
+        a = _paper_get(requested, pid)
+        if a:
+            return a
+    # stored preference
+    try:
+        pref = (misc_col.find_one({'_id': f'sop_sel:{pid}'}) or {}).get('paperAccountId')
+    except Exception:  # noqa
+        pref = None
+    if pref:
+        a = _paper_get(pref, pid)
+        if a:
+            return a
+    # fall back to most-recent non-archived account
+    for a in paper_accounts_col.find({'ownerId': pid}).sort('createdAt', -1):
+        if a.get('runtimeState') != 'ARCHIVED':
+            return a
+    return None
+
+
+def _sop_strategies(pid):
+    """Owner-scoped strategy summary (read-only). Best-effort over the existing store."""
+    active, drafts, attention = [], [], []
+    try:
+        for s in strategies_col.find({'owner': pid}, {'_id': 0}).sort('created_at', -1).limit(60):
+            item = {'id': s.get('id'), 'name': s.get('name') or s.get('title') or 'Untitled strategy',
+                    'symbol': s.get('symbol'), 'assets': s.get('assets') or s.get('legs'),
+                    'status': s.get('status'), 'kind': s.get('kind'),
+                    'version': s.get('version'), 'createdAt': s.get('created_at'),
+                    'updatedAt': s.get('updated_at')}
+            st = (s.get('status') or '').lower()
+            if st in ('active', 'paper_active', 'paper_assigned', 'reviewed'):
+                active.append(item)
+            elif st in ('draft', 'backtested'):
+                drafts.append(item)
+            if s.get('needsReview') or st == 'needs_review':
+                attention.append(item)
+    except Exception:  # noqa
+        traceback.print_exc()
+    return {'active': active, 'drafts': drafts, 'needsAttention': attention}
+
+
+def _sop_build(user, requested_account=None):
+    pid = owner_pid(user)
+    now = datetime.datetime.utcnow()
+    now_iso = now.isoformat()
+
+    # --- mandate / user preferences (canonical) ---
+    m = _get_mandate(pid)
+    user_block = {
+        'mandateStatus': 'COMPLETE' if _mandate_complete(m) else 'INCOMPLETE',
+        'goal': m.get('goal') or None,
+        'riskTolerance': (m.get('risk_tolerance') or '').upper() or None,
+        'timeHorizon': m.get('time_horizon') or None,
+        'protectedReservePct': m.get('reserve_pct'),
+        'maxDrawdownPct': m.get('max_drawdown_pct'),
+        'approvedCoins': m.get('approved_coins') or [],
+        'excludedCoins': m.get('excluded_coins') or [],
+    }
+
+    # --- market (cheap canonical read) ---
+    market = _sop_regime_block()
+
+    # --- selected paper account + full canonical dashboard (single source) ---
+    acct = _sop_select_account(pid, requested=requested_account)
+    paper, portfolio = None, None
+    attention, changes = [], []
+    if acct:
+        acct_id = acct['paperAccountId']
+        try:
+            dash = paper_dashboard(acct_id, user)
+        except HTTPException:
+            dash = None
+        except Exception:  # noqa
+            traceback.print_exc()
+            dash = None
+        if dash:
+            eq = dash.get('equity') or {}
+            portfolio = {
+                'source': 'PAPER_ACCOUNT', 'paperAccountId': acct_id,
+                'totalValue': eq.get('value'), 'cash': eq.get('cash'),
+                'protectedReserve': eq.get('protectedReserve'),
+                'deployableCapital': eq.get('deployableCash'),
+                'unrealizedPnl': eq.get('unrealizedPnl'), 'realizedPnl': eq.get('realizedPnl'),
+                'drawdownPct': eq.get('drawdownPct'),
+                'positions': dash.get('positions') or [],
+            }
+            wh = dash.get('autopilot') or {}
+            integ = dash.get('integrity') or {}
+            pend = dash.get('pendingProposals') or []
+            paper = {
+                'selectedAccount': dash.get('account'),
+                'mode': (dash.get('account') or {}).get('mode'),
+                'assignedStrategy': (dash.get('account') or {}).get('assignedStrategy'),
+                'positions': dash.get('positions') or [],
+                'pendingProposals': pend,
+                'recentActivity': dash.get('recentActivity') or [],
+                'performance': dash.get('performance') or {},
+                'allocation': dash.get('allocation'),
+                'rotations': dash.get('rotations') or [],
+                'workerHealth': {**wh, 'primaryPauseReason': integ.get('primaryPauseReason'),
+                                 'marketData': integ.get('marketData'),
+                                 'reconciliation': integ.get('reconciliation')},
+            }
+            # attention: proposals awaiting a decision
+            for pr in pend:
+                attention.append({
+                    'id': 'proposal:' + str(pr.get('proposalId')),
+                    'kind': 'PROPOSAL_APPROVAL', 'severity': 'ACTION',
+                    'title': f"Approve or reject a paper {pr.get('side', '').lower()} of {pr.get('asset', '')}".strip(),
+                    'entity': {'type': 'proposal', 'id': pr.get('proposalId'),
+                               'paperAccountId': acct_id, 'asset': pr.get('asset')},
+                    'expiresAt': pr.get('expiresAt'),
+                    'deepLink': f'/?section=paper&proposal={pr.get("proposalId")}'})
+            if (dash.get('account') or {}).get('runtimeState') == 'PAUSED_RISK_BREAKER':
+                attention.append({'id': 'breaker:' + acct_id, 'kind': 'RISK_BREAKER', 'severity': 'WARNING',
+                                  'title': 'Paper account paused by the drawdown breaker — a reviewed reset is needed.',
+                                  'entity': {'type': 'account', 'id': acct_id},
+                                  'deepLink': f'/?section=paper&account={acct_id}'})
+            # changes since last visit (durable, from the account ledger)
+            try:
+                last_visit = (misc_col.find_one({'_id': f'sop_visit:{pid}'}) or {}).get('lastVisitAt')
+            except Exception:  # noqa
+                last_visit = None
+            for e in (dash.get('recentActivity') or []):
+                ts = e.get('recordedAt') or e.get('effectiveAt')
+                if last_visit and ts and str(ts) <= str(last_visit):
+                    continue
+                changes.append({'at': ts, 'kind': e.get('type') or e.get('kind'),
+                                'detail': e.get('note') or e.get('memo') or '',
+                                'entity': {'type': e.get('entityType'), 'id': e.get('entityId')},
+                                'deepLink': f'/?section=paper&account={acct_id}'})
+            changes = changes[:12]
+    else:
+        attention.append({'id': 'no-account', 'kind': 'NO_PAPER_ACCOUNT', 'severity': 'SETUP',
+                          'title': 'Create a paper account so Albert can put a strategy into simulated action.',
+                          'deepLink': '/?section=paper'})
+
+    # --- mandate / strategy setup attention ---
+    if user_block['mandateStatus'] != 'COMPLETE':
+        attention.insert(0, {'id': 'mandate', 'kind': 'MANDATE_INCOMPLETE', 'severity': 'SETUP',
+                             'title': 'Tell Albert your goal, risk tolerance and protected reserve so he can plan for you.',
+                             'deepLink': '/?section=settings'})
+    strategies = _sop_strategies(pid)
+    if acct and not strategies['active']:
+        attention.append({'id': 'no-strategy', 'kind': 'NO_ASSIGNED_STRATEGY', 'severity': 'SETUP',
+                          'title': 'Build a strategy with Albert and assign it to your paper account.',
+                          'deepLink': '/?section=strategies'})
+
+    # --- data quality (derived from canonical freshness only) ---
+    dq_issues = []
+    if market['freshness'] in ('STALE', 'MISSING'):
+        dq_issues.append({'area': 'MARKET_DATA', 'status': market['freshness'],
+                          'detail': 'Market regime data is not fresh — Albert will avoid new action claims.'})
+    if paper and (paper['workerHealth'].get('marketData') == 'STALE'):
+        dq_issues.append({'area': 'PAPER_MARKS', 'status': 'STALE',
+                          'detail': 'Live marks for held assets are stale.'})
+    dq_status = 'HEALTHY'
+    if any(i['status'] == 'MISSING' for i in dq_issues):
+        dq_status = 'BLOCKED'
+    elif dq_issues:
+        dq_status = 'DEGRADED'
+
+    evidence_index = {
+        'market.regime': {'evidenceRefs': ['regime:albert_regime'], 'deepLink': '/?section=briefing', 'asOf': market['asOf']},
+        'portfolio.value': {'evidenceRefs': ([f'paperAccount:{acct["paperAccountId"]}'] if acct else []),
+                            'deepLink': ('/?section=paper' if acct else '/?section=paper'), 'asOf': now_iso},
+        'data.quality': {'evidenceRefs': ['dataAudit'], 'deepLink': '/?section=dataaudit', 'asOf': now_iso},
+    }
+    deep_links = {'askAlbert': '/?section=ask', 'strategies': '/?section=strategies',
+                  'paper': '/?section=paper', 'technicalCentre': '/?section=dataaudit',
+                  'settings': '/?section=settings'}
+
+    state = {
+        'stateId': 'sop_' + uuid.uuid4().hex[:16], 'generatedAt': now_iso, 'paperOnly': True,
+        'owner': {'id': user['_id'], 'name': user.get('name'), 'email': user.get('email')},
+        'user': user_block, 'market': market, 'portfolio': portfolio,
+        'strategies': strategies, 'paper': paper,
+        'attention': attention, 'changesSinceLastVisit': changes,
+        'dataQuality': {'status': dq_status, 'issues': dq_issues},
+        'evidenceIndex': evidence_index, 'deepLinks': deep_links,
+    }
+    # record this visit AFTER computing "changes since last visit"
+    try:
+        misc_col.update_one({'_id': f'sop_visit:{pid}'},
+                            {'$set': {'_id': f'sop_visit:{pid}', 'lastVisitAt': now_iso}}, upsert=True)
+    except Exception:  # noqa
+        pass
+    return state
+
+
+@app.get('/api/v1/albert/state-of-play')
+def albert_state_of_play(account: str = '', user: dict = Depends(get_current_user)):
+    """Authenticated, owner-scoped aggregate that powers Albert Home + Ask Albert.
+    Ownership is derived only from the session. `account` may REQUEST a selected paper
+    account but is honoured only when it belongs to the authenticated owner."""
+    return {'status': 'ready', **_sop_build(user, requested_account=(account or '').strip() or None)}
+
+
+@app.post('/api/v1/albert/state-of-play/select')
+def albert_state_of_play_select(payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
+    """Persist the owner's selected paper account (owner-scoped; validated)."""
+    pid = owner_pid(user)
+    acct_id = str((payload or {}).get('paperAccountId') or '').strip()
+    if not acct_id or not _paper_get(acct_id, pid):
+        raise HTTPException(status_code=404, detail='No such paper account.')
+    misc_col.update_one({'_id': f'sop_sel:{pid}'},
+                        {'$set': {'_id': f'sop_sel:{pid}', 'paperAccountId': acct_id}}, upsert=True)
+    return {'status': 'ready', 'paperAccountId': acct_id}
+
+
+
 
 
 

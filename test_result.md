@@ -117,6 +117,54 @@ user_problem_statement: |
   with seeded test session to verify UI rendering across 6 deep-linked views in desktop and mobile.
 
 backend:
+  - task: "M-A: Albert state-of-play aggregate (GET /api/v1/albert/state-of-play)"
+    implemented: true
+    working: true
+    file: "backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Implemented the single authenticated, owner-scoped aggregate that powers Albert Home + Ask
+          Albert (spec §5). GET /api/v1/albert/state-of-play returns stateId/generatedAt, user (mandate
+          status + reserve), market (regime/freshness from canonical regime store), portfolio (sourced
+          from THIS owner's selected M5 paper account via the existing paper_dashboard — single source of
+          truth, exact Decimal strings preserved), strategies (owner-scoped), paper (mode, positions,
+          pendingProposals, recentActivity, allocation, rotations, workerHealth), attention (proposals/
+          setup/breaker), changesSinceLastVisit (durable last-visit stored in misc_col), dataQuality,
+          evidenceIndex + deepLinks. Identity is ALWAYS derived from get_current_user (never a client pid);
+          a client may only REQUEST a selected account, honoured solely when owner-owned. Added
+          POST /api/v1/albert/state-of-play/select (owner-scoped). No engine values recomputed; LLM never
+          fills fields. Verified: live smoke (200, correct owner scope, 401 unauth) + pytest.
+          Tests: tests/test_mA_state_of_play.py (4) — contract keys, portfolio source, owner isolation,
+          owner-scoped selection. Full suite: 89 passed (85 prior + 4 new), no regression.
+  - task: "M-B: Albert Home frontend + Albert-first navigation shell (More -> Technical Centre)"
+    implemented: true
+    working: true
+    file: "app/app/components/AlbertHome.js, app/app/page.js, app/app/lib/sections.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Restructured primary nav to Albert / Ask Albert / Strategies / Paper Trading / More (spec §3).
+          ALL existing technical screens preserved intact and reorganised under More -> Technical Centre
+          (categories: Market Intelligence, Portfolio & Risk, Trading Evidence, On-chain & Flows, Data
+          Trust, System) — nothing deleted. New AlbertHome (default landing) consumes state-of-play and
+          renders: 3-second status strip (market stance, paper value, deployable, unrealised P&L, data
+          status), embedded plain-English executive briefing (deterministic from SOP — no invented
+          values) with Ask Albert + Evidence, changes-since-last-visit, Needs-your-decision (ACTION/
+          WARNING only), Albert-is-managing (account/mode/strategy/positions/last activity/running-paused),
+          Your strategies, Opportunities-&-risks (4 independent checks). Evidence deep-links navigate to
+          the Technical Centre section. Desktop/laptop/tablet-first (multi-column workspace, not stretched
+          mobile). Verified with authenticated screenshots at 1920px (desktop) and 1024px (laptop/tablet)
+          + More expansion + technical-screen navigation. Next.js compiled clean (200).
+
   - task: "Trader Home projection bands + Performance module endpoints"
     implemented: true
     working: true

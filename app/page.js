@@ -47,9 +47,10 @@ import TraderHome from './components/TraderHome';
 import MarketDrivers from './components/MarketDrivers';
 import DiagnosticsCheckup from './components/DiagnosticsCheckup';
 import PaperTradingBot from './components/PaperTradingBot';
+import AlbertHome from './components/AlbertHome';
 
 import DailyReportModal from './components/DailyReport';
-import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS } from './lib/sections';
+import { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS, PRIMARY_NAV, TECH_GROUPS, PRIMARY_IDS } from './lib/sections';
 import { speakAlbert, stopAlbert, prefetchAlbert, getVoicePref, setVoicePref, previewVoice } from './lib/albertVoice';
 import { CoinIcon, Shimmer, ChartTooltip, QuantGauge, InfoBlock, InfoTip, TapInfo, AiReview, SectionHead, DemoBadge, Spark, LevGauge, ComingSoonSection } from './components/shared';
 import StrategiesSection from './components/Strategies';
@@ -3217,9 +3218,11 @@ export default function DashboardPage() {
   const [passRemember, setPassRemember] = useState(true);
   const [passAutoClear, setPassAutoClear] = useState(false);
   const [ticker, setTicker] = useState(__tickerCache);
-  const [active, setActive] = useState('briefing');
+  const [active, setActive] = useState('home');
   const [homeParams, setHomeParams] = useState({ horizon: '7D', focus: null, mdHorizon: 'SWING' });
+  const [moreOpen, setMoreOpen] = useState(false);
   const skipUrlPush = React.useRef(false);
+  React.useEffect(() => { if (!PRIMARY_IDS.includes(active)) setMoreOpen(true); }, [active]);
   const [chatStrategy, setChatStrategy] = useState(null); // {draft, symbol} — from "Save as strategy" in chat
   const [chatStrategyBuilding, setChatStrategyBuilding] = useState(false);
   const [showReport, setShowReport] = useState(false);
@@ -3316,7 +3319,7 @@ export default function DashboardPage() {
         const q = new URLSearchParams(window.location.search);
         skipUrlPush.current = true;
         setSymbol((q.get('symbol') || 'BTC').toUpperCase());
-        setActive(q.get('section') || 'briefing');
+        setActive(q.get('section') || 'home');
         setHomeParams({ horizon: q.get('horizon') || '7D', focus: q.get('focus') || null, mdHorizon: q.get('mdh') || 'SWING' });
       } catch (e) { /* noop */ }
     };
@@ -3627,6 +3630,7 @@ export default function DashboardPage() {
   const activeSection = sec(active);
   const visibleSections = SECTIONS.filter((s) => !REMOVED_SECTIONS.includes(s.id) && (symbol === 'BTC' || !BTC_ONLY_SECTIONS.includes(s.id)));
   const renderSection = () => {
+    if (active === 'home') return <AlbertHome onNav={setActive} />;
     if (active === 'briefing') return <ExecutiveSummary d={d} ticker={ticker} news={news} onNav={setActive} homeParams={homeParams} setHomeParams={setHomeParams} />;
     if (active === 'overview') return <OverviewSection d={d} ticker={ticker} />;
     if (active === 'forecasts') return <ForecastsHubSection d={d} />;
@@ -3694,22 +3698,54 @@ export default function DashboardPage() {
             <PublishStamp className="pl-0.5" />
             <EnvBadge />
           </div>
-          <nav className="flex-1 space-y-1">
-            {visibleSections.map((s) => {
+          <nav className="flex-1 space-y-1 overflow-y-auto pr-0.5">
+            {/* Primary Albert-first destinations */}
+            {PRIMARY_NAV.map((s) => {
               const Icon = s.icon;
               const on = active === s.id;
-              const navUnread = s.id === 'alerts' ? ((notif && notif.unseen) || 0) : 0;
               return (
                 <button key={s.id} onClick={() => setActive(s.id)}
-                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${on ? 'bg-gradient-to-r from-sky-500/20 via-violet-500/12 to-transparent font-semibold text-white ring-1 ring-sky-500/25' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'}`}>
+                  className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${on ? 'bg-gradient-to-r from-sky-500/20 via-violet-500/12 to-transparent font-semibold text-white ring-1 ring-sky-500/25' : 'text-slate-300 hover:bg-slate-800/60 hover:text-white'}`}>
                   <Icon className="h-4 w-4" />{s.label}
-                  {navUnread > 0 && (
-                    <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-bold text-white">{navUnread > 9 ? '9+' : navUnread}</span>
-                  )}
-                  {s.soon && navUnread === 0 && <Lock className="ml-auto h-3 w-3 text-slate-600" />}
                 </button>
               );
             })}
+
+            {/* More → Technical Centre (advanced; preserves every engine screen) */}
+            <div className="pt-2">
+              <button onClick={() => setMoreOpen((o) => !o)}
+                className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors ${!PRIMARY_IDS.includes(active) ? 'font-semibold text-white' : 'text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'}`}>
+                <SlidersHorizontal className="h-4 w-4" />More
+                <ChevronDown className={`ml-auto h-4 w-4 transition-transform ${moreOpen ? 'rotate-180' : ''}`} />
+              </button>
+              {moreOpen && (
+                <div className="mt-1 space-y-3 border-l border-slate-800/70 pl-2">
+                  <p className="px-2 text-[10px] font-semibold uppercase tracking-wider text-slate-600">Technical Centre</p>
+                  {TECH_GROUPS.map((g) => {
+                    const ids = g.ids.filter((id) => !REMOVED_SECTIONS.includes(id) && (symbol === 'BTC' || !BTC_ONLY_SECTIONS.includes(id)));
+                    if (!ids.length) return null;
+                    return (
+                      <div key={g.label}>
+                        <p className="px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-slate-500">{g.label}</p>
+                        {ids.map((id) => {
+                          const meta = sec(id);
+                          const Icon = meta.icon || Info;
+                          const on = active === id;
+                          const navUnread = id === 'alerts' ? ((notif && notif.unseen) || 0) : 0;
+                          return (
+                            <button key={id} onClick={() => setActive(id)}
+                              className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-[13px] transition-colors ${on ? 'bg-slate-800/70 font-semibold text-white' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'}`}>
+                              <Icon className="h-3.5 w-3.5" />{meta.label}
+                              {navUnread > 0 && <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">{navUnread > 9 ? '9+' : navUnread}</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </nav>
           <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/50 p-3">
             <div className="flex items-center justify-between"><span className="text-[10px] uppercase text-slate-500">Quant Score</span><span className="text-[10px] text-slate-500">{d.data_source}</span></div>
@@ -3806,11 +3842,17 @@ export default function DashboardPage() {
 
           </div>
 
-          {/* Mobile nav */}
+          {/* Mobile nav (narrow-screen fallback — desktop/tablet is the reference layout) */}
           <div className="flex gap-1 overflow-x-auto border-b border-slate-800 px-3 py-2 md:hidden">
-            {visibleSections.map((s) => (
-              <button key={s.id} onClick={() => setActive(s.id)} className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs ${active === s.id ? 'bg-sky-500/15 font-semibold text-sky-300' : 'text-slate-400'}`}>{s.label}</button>
+            {PRIMARY_NAV.map((s) => (
+              <button key={s.id} onClick={() => setActive(s.id)} className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold ${active === s.id ? 'bg-sky-500/15 text-sky-300' : 'text-slate-300'}`}>{s.label}</button>
             ))}
+            <span className="mx-1 self-center text-slate-700">|</span>
+            {TECH_GROUPS.flatMap((g) => g.ids)
+              .filter((id) => !REMOVED_SECTIONS.includes(id) && (symbol === 'BTC' || !BTC_ONLY_SECTIONS.includes(id)))
+              .map((id) => (
+                <button key={id} onClick={() => setActive(id)} className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs ${active === id ? 'bg-sky-500/15 font-semibold text-sky-300' : 'text-slate-400'}`}>{sec(id).label}</button>
+              ))}
           </div>
 
           <main className="mx-auto max-w-6xl px-4 py-6 md:px-8"><ErrorBoundary label={activeSection?.label || active} resetKey={active}>{renderSection()}</ErrorBoundary></main>

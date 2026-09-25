@@ -2,6 +2,7 @@ import {
   LayoutDashboard, Target, Scale, BarChart3, Globe, History, Waves, Fish, Landmark,
   Gauge, Newspaper, ShieldAlert, CalendarClock, Trophy, MessageCircle, Bell, Activity,
   Database, Cpu, ShieldCheck, Sparkles, CandlestickChart, ClipboardList, Info, Crosshair, Radar, Users, Stethoscope, FlaskConical,
+  Home, Wrench,
 } from 'lucide-react';
 
 const SECTIONS = [
@@ -85,9 +86,38 @@ const sec = (id) => SECTIONS.find(s => s.id === id)
   || LEGACY_SECTIONS.find(s => s.id === id)
   || { id, label: id, icon: Info, blurb: '' };
 
+// ============================================================================
+// Albert-first primary navigation (spec §3). The sophisticated engines stay as
+// Albert's trading desk — reachable inside More → Technical Centre — but the
+// everyday journey is Albert / Ask Albert / Strategies / Paper Trading.
+// ============================================================================
+const PRIMARY_NAV = [
+  { id: 'home', label: 'Albert', icon: Home,
+    blurb: 'Your personalised home: Albert’s executive briefing, what needs your decision, what he is managing, and what he is waiting for.' },
+  { id: 'ask', label: 'Ask Albert', icon: MessageCircle,
+    blurb: 'Your context-aware trading companion. Explain, explore and build — grounded strictly in your live state of play.' },
+  { id: 'strategies', label: 'Strategies', icon: Crosshair,
+    blurb: 'Build, review, backtest, version, activate and assign strategies with Albert.' },
+  { id: 'paper', label: 'Paper Trading', icon: FlaskConical,
+    blurb: 'Operate and review paper accounts, proposals, positions, fills, performance and account mode. Paper only — no real orders.' },
+];
+
+// More → Technical Centre categories (spec §9.1). Every existing screen is
+// preserved here — nothing is deleted, only reorganised for advanced users.
+const TECH_GROUPS = [
+  { label: 'Market Intelligence', ids: ['briefing', 'overview', 'forecasts', 'market-intel', 'drivers', 'crossmarket', 'analogs', 'news', 'macro'] },
+  { label: 'Portfolio & Risk', ids: ['risk', 'leverage', 'events', 'smartmoney'] },
+  { label: 'Trading Evidence', ids: ['performance', 'alert-engine'] },
+  { label: 'On-chain & Flows', ids: ['whales', 'institutional', 'network', 'timemachine'] },
+  { label: 'Data Trust', ids: ['dataaudit', 'alerts'] },
+  { label: 'System', ids: ['admin', 'checkup', 'settings'] },
+];
+
+const PRIMARY_IDS = PRIMARY_NAV.map(s => s.id);
+
 // Sections that are Bitcoin-specific and hidden from the nav when an altcoin is selected.
 const BTC_ONLY_SECTIONS = ['smartmoney', 'whales', 'macro', 'events', 'timemachine', 'leverage', 'network', 'dataaudit', 'admin', 'drivers'];
 // Sections removed from the app entirely (superseded by the global coin picker).
 const REMOVED_SECTIONS = ['compare'];
 
-export { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS };
+export { SECTIONS, LEGACY_SECTIONS, sec, BTC_ONLY_SECTIONS, REMOVED_SECTIONS, PRIMARY_NAV, TECH_GROUPS, PRIMARY_IDS };
