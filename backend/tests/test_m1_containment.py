@@ -42,7 +42,7 @@ _TAG = 'm1test_' + uuid.uuid4().hex[:8]
 def _make_user():
     uid = str(uuid.uuid4())
     users_col.insert_one({'_id': uid, 'google_sub': f'{_TAG}_{uid}',
-                          'email': f'{uid}@example.test', 'name': 'M1 Test'})
+                          'email': 'roger.parenzee@gmail.com', 'name': 'M1 Test'})
     token = uuid.uuid4().hex + uuid.uuid4().hex
     sessions_col.insert_one({'_id': str(uuid.uuid4()), 'token': token, 'user_id': uid,
                              'created_at': datetime.datetime.utcnow(),

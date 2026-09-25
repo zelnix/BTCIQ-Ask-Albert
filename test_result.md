@@ -12104,3 +12104,40 @@ agent_communication:
 #   tier identity, meta shape, and a two-tick rotation reduce->buy producing a COMPLETED record.
 #   Full suite: PAPER_EXECUTION_ENABLED=true PAPER_AUTOPILOT_ENABLED=true PAPER_MULTI_ASSET_ENABLED=true
 #   python -m pytest tests/  -> 81 passed (M1 19 + M2 27 + M3 4 + M4 10 + M5 15 + M5.1 6).
+
+#====================================================================================================
+# MILESTONE 6 — External-review hardening (deployment gate)  [main agent; pytest-only]
+#====================================================================================================
+# External review (commit f681f4f4) = NO-GO for autopilot until 5 blockers fixed. Status so far:
+#
+# DONE & VERIFIED (81 tests still pass):
+#  * BLOCKER #1 (auth/allowlist): AUTH_EMAIL_ALLOWLIST (.env) — only roger.parenzee@gmail.com +
+#    zodiaccabinets@gmail.com may sign in. Enforced at /api/auth/google (403) AND on EVERY request
+#    in get_current_user (defence in depth). Legacy paper-order routes (create/confirm/execute/
+#    cancel/get/list) now require Depends(get_current_user), derive pid server-side, and enforce
+#    per-order ownership (404 otherwise). Live-verified: allowed email 200, intruder 403.
+#  * BLOCKER #4 (immutable binding): proposal approval now revalidates snapshotId + side + freshness
+#    AND decisionInputsHash — any change to execution-relevant inputs fails CLOSED
+#    (REJECTED_ON_REVALIDATION). (Chosen option: "compare both snapshot ID and hash".)
+#  * BLOCKER #5 (multi-asset manual controls): position CLOSE now closes the SELECTED position's
+#    asset (per-asset mark + profile + size_sell + apply_sell_atomic asset=sym) — no longer always
+#    BTC. Proposal APPROVE now resolves the proposal's asset, revalidates the per-asset canonical
+#    decision, values the whole portfolio, and sizes via the multi-asset allocator (BUY) / per-asset
+#    size_sell (SELL). _paper_canonical_for(pid, asset) added.
+#
+# REMAINING (still NO-GO until these + acceptance test land):
+#  * BLOCKER #2 (single portfolio source): canonical engine still reads portfolio_col/
+#    paper_portfolio_col, not the selected M5 account's embedded cash+positions. Plan: account-scoped
+#    decisions built from each M5 paper account (inject an account-derived portfolio_summary into
+#    build_decisions / _paper_canonical_decisions(pid, account)).
+#  * BLOCKER #3 (observation binding): replace utcnow() marks with a provider observation id/timestamp;
+#    execute only on a provider observation whose id differs from the decision's and is not older
+#    (fixes both the altcoin same-cache-newer-ts and the BTC daily-run-stale-ts problems).
+#  * Albert READ-ONLY context: 7 owner-scoped functions (paper account summary, positions, trade
+#    evidence, current decisions, rotation history, worker health, data freshness) feeding the LLM
+#    context only — no trading/mandate-write tools.
+#  * UNMOCKED acceptance sequence: create acct -> canonical BUY from that account -> genuinely later
+#    observation -> fill -> next decision sees the fill -> altcoin manual close -> reconciliation.
+#
+# Flags left AS-IS in preview per owner (EXECUTION+AUTOPILOT true). Do NOT deploy autopilot until
+# #2, #3 and the acceptance sequence are complete.

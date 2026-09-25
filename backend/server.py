@@ -3576,6 +3576,8 @@ from google.auth.transport import requests as _google_requests
 
 AUTH_COOKIE = 'albert_session'
 AUTH_SESSION_DAYS = 7
+# Private two-user app: only these Google emails may sign in (comma-separated env).
+AUTH_EMAIL_ALLOWLIST = {e.strip().lower() for e in os.environ.get('AUTH_EMAIL_ALLOWLIST', '').split(',') if e.strip()}
 
 
 def get_current_user(request: Request,
@@ -3598,6 +3600,9 @@ def get_current_user(request: Request,
                               {'_id': 1, 'email': 1, 'name': 1, 'picture': 1})
     if not user:
         raise HTTPException(status_code=401, detail='User not found')
+    # Defence in depth: enforce the allowlist on every request, not just at login.
+    if AUTH_EMAIL_ALLOWLIST and (user.get('email') or '').strip().lower() not in AUTH_EMAIL_ALLOWLIST:
+        raise HTTPException(status_code=403, detail='This account is not authorised for this private app.')
     return user
 
 
@@ -3648,6 +3653,10 @@ def auth_google(payload: dict = Body(...)):
         raise HTTPException(status_code=401, detail='Invalid Google token')
     if not info.get('email_verified'):
         raise HTTPException(status_code=400, detail='Google email not verified')
+    email = (info.get('email') or '').strip().lower()
+    if AUTH_EMAIL_ALLOWLIST and email not in AUTH_EMAIL_ALLOWLIST:
+        # Private two-user app: only the owner + co-owner may sign in.
+        raise HTTPException(status_code=403, detail='This is a private app. Your Google account is not authorised.')
     sub = info.get('sub')
     if not sub:
         raise HTTPException(status_code=401, detail='Invalid Google token')
@@ -7167,6 +7176,16 @@ def _paper_canonical_decisions(pid):
     return out
 
 
+def _paper_canonical_for(pid, asset):
+    """M6: the CURRENT canonical decision for ONE asset (used by approval + manual
+    controls so they never fall back to the BTC-only decision)."""
+    asset = (asset or 'BTC').upper()
+    for c in _paper_canonical_decisions(pid):
+        if (c.get('asset') or '').upper() == asset:
+            return c
+    return None
+
+
 def _paper_mark(sym):
     """Current mark for any asset as (Decimal|None, fresh:bool, ts_iso). BTC uses
     the authoritative run ticker (with age check); other assets use the live spot
@@ -8148,10 +8167,14 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
     if not PAPER_EXECUTION_ENABLED:
         raise HTTPException(status_code=503, detail=PAPER_EXEC_DISABLED_MSG)
 
-    # Revalidate against the CURRENT canonical decision. A mandate/decision change
-    # mints a NEW snapshotId -> mismatch -> reject (fail closed).
-    canonical = _paper_canonical_decision(pid)
-    if not _paper_core.revalidate_ok(canonical, prop['side'], prop.get('decisionSnapshotId')):
+    # Revalidate against the CURRENT canonical decision for THIS proposal's asset (M6
+    # multi-asset fix). A mandate/decision/inputs change mints a NEW snapshotId / hash
+    # -> mismatch -> reject (fail closed). We compare BOTH snapshotId AND decisionInputsHash.
+    asset = (prop.get('asset') or 'BTC').upper()
+    canonical = _paper_canonical_for(pid, asset)
+    hash_ok = bool(canonical and prop.get('decisionInputsHash')
+                   and canonical.get('decisionInputsHash') == prop.get('decisionInputsHash'))
+    if not (_paper_core.revalidate_ok(canonical, prop['side'], prop.get('decisionSnapshotId')) and hash_ok):
         paper_proposals_col.update_one({'proposalId': proposal_id, 'status': 'CREATED'},
                                        {'$set': {'status': 'REJECTED_ON_REVALIDATION'}})
         _paper_ledger_add(a['paperAccountId'], 'PROPOSAL_REVALIDATION_FAILED', 'proposal', proposal_id, None, None,
@@ -8159,24 +8182,47 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
         return {'status': 'ready', 'proposalStatus': 'REJECTED_ON_REVALIDATION',
                 'message': 'The decision changed on a fresh check — paper trade not placed.'}
 
-    px, fresh, _ = _paper_btc_mark()
-    info = _paper_core.compute_equity(a, px, fresh)
-    mandate = _albert_deps.get_mandate(pid) or {}
+    px, fresh, _ = _paper_mark(asset)
+    if px is None or not fresh:
+        raise HTTPException(status_code=409, detail='Market data for %s is stale.' % asset)
+    prof = _paper_profiles.asset_profile(asset)
+    # Value the whole portfolio (all held assets) so sizing respects every limit.
+    marks = {}
+    for l in (a.get('lots') or []):
+        if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0:
+            s = (l.get('asset') or 'BTC').upper()
+            mpx, mfresh, _t = _paper_mark(s)
+            marks[s] = (mpx, mfresh)
+    marks[asset] = (px, fresh)
+    equity_info = _paper_portfolio.compute_portfolio_equity(a, marks)
     if prop['side'] == 'BUY':
-        sizing = _paper_core.run_entry_gates(acct=a, canonical=canonical, mark_px=px, mark_fresh=fresh,
-                                             mandate=mandate, equity_info=info, has_open_intent=False)
+        _rk, _tier, _rmeta = _paper_rank_for(asset, *_paper_live_ranks())
+        cand = {'symbol': asset, 'action': 'BUY', 'score': canonical.get('score'),
+                'confidence': canonical.get('confidence'), 'rank': _rk, 'tier': _tier,
+                'recommendedDeployNowUsd': canonical.get('recommendedDeployNowUsd'),
+                'invalidationPrice': canonical.get('invalidationPrice')}
+        alloc = _paper_portfolio.allocate(acct=a, equity_info=equity_info, candidates=[cand],
+                                          regime=canonical.get('regime') or 'RANGE', marks=marks)
+        intent = next((i for i in alloc['intents'] if i['symbol'] == asset and i['action'] in ('BUY', 'ADD')), None)
+        if not intent:
+            raise HTTPException(status_code=409, detail='Gate rejected: no room to add %s now.' % asset)
+        sizing = _paper_core.size_buy(asset, intent['notional'], px, profile=prof, price_q=prof['priceQ'])
         if sizing.get('reject'):
             raise HTTPException(status_code=409, detail='Gate rejected: %s.' % sizing['reject'])
         result, err, code = _paper_core.apply_buy_atomic(
             paper_accounts_col, a['paperAccountId'], pid, a.get('version'),
-            idem_key, proposal_id, sizing, canonical, base_currency=a.get('baseCurrency', 'USDC'))
-    else:  # SELL
-        sizing = _paper_core.run_exit_gates(acct=a, mark_px=px, mark_fresh=fresh, canonical=canonical)
+            idem_key, proposal_id, sizing, canonical, base_currency=a.get('baseCurrency', 'USDC'),
+            asset=asset, price_q=prof['priceQ'])
+    else:  # SELL / EXIT of THIS asset
+        pos = next((p for p in equity_info['positions'] if p['symbol'] == asset and p['qty'] > 0), None)
+        if not pos:
+            raise HTTPException(status_code=409, detail='No open %s position to reduce.' % asset)
+        sizing = _paper_core.size_sell(asset, pos['qty'], px, profile=prof, price_q=prof['priceQ'])
         if sizing.get('reject'):
             raise HTTPException(status_code=409, detail='Gate rejected: %s.' % sizing['reject'])
         result, err, code = _paper_core.apply_sell_atomic(
             paper_accounts_col, a['paperAccountId'], pid, sizing, source='approval',
-            idem_key=idem_key, proposal_id=proposal_id, canonical=canonical)
+            idem_key=idem_key, proposal_id=proposal_id, canonical=canonical, asset=asset)
     if err:
         raise HTTPException(status_code=code, detail='Could not execute: %s.' % err)
     # Mirror proposal status (non-authoritative; the account doc is the source of truth).
@@ -8196,13 +8242,23 @@ def paper_close_position(position_id: str, payload: dict = Body(default={}),
         raise HTTPException(status_code=404, detail='No open position.')
     if not PAPER_EXECUTION_ENABLED:
         raise HTTPException(status_code=503, detail=PAPER_EXEC_DISABLED_MSG)
-    px, fresh, _ = _paper_btc_mark()
-    sizing = _paper_core.run_exit_gates(acct=a, mark_px=px, mark_fresh=fresh, full=True)
+    # Close the SELECTED position's asset (never assume BTC) — M6 multi-asset fix.
+    lot = next((l for l in (a.get('lots') or [])
+                if l.get('lotId') == position_id and (_paper_core.D(l.get('qty')) or Decimal('0')) > 0), None)
+    if not lot:
+        raise HTTPException(status_code=404, detail='No open position.')
+    sym = (lot.get('asset') or 'BTC').upper()
+    px, fresh, _ = _paper_mark(sym)
+    if px is None or not fresh:
+        raise HTTPException(status_code=409, detail='Market data for %s is stale — cannot value the exit.' % sym)
+    prof = _paper_profiles.asset_profile(sym)
+    sizing = _paper_core.size_sell(sym, _paper_core.D(lot.get('qty')), px, profile=prof, price_q=prof['priceQ'])
     if sizing.get('reject'):
         raise HTTPException(status_code=409, detail='Could not close: %s.' % sizing['reject'])
-    idem_key = str((payload or {}).get('idempotencyKey') or ('close_' + position_id))
+    idem_key = str((payload or {}).get('idempotencyKey') or ('close_%s_%s' % (sym, position_id)))
     result, err, code = _paper_core.apply_sell_atomic(
-        paper_accounts_col, a['paperAccountId'], pid, sizing, source='manual_close', idem_key=idem_key)
+        paper_accounts_col, a['paperAccountId'], pid, sizing, source='manual_close',
+        idem_key=idem_key, asset=sym)
     if err:
         raise HTTPException(status_code=code, detail='Could not close: %s.' % err)
     return {'status': 'ready', 'closed': result}
@@ -10859,46 +10915,52 @@ def albert_explain_call(payload: dict = Body(...)):
 # Phase E — Paper Order Manager endpoints (paper-only; LLM strictly read-only)
 # ============================================================================
 @app.post('/api/v1/albert/order/create')
-def albert_order_create(payload: dict = Body(...)):
-    pid = (str(payload.get('pid') or '')).strip()[:80]
+def albert_order_create(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)   # server-derived; client pid is ignored
     asset = (str(payload.get('asset') or '')).strip()
     idem = (str(payload.get('idempotencyKey') or '')).strip()
-    if not pid or not asset or not idem:
-        return {'status': 'error', 'error': 'pid, asset and idempotencyKey are required'}
+    if not asset or not idem:
+        return {'status': 'error', 'error': 'asset and idempotencyKey are required'}
     return _order_mgr.create_intent(pid, asset, idem, slippage_bps=payload.get('slippageBps'),
                                     portfolio_id=(payload.get('portfolioId') or 'default'),
                                     account_id=(payload.get('accountId') or 'paper'))
 
 
+def _order_owned_or_404(order_id, user):
+    intent = _order_mgr.get_intent(order_id)
+    if not intent or intent.get('pid') != owner_pid(user):
+        raise HTTPException(status_code=404, detail='No such order.')
+    return intent
+
+
 @app.post('/api/v1/albert/order/{order_id}/confirm')
-def albert_order_confirm(order_id: str):
+def albert_order_confirm(order_id: str, user: dict = Depends(get_current_user)):
+    _order_owned_or_404(order_id, user)
     return _order_mgr.confirm(order_id)
 
 
 @app.post('/api/v1/albert/order/{order_id}/execute')
-def albert_order_execute(order_id: str, payload: dict = Body(default={})):
+def albert_order_execute(order_id: str, payload: dict = Body(default={}), user: dict = Depends(get_current_user)):
+    _order_owned_or_404(order_id, user)
     q = (payload or {}).get('simulateFillQty')
     return _order_mgr.execute(order_id, simulate_fill_qty=q)
 
 
 @app.post('/api/v1/albert/order/{order_id}/cancel')
-def albert_order_cancel(order_id: str):
+def albert_order_cancel(order_id: str, user: dict = Depends(get_current_user)):
+    _order_owned_or_404(order_id, user)
     return _order_mgr.cancel(order_id)
 
 
 @app.get('/api/v1/albert/order/{order_id}')
-def albert_order_get(order_id: str):
-    intent = _order_mgr.get_intent(order_id)
-    if not intent:
-        return {'status': 'not_found'}
+def albert_order_get(order_id: str, user: dict = Depends(get_current_user)):
+    intent = _order_owned_or_404(order_id, user)
     return {'status': 'ready', 'intent': intent, 'audit': _order_mgr.get_audit(order_id)}
 
 
 @app.get('/api/v1/albert/orders')
-def albert_orders_list(pid: str = '', limit: int = 50):
-    pid = (pid or '').strip()[:80]
-    if not pid:
-        return {'error': 'pid required'}
+def albert_orders_list(limit: int = 50, user: dict = Depends(get_current_user)):
+    pid = owner_pid(user)   # server-derived
     return {'status': 'ready', 'orders': _order_mgr.list_intents(pid, limit=limit)}
 
 

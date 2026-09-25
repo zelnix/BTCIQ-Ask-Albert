@@ -308,7 +308,7 @@ def test_revalidate_ok_predicate():
 # ================= HTTP boundary (deployment: execution OFF) ================ #
 def _seed_user():
     uid = str(uuid.uuid4())
-    _db['users'].insert_one({'_id': uid, 'google_sub': 'm2_' + uid, 'email': uid + '@t.test', 'name': 'M2'})
+    _db['users'].insert_one({'_id': uid, 'google_sub': 'm2_' + uid, 'email': 'roger.parenzee@gmail.com', 'name': 'M2'})
     tok = uuid.uuid4().hex + uuid.uuid4().hex
     _db['auth_sessions'].insert_one({'_id': str(uuid.uuid4()), 'token': tok, 'user_id': uid,
                                      'created_at': datetime.datetime.utcnow(),
