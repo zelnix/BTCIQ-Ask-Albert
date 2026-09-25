@@ -7500,6 +7500,67 @@ def _autopilot_process_account(acct):
         paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'lastProcessedDecisionSnapshotId': sid}})
 
 
+# =====================================================================
+# M-E: PAPER WORKFLOWS — bind an ACTIVE assigned strategy to the existing multi-asset
+# worker. The strategy may CONSTRAIN (its asset universe) and PRIORITISE, but can NEVER
+# bypass canonical eligibility, mandate, freshness, portfolio-risk or execution gates.
+# Every strategy evaluation is materialised as an immutable StrategyDecisionSnapshot.
+# =====================================================================
+strategy_decision_snapshots_col = db['strategy_decision_snapshots']
+
+
+def _strategy_for_account(acct):
+    """The single ACTIVE strategy bound to this account (owner-scoped), or None."""
+    try:
+        doc = strategy_contracts_col.find_one(
+            {'assignedPaperAccountId': acct['paperAccountId'], 'status': 'PAPER_ACTIVE'})
+        if doc and doc.get('ownerId') == acct.get('ownerId'):
+            return doc
+    except Exception:  # noqa
+        traceback.print_exc()
+    return None
+
+
+def _strategy_syms(strat):
+    if not strat:
+        return None
+    return {a['symbol'] for a in (strat.get('contract') or {}).get('assets', [])}
+
+
+def _materialize_sds(acct, strat, canonical, obs, action, asset, sizing, gate_trace, outcome):
+    """Immutable StrategyDecisionSnapshot (one per strategyVersion x canonical decision x
+    asset x market observation). setOnInsert makes it write-once, so restarts/duplicate
+    deliveries never fork it. Returns the snapshot id."""
+    if not strat:
+        return None
+    sid_dec = canonical.get('decisionSnapshotId')
+    obs_id = (obs or {}).get('obsId')
+    _id = 'sds_%s_v%s_%s_%s' % (strat['strategyId'], strat['version'], sid_dec, obs_id)
+    syms = _strategy_syms(strat) or set()
+    doc = {'_id': _id, 'strategyDecisionSnapshotId': _id,
+           'paperAccountId': acct['paperAccountId'], 'ownerId': acct['ownerId'],
+           'strategyId': strat['strategyId'], 'strategyVersion': strat['version'],
+           'strategyContractHash': strat['contractHash'],
+           'canonicalDecisionSnapshotId': sid_dec,
+           'canonicalDecisionHash': canonical.get('decisionInputsHash'),
+           'marketObservationId': obs_id, 'asset': asset, 'proposedAction': action,
+           'ruleResults': {'inStrategyUniverse': asset in syms,
+                           'canonicalActionable': bool(canonical.get('actionable')),
+                           'canonicalEligible': bool(canonical.get('eligible')),
+                           'bothAuthorized': (asset in syms) and bool(canonical.get('actionable'))},
+           'gateTrace': gate_trace or [],
+           'serverSizing': ({'notional': _paper_core.dstr(sizing.get('notional')) if sizing.get('notional') is not None else None,
+                             'qty': _paper_core.qty_dstr(sizing.get('qty')) if sizing.get('qty') is not None else None,
+                             'fillPx': _paper_core.dstr(sizing.get('fillPx')) if sizing.get('fillPx') is not None else None}
+                            if sizing else None),
+           'outcome': outcome, 'at': datetime.datetime.utcnow().isoformat(), 'paperOnly': True}
+    try:
+        strategy_decision_snapshots_col.update_one({'_id': _id}, {'$setOnInsert': doc}, upsert=True)
+    except Exception:  # noqa
+        traceback.print_exc()
+    return _id
+
+
 def _autopilot_process_account_multi(acct):
     """M5 Expert Multi-Asset Trader tick for ONE paper account.
 
@@ -7521,6 +7582,9 @@ def _autopilot_process_account_multi(acct):
     # Canonical decisions for every asset, built from THIS account's portfolio (blocker #2).
     decisions = _paper_canonical_decisions(pid, account=acct)
     dec_by_sym = {(d.get('asset') or '').upper(): d for d in decisions}
+    # M-E: the ACTIVE assigned strategy constrains + prioritises (never bypasses gates).
+    _strat = _strategy_for_account(acct)
+    _strat_syms = _strategy_syms(_strat)
 
     # Marks for every held + candidate asset.
     held_syms = [(l.get('asset') or '').upper() for l in (acct.get('lots') or [])
@@ -7606,6 +7670,13 @@ def _autopilot_process_account_multi(acct):
         # is now the live ticker, not the stale daily-run timestamp).
         if cursors.get(sym) == obs['obsId']:
             continue
+        # M-E: an ACTIVE strategy must ALSO authorise a BUY (both strategy + canonical).
+        # Outside the strategy universe -> record + consume, never enter.
+        if _strat_syms is not None and d.get('action') == 'BUY' and sym not in _strat_syms:
+            newly_seen[sym] = sid
+            _paper_ledger_add(acct_id, 'OBSERVED', 'decision', sid, None, None,
+                              'Observed %s BUY outside the active strategy universe — skipped.' % sym)
+            continue
         # eligibility: only canonical + profile-eligible assets can ever trade
         elig, _reason = _paper_profiles.eligible_for_trading(
             sym, data_ok=fresh, excluded=excluded, approved=approved,
@@ -7627,6 +7698,8 @@ def _autopilot_process_account_multi(acct):
     if mode == 'OBSERVE':
         for c in candidates:
             newly_seen[c['symbol']] = c['_sid']
+            _materialize_sds(acct, _strat, c['_canonical'], mark_obs.get(c['symbol']),
+                             c['action'], c['symbol'], None, [], 'OBSERVED')
             _paper_ledger_add(acct_id, 'OBSERVED', 'decision', c['_sid'], None, None,
                               'Observed %s %s signal — observe-only mode.' % (c['symbol'], c['action']))
         _persist_multi_cursors(acct_id, processed, newly_seen, cursors)
@@ -7657,7 +7730,10 @@ def _autopilot_process_account_multi(acct):
                 sizing = _paper_core.size_sell(sym, pos['qty'], px, profile=prof, price_q=prof['priceQ'])
             if sizing.get('reject'):
                 newly_seen[sym] = c['_sid']; continue
-            _paper_make_proposal_multi(acct_id, pid, c['action'], can, sizing, sym)
+            _sds = _materialize_sds(acct, _strat, can, mark_obs.get(sym), c['action'], sym,
+                                    sizing, sizing.get('trace', []), 'PROPOSED')
+            _paper_make_proposal_multi(acct_id, pid, c['action'], can, sizing, sym,
+                                       strat=_strat, sds_id=_sds)
             newly_seen[sym] = c['_sid']
             _autopilot_notify(pid, acct_id, 'Paper trade needs your approval',
                               'Albert proposes a %s %s — review it in Paper Bot. Paper only.' % (c['action'], sym))
@@ -7699,6 +7775,8 @@ def _autopilot_process_account_multi(acct):
                     sizing, can, base_currency=acct.get('baseCurrency', 'USDC'), asset=sym, price_q=prof['priceQ'])
                 if not err:
                     traded_syms.add(sym)
+                    _materialize_sds(acct, _strat, can, mark_obs.get(sym), 'BUY', sym,
+                                     sizing, sizing.get('trace', []), 'EXECUTED')
                     _paper_complete_rotation(acct_id, sym, intent, sizing)   # M5.1 finish a pending rotation
                     _autopilot_notify(pid, acct_id, 'Paper Autopilot bought %s' % sym,
                                       'Auto-executed a simulated %s on %s. Paper only — no real money.'
@@ -7801,9 +7879,10 @@ def _paper_complete_rotation(acct_id, target_sym, intent, sizing):
 
 
 
-def _paper_make_proposal_multi(acct_id, pid, side, canonical, sizing, asset):
+def _paper_make_proposal_multi(acct_id, pid, side, canonical, sizing, asset, strat=None, sds_id=None):
     """Create ONE proposal for a specific asset, immutably bound to the canonical
-    decision snapshot (M5 multi-asset variant of _paper_make_proposal)."""
+    decision snapshot (M5) AND, when driven by an active strategy, to that strategy
+    version + contract hash + StrategyDecisionSnapshot (M-E)."""
     if side == 'BUY':
         notional = _paper_core.dstr(sizing['notional']); qprev = _paper_core.qty_dstr(sizing['qty'])
     else:
@@ -7823,6 +7902,8 @@ def _paper_make_proposal_multi(acct_id, pid, side, canonical, sizing, asset):
         'gateTrace': sizing.get('trace', []),
         'reason': 'Canonical %s decision for %s (engine %s).' % (side, asset, canonical['engineVersion']),
         'status': 'CREATED', 'createdAt': datetime.datetime.utcnow().isoformat(),
+        'strategyId': (strat or {}).get('strategyId'), 'strategyVersion': (strat or {}).get('version'),
+        'strategyContractHash': (strat or {}).get('contractHash'), 'strategyDecisionSnapshotId': sds_id,
         'expiresAt': canonical.get('expiresAt') or (datetime.datetime.utcnow()
                      + datetime.timedelta(minutes=PAPER_PROPOSAL_TTL_MIN)).isoformat(),
         'paperOnly': True}
@@ -8123,10 +8204,21 @@ def paper_set_mode(acct_id: str, payload: dict = Body(...), user: dict = Depends
     mode = payload.get('mode')
     if mode not in ('OBSERVE', 'APPROVAL_REQUIRED', 'PAPER_AUTOPILOT'):
         raise HTTPException(status_code=422, detail='Unknown mode.')
+    if not payload.get('confirm'):
+        raise HTTPException(status_code=428, detail='Explicit confirmation is required to change mode.')
+    idem = str(payload.get('idempotencyKey') or '').strip()
+    if not idem:
+        raise HTTPException(status_code=422, detail='idempotencyKey is required.')
+    pid = owner_pid(user)
+    prior = _studio_idem(pid, f'mode:{acct_id}:{idem}')
+    if prior is not None:
+        return prior
+    if payload.get('expectedVersion') is not None and int(payload['expectedVersion']) != int(a.get('version') or 0):
+        raise HTTPException(status_code=409, detail='This account changed — reload and try again.')
     paper_accounts_col.update_one({'paperAccountId': acct_id},
                                   {'$set': {'mode': mode}, '$inc': {'version': 1}})
     _paper_ledger_add(acct_id, 'MODE_CHANGED', 'account', acct_id, None, None, f"Mode set to {mode}.")
-    return {'status': 'ready', 'mode': mode}
+    return _studio_idem(pid, f'mode:{acct_id}:{idem}', {'status': 'ready', 'mode': mode})
 
 
 @app.post('/api/v1/albert/paper/accounts/{acct_id}/{cmd}')
@@ -8134,10 +8226,20 @@ def paper_lifecycle(acct_id: str, cmd: str, payload: dict = Body(default={}),
                     user: dict = Depends(get_current_user)):
     if cmd not in ('pause', 'resume', 'archive'):
         raise HTTPException(status_code=422, detail='Unknown command.')
-    a = _paper_get(acct_id, owner_pid(user))
+    pid = owner_pid(user)
+    a = _paper_get(acct_id, pid)
     if not a:
         raise HTTPException(status_code=404, detail='No such paper account.')
+    if not payload.get('confirm'):
+        raise HTTPException(status_code=428, detail=f'Explicit confirmation is required to {cmd}.')
+    idem = str(payload.get('idempotencyKey') or '').strip()
+    if not idem:
+        raise HTTPException(status_code=422, detail='idempotencyKey is required.')
+    prior = _studio_idem(pid, f'acct:{cmd}:{acct_id}:{idem}')
+    if prior is not None:
+        return prior
     if cmd == 'pause':
+        # Pause blocks NEW ENTRIES only; protective exits/canonical reductions continue.
         paper_accounts_col.update_one({'paperAccountId': acct_id}, {'$set': {'runtimeState': 'PAUSED_BY_USER'}})
     elif cmd == 'resume':
         # A plain resume must not clear an unresolved risk-breaker pause; that
@@ -8150,7 +8252,7 @@ def paper_lifecycle(acct_id: str, cmd: str, payload: dict = Body(default={}),
         paper_accounts_col.update_one({'paperAccountId': acct_id},
                                       {'$set': {'runtimeState': 'ARCHIVED', 'archivedAt': datetime.datetime.utcnow().isoformat()}})
     _paper_ledger_add(acct_id, cmd.upper(), 'account', acct_id, None, None, f"Account {cmd}d by user.")
-    return {'status': 'ready', 'command': cmd}
+    return _studio_idem(pid, f'acct:{cmd}:{acct_id}:{idem}', {'status': 'ready', 'command': cmd})
 
 
 @app.post('/api/v1/albert/paper/proposals/{proposal_id}/{cmd}')
@@ -8215,6 +8317,23 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
                           'The decision changed or went stale on revalidation — not executed.')
         return {'status': 'ready', 'proposalStatus': 'REJECTED_ON_REVALIDATION',
                 'message': 'The decision changed on a fresh check — paper trade not placed.'}
+
+    # M-E: if this proposal was driven by a strategy, that strategy must STILL be the
+    # active one on this account, at the SAME version + contract hash (fail closed).
+    if prop.get('strategyId'):
+        strat_now = strategy_contracts_col.find_one({'strategyId': prop['strategyId']})
+        strat_ok = bool(strat_now and strat_now.get('ownerId') == pid
+                        and strat_now.get('status') == 'PAPER_ACTIVE'
+                        and strat_now.get('assignedPaperAccountId') == a['paperAccountId']
+                        and int(strat_now.get('version') or -1) == int(prop.get('strategyVersion') or -2)
+                        and strat_now.get('contractHash') == prop.get('strategyContractHash'))
+        if not strat_ok:
+            paper_proposals_col.update_one({'proposalId': proposal_id, 'status': 'CREATED'},
+                                           {'$set': {'status': 'REJECTED_ON_REVALIDATION'}})
+            _paper_ledger_add(a['paperAccountId'], 'PROPOSAL_REVALIDATION_FAILED', 'proposal', proposal_id,
+                              None, None, 'The driving strategy changed or is no longer active — not executed.')
+            return {'status': 'ready', 'proposalStatus': 'REJECTED_ON_REVALIDATION',
+                    'message': 'The strategy behind this trade changed — paper trade not placed.'}
 
     px, fresh, _ = _paper_mark(asset)
     if px is None or not fresh:
@@ -8281,6 +8400,8 @@ def paper_close_position(position_id: str, payload: dict = Body(default={}),
                 if l.get('lotId') == position_id and (_paper_core.D(l.get('qty')) or Decimal('0')) > 0), None)
     if not lot:
         raise HTTPException(status_code=404, detail='No open position.')
+    if not (payload or {}).get('confirm'):
+        raise HTTPException(status_code=428, detail='Explicit confirmation is required to close a position.')
     sym = (lot.get('asset') or 'BTC').upper()
     px, fresh, _ = _paper_mark(sym)
     if px is None or not fresh:
@@ -8296,6 +8417,78 @@ def paper_close_position(position_id: str, payload: dict = Body(default={}),
     if err:
         raise HTTPException(status_code=code, detail='Could not close: %s.' % err)
     return {'status': 'ready', 'closed': result}
+
+
+@app.post('/api/v1/albert/paper/command')
+def paper_command(payload: dict = Body(...), user: dict = Depends(get_current_user)):
+    """M-E: turn a natural-language paper request into a TYPED confirmation card. This
+    endpoint is DETERMINISTIC and READ-ONLY — it never mutates. Albert may route a
+    request here and explain the card, but the actual change happens only when the
+    authenticated user confirms via the card's typed mutation. The LLM never computes
+    economic values (server sizing is computed here) and never calls mutation routes."""
+    pid = owner_pid(user)
+    msg = str((payload or {}).get('message') or '').lower().strip()
+    acct = _sop_select_account(pid, requested=(payload or {}).get('paperAccountId'))
+    if not acct:
+        raise HTTPException(status_code=404, detail='No paper account to act on.')
+    acct_id = acct['paperAccountId']
+    ver = int(acct.get('version') or 0)
+    key = 'cmd_' + uuid.uuid4().hex[:16]
+
+    def card(ctype, title, summary, mutation, preview=None, asset=None):
+        return {'status': 'ready', 'card': {
+            'type': ctype, 'title': title, 'summary': summary, 'asset': asset,
+            'requiresConfirmation': True, 'mutation': mutation, 'preview': preview,
+            'paperAccountId': acct_id, 'paperOnly': True,
+            'note': 'Nothing changes until you confirm. Paper only.'}}
+
+    if any(w in msg for w in ('pause', 'stop new', 'halt')):
+        return card('PAUSE', 'Pause new entries',
+                    'Blocks new paper entries immediately. Protective exits and reductions continue.',
+                    {'method': 'POST', 'path': f'/api/v1/albert/paper/accounts/{acct_id}/pause',
+                     'body': {'confirm': True, 'idempotencyKey': key}})
+    if 'resume' in msg or 'restart' in msg or ('start' in msg and 'again' in msg):
+        if acct.get('runtimeState') == 'PAUSED_RISK_BREAKER':
+            return {'status': 'ready', 'card': None,
+                    'message': 'This account is paused by the drawdown breaker and needs a reviewed reset — I can’t resume it for you.'}
+        return card('RESUME', 'Resume the account',
+                    'Allows new paper entries again, within your strategy and mandate.',
+                    {'method': 'POST', 'path': f'/api/v1/albert/paper/accounts/{acct_id}/resume',
+                     'body': {'confirm': True, 'idempotencyKey': key}})
+    mode_map = {'observe': 'OBSERVE', 'approval': 'APPROVAL_REQUIRED', 'autopilot': 'PAPER_AUTOPILOT'}
+    for kw, mode in mode_map.items():
+        if kw in msg:
+            return card('SET_MODE', f'Switch to {mode.replace("_", " ").title()}',
+                        f'Changes this account’s mode to {mode}.',
+                        {'method': 'PATCH', 'path': f'/api/v1/albert/paper/accounts/{acct_id}/mode',
+                         'body': {'mode': mode, 'confirm': True, 'idempotencyKey': key, 'expectedVersion': ver}})
+    if any(w in msg for w in ('close', 'sell', 'exit', 'dump')):
+        # asset-specific close — never assume BTC
+        lot = None
+        for l in (acct.get('lots') or []):
+            s = (l.get('asset') or '').upper()
+            if s.lower() in msg and (_paper_core.D(l.get('qty')) or Decimal('0')) > 0:
+                lot = l; break
+        if not lot:
+            return {'status': 'ready', 'card': None,
+                    'message': 'Tell me which open position to close (for example, “close SOL”). I only see this account’s open positions.'}
+        sym = (lot.get('asset') or '').upper()
+        px, fresh, _ = _paper_mark(sym)
+        prof = _paper_profiles.asset_profile(sym)
+        preview = None
+        if px is not None and fresh:
+            sizing = _paper_core.size_sell(sym, _paper_core.D(lot.get('qty')), px, profile=prof, price_q=prof['priceQ'])
+            if not sizing.get('reject'):
+                preview = {'asset': sym, 'quantity': _paper_core.qty_dstr(sizing['qty']),
+                           'markPrice': _paper_core.dstr(px, prof['priceQ']),
+                           'estimatedProceeds': _paper_core.dstr(_paper_core.q_cash(sizing['qty'] * sizing['fillPx'])),
+                           'estimatedFees': _paper_core.dstr(sizing['fee'])}
+        return card('CLOSE_POSITION', f'Close your {sym} position',
+                    f'Sells your entire {sym} paper position at the current mark. Only {sym} is affected.',
+                    {'method': 'POST', 'path': f"/api/v1/albert/paper/positions/{lot.get('lotId')}/close",
+                     'body': {'confirm': True, 'idempotencyKey': key}}, preview=preview, asset=sym)
+    return {'status': 'ready', 'card': None,
+            'message': 'I can pause or resume the account, change its mode, or close a specific position — tell me which and I’ll prepare a confirmation for you.'}
 
 
 @app.get('/api/v1/albert/paper/accounts/{acct_id}/trade-log')
@@ -8316,8 +8509,17 @@ def paper_trade_evidence(position_id: str, user: dict = Depends(get_current_user
         raise HTTPException(status_code=404, detail='No such trade.')
     pos = next((l for l in (a.get('lots') or []) + (a.get('closedLots') or []) if l.get('lotId') == position_id), None)
     fills = [e for e in (a.get('ledger') or []) if e.get('entityId') == position_id]
+    dec_sid = (pos or {}).get('entryDecisionSnapshotId')
+    sds = None
+    if dec_sid:
+        sds = strategy_decision_snapshots_col.find_one(
+            {'ownerId': pid, 'canonicalDecisionSnapshotId': dec_sid}, {'_id': 0}, sort=[('at', -1)])
     return {'status': 'ready', 'paperOnly': True, 'position': _paper_jsonify(pos),
-            'decisionSnapshotId': (pos or {}).get('entryDecisionSnapshotId'),
+            'decisionSnapshotId': dec_sid,
+            'strategyDecisionSnapshot': sds,
+            'deepLinks': {'canonicalDecision': f'/?section=briefing&decision={dec_sid}' if dec_sid else None,
+                          'strategy': (f'/?section=strategies&strategy={sds.get("strategyId")}' if sds else None),
+                          'observation': (sds.get('marketObservationId') if sds else None)},
             'executionProfile': PAPER_EXEC_PROFILE, 'ledger': _paper_jsonify(fills),
             'note': 'Paper simulation evidence — not a live exchange fill.'}
 
@@ -11060,6 +11262,13 @@ def studio_lifecycle(sid: str, cmd: str, payload: dict = Body(default={}), user:
         acct = _paper_get(acct_id, pid) if acct_id else None
         if not acct:
             raise HTTPException(status_code=404, detail='No such paper account.')
+        # V1: one active/assigned strategy per paper account.
+        other = strategy_contracts_col.find_one({'ownerId': pid, 'assignedPaperAccountId': acct_id,
+                                                 'strategyId': {'$ne': sid},
+                                                 'status': {'$in': ['PAPER_ASSIGNED', 'PAPER_ACTIVE', 'PAUSED']}})
+        if other:
+            raise HTTPException(status_code=409,
+                                detail='This account already has a strategy assigned — unassign it first.')
         _c, _h, errs = _studio_validate({'assets': doc['contract']['assets'],
                                          **doc['contract']}, pid, account=acct)
         if _h != doc['contractHash']:

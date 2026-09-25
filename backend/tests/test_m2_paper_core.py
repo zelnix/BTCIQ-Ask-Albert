@@ -342,11 +342,13 @@ def test_http_autopilot_allowed_on_set_mode(http_user):
     acct = requests.post(BASE + '/api/v1/albert/paper/accounts', headers=_h(http_user['tok']),
                          json={'name': 'modeacct'}).json()
     r = requests.patch(BASE + '/api/v1/albert/paper/accounts/%s/mode' % acct['paperAccountId'],
-                       headers=_h(http_user['tok']), json={'mode': 'PAPER_AUTOPILOT'})
+                       headers=_h(http_user['tok']),
+                       json={'mode': 'PAPER_AUTOPILOT', 'confirm': True, 'idempotencyKey': 'm2mode1'})
     assert r.status_code == 200
 
     r2 = requests.patch(BASE + '/api/v1/albert/paper/accounts/%s/mode' % acct['paperAccountId'],
-                        headers=_h(http_user['tok']), json={'mode': 'NONSENSE'})
+                        headers=_h(http_user['tok']),
+                        json={'mode': 'NONSENSE', 'confirm': True, 'idempotencyKey': 'm2mode2'})
     assert r2.status_code == 422
 
 

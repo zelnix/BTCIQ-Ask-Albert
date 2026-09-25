@@ -97,12 +97,14 @@ export default function PaperTradingBot() {
 
   const act = async (url, body) => {
     setBusy(true);
-    try { await fetch(url, { method: body === undefined ? 'POST' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid, ...(body || {}) }) }); } catch (e) { /* noop */ }
+    const idempotencyKey = 'ui_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    try { await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid, confirm: true, idempotencyKey, ...(body || {}) }) }); } catch (e) { /* noop */ }
     await loadDash(); await loadAccounts(); setBusy(false);
   };
   const setMode = async (mode) => {
     setBusy(true);
-    try { await fetch(`${API_BASE}/v1/albert/paper/accounts/${acctId}/mode`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid, mode }) }); } catch (e) { /* noop */ }
+    const idempotencyKey = 'ui_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    try { await fetch(`${API_BASE}/v1/albert/paper/accounts/${acctId}/mode`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid, mode, confirm: true, idempotencyKey }) }); } catch (e) { /* noop */ }
     await loadDash(); setBusy(false);
   };
 

@@ -27,6 +27,47 @@ const STARTERS = [
   'Show me my strategies and what would make Albert act.',
 ];
 
+// Deterministic client hint: does the message ask to CHANGE the paper account?
+// If so we route to the typed-confirmation-card endpoint (no mutation happens there).
+function looksLikePaperCommand(msg) {
+  const m = (msg || '').toLowerCase();
+  return /\b(pause|resume|restart|halt|close|sell|exit|dump|observe|approval|autopilot)\b/.test(m);
+}
+
+function ConfirmationCard({ card, onDone }) {
+  const [state, setState] = useState('idle'); // idle | busy | done | error
+  const [note, setNote] = useState('');
+  const run = async () => {
+    setState('busy');
+    try {
+      const mut = card.mutation;
+      const r = await fetch(mut.path, { method: mut.method, credentials: 'include',
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(mut.body || {}) });
+      if (r.ok) { setState('done'); setNote('Done — your paper account was updated.'); onDone && onDone(); }
+      else { const j = await r.json().catch(() => ({})); setState('error'); setNote(j.detail || 'That could not be completed.'); }
+    } catch (e) { setState('error'); setNote('Network error — please try again.'); }
+  };
+  return (
+    <div className="mt-2 rounded-xl border border-amber-500/40 bg-amber-500/[0.06] p-3">
+      <p className="flex items-center gap-1.5 text-[13px] font-bold text-amber-200"><ShieldCheck className="h-4 w-4" />{card.title}</p>
+      <p className="mt-1 text-[13px] text-slate-200">{card.summary}</p>
+      {card.preview && (
+        <div className="mt-2 grid grid-cols-2 gap-1.5 text-[12px] sm:grid-cols-4">
+          {Object.entries(card.preview).map(([k, v]) => (
+            <div key={k} className="rounded-lg border border-slate-800 bg-slate-950/50 px-2 py-1.5"><p className="text-[10px] uppercase tracking-wider text-slate-500">{k}</p><p className="font-semibold text-white">{String(v)}</p></div>
+          ))}
+        </div>
+      )}
+      <p className="mt-2 text-[11px] text-slate-500">{card.note}</p>
+      {state === 'idle' && (
+        <Button size="sm" onClick={run} className="mt-2 h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">Confirm</Button>
+      )}
+      {state === 'busy' && <p className="mt-2 flex items-center gap-1.5 text-[12px] text-slate-300"><Loader2 className="h-3.5 w-3.5 animate-spin" />Applying…</p>}
+      {(state === 'done' || state === 'error') && <p className={`mt-2 text-[12px] font-medium ${state === 'done' ? 'text-emerald-300' : 'text-red-400'}`}>{note}</p>}
+    </div>
+  );
+}
+
 function EvidenceRow({ evidence, onNav }) {
   if (!evidence || !evidence.length) return null;
   return (
@@ -118,6 +159,25 @@ export default function AskAlbert({ onNav }) {
     setMessages((m) => [...m, { role: 'user', text: q }]);
     setSending(true);
     try {
+      // Conversational MUTATION requests never execute here — they return a typed
+      // confirmation card the user must confirm (M-E: LLM never calls mutation routes).
+      if (looksLikePaperCommand(q)) {
+        const cr = await fetch(`${API_BASE}/v1/albert/paper/command`, {
+          method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: q }),
+        });
+        if (cr.ok) {
+          const cj = await cr.json();
+          if (cj.card) {
+            setMessages((m) => [...m, { role: 'albert', text: 'Here’s what I’ll do once you confirm — nothing has changed yet:', card: cj.card }]);
+            setSending(false); setEntity(null); return;
+          }
+          if (cj.message) {
+            setMessages((m) => [...m, { role: 'albert', text: cj.message }]);
+            setSending(false); setEntity(null); return;
+          }
+        }
+      }
       const r = await fetch(`${API_BASE}/v1/albert/ask`, {
         method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: q, session_id: sessionId.current, entity: useEnt || undefined }),
@@ -185,6 +245,7 @@ export default function AskAlbert({ onNav }) {
                     <img src="/albert.png" alt="Albert" className="h-8 w-8 shrink-0 rounded-full object-cover ring-1 ring-sky-500/40" />
                     <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-slate-800/60 px-3.5 py-2.5">
                       <p className="max-w-[70ch] whitespace-pre-wrap text-[14px] leading-relaxed text-slate-100">{m.text}</p>
+                      {m.card && <ConfirmationCard card={m.card} />}
                       <EvidenceRow evidence={m.evidence} onNav={onNav} />
                       {(m.model || (m.evidence || []).length > 0) && <TechnicalDetails msg={m} />}
                     </div>

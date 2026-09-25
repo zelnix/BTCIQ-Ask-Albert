@@ -117,6 +117,47 @@ user_problem_statement: |
   with seeded test session to verify UI rendering across 6 deep-linked views in desktop and mobile.
 
 backend:
+  - task: "M-E: Paper Workflows — strategy-bound multi-asset paper engine (3 modes)"
+    implemented: true
+    working: true
+    file: "backend/server.py, app/app/components/AskAlbert.js, app/app/components/PaperTradingBot.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        -working: true
+        -agent: "main"
+        -comment: |
+          Extended the EXISTING M5 multi-asset background worker (no second execution path) to bind an
+          ACTIVE assigned strategy (spec §8). An active strategy CONSTRAINS + prioritises (its asset
+          universe) but can never bypass canonical eligibility/mandate/freshness/portfolio-risk/execution
+          gates: a BUY requires BOTH the strategy universe AND the canonical decision to authorise (outside
+          the universe -> OBSERVED, never entered). Each evaluation materialises an immutable
+          StrategyDecisionSnapshot (strategy_decision_snapshots) keyed (strategyVersion x canonical decision
+          x asset x marketObservationId), write-once via setOnInsert (restart/duplicate-safe), carrying
+          strategyId/version/contractHash, canonical snapshot id + hash, market-observation id, ruleResults,
+          gate trace, proposed action/asset/server sizing. Observe records only (zero economic effect);
+          Approval creates a snapshot+strategy-bound proposal (never executes pre-approval); Autopilot
+          executes only on a genuinely later provider observation and at most once (idem auto:acct:sym:sid).
+          Approve endpoint now ALSO revalidates the driving strategy (still PAPER_ACTIVE, same version +
+          contractHash) and fails closed. Pause blocks new ENTRIES only — protective invalidation exits and
+          canonical reductions still run; resume can't clear a drawdown breaker. Manual close is asset-
+          specific (closing SOL never touches BTC). Mode/pause/resume/close now require confirm +
+          idempotency (owner-scoped; expectedVersion on mode) — one effect on replay; cross-owner -> 404.
+          New POST /api/v1/albert/paper/command turns an NL request into a TYPED confirmation card
+          (deterministic, READ-ONLY, server-calculated sizing) — the LLM never calls mutation routes nor
+          provides economic values; Ask Albert renders the card and only the user's Confirm executes the
+          typed mutation. Trade-evidence deep-links a fill to its strategy version, canonical decision,
+          observation + gate trace. Assigning enforces one active strategy per account. Exact Decimal128
+          accounting + single-account ledger preserved.
+          Verified: pytest tests/test_mE_paper_workflows.py (7) — both-authorise universe constraint +
+          proposal/SDS binding, SDS immutability, Observe zero-effect, mode/pause/close confirm+idempotency
+          (+ idempotent replay, cross-owner 404), command card-only (no mutation), asset-specific close,
+          paused-blocks-entries-allows-protective-exit. Updated the one M2 test to the new mode contract.
+          Full suite: 109 passed, no regression. Frontend verified via authenticated screenshots: Ask
+          Albert confirmation card ("nothing has changed yet" + Confirm), Paper Trading workspace (modes,
+          allocation, activity) at 1366px. Clean production build passes.
+
   - task: "M-D: Strategy Studio — deterministic, immutable, versioned strategy contracts"
     implemented: true
     working: true
