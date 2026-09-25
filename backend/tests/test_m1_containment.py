@@ -231,11 +231,11 @@ def test_paper_dashboard_integrity_not_healthy(users):
                      headers=_h(a_tok)).json()
     integ = d['integrity']
     assert integ['status'] != 'HEALTHY'
-    assert integ['executionWorker'] == 'NONE'
-    assert integ['reconciliation'] == 'NONE'
-    assert integ['lastReconciledAt'] is None
-    assert integ['executionEnabled'] is False
-    assert integ['autopilotEnabled'] is False
+    assert integ['executionWorker'] == 'NONE'          # no durable worker ever
+    assert integ['reconciliation'] in ('MATCH', 'MISMATCH')  # real replay comparison now runs
+    exec_on = os.environ.get('PAPER_EXECUTION_ENABLED', '').lower() in ('1', 'true', 'yes', 'on')
+    assert integ['executionEnabled'] is exec_on
+    assert integ['autopilotEnabled'] is False          # Autopilot stays OFF regardless
 
 
 def test_approve_blocked_while_execution_disabled(users):
@@ -252,17 +252,28 @@ def test_approve_blocked_while_execution_disabled(users):
         'status': 'CREATED', 'createdAt': datetime.datetime.utcnow().isoformat(),
         'expiresAt': (datetime.datetime.utcnow() + datetime.timedelta(minutes=30)).isoformat(),
         'paperOnly': True})
-    # Approving must be refused with 503 because execution is disabled (M2 contract:
-    # the required approval fields are supplied so we reach the execution-flag gate).
+    # Approving a proposal bound to a FAKE snapshot: with execution OFF it is
+    # refused (503); with execution ON it reaches revalidation and is rejected
+    # (200) because the fake snapshot never matches the current canonical decision.
     r = requests.post(BASE + f'/api/v1/albert/paper/proposals/{prop_id}/approve',
                       headers=_h(a_tok),
                       json={'expectedProposalVersion': 0, 'decisionSnapshotId': 'snapM1',
                             'idempotencyKey': 'm1key'})
-    assert r.status_code == 503, r.text
-    # Cancelling (no economic effect) is still allowed.
+    exec_on = os.environ.get('PAPER_EXECUTION_ENABLED', '').lower() in ('1', 'true', 'yes', 'on')
+    if exec_on:
+        assert r.status_code in (200, 409), r.text
+        if r.status_code == 200:
+            assert r.json().get('proposalStatus') == 'REJECTED_ON_REVALIDATION'
+    else:
+        assert r.status_code == 503, r.text
+    # Cancelling: allowed (200) when the proposal is still open; with execution ON
+    # the approve above may have already closed it via revalidation-reject (409).
     rc = requests.post(BASE + f'/api/v1/albert/paper/proposals/{prop_id}/cancel',
                        headers=_h(a_tok), json={})
-    assert rc.status_code == 200, rc.text
+    if exec_on:
+        assert rc.status_code in (200, 409), rc.text
+    else:
+        assert rc.status_code == 200, rc.text
 
 
 # --------------------------------------------------------------------------- #

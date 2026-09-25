@@ -337,12 +337,72 @@ def run_exit_gates(*, acct, mark_px, mark_fresh, canonical=None, full=False):
 
 
 # ==================== single-document atomic execution ======================= #
-def _ledger_entry(seq, event_type, entity_id, amount, note):
+def _ledger_entry(seq, event_type, entity_id, amount, note, extra=None):
     now = datetime.datetime.utcnow().isoformat()
-    return {'ledgerEventId': 'ple_' + uuid.uuid4().hex[:14], 'accountSequence': seq,
-            'eventType': event_type, 'entityId': entity_id,
-            'amount': to128(amount) if amount is not None else None,
-            'note': note, 'effectiveAt': now, 'recordedAt': now}
+    ev = {'ledgerEventId': 'ple_' + uuid.uuid4().hex[:14], 'accountSequence': seq,
+          'eventType': event_type, 'entityId': entity_id,
+          'amount': to128(amount) if amount is not None else None,
+          'note': note, 'effectiveAt': now, 'recordedAt': now}
+    if extra:
+        ev.update(extra)
+    return ev
+
+
+LEDGER_SIZE_WARN = 5000  # embedded-array soft ceiling (personal-scale); revisit external storage beyond this
+
+
+def ledger_size_warning(acct):
+    """True when the embedded ledger is large enough to warrant external storage.
+    Personal (two-user) paper trading stays far below this; kept as an explicit
+    guard rather than leaving an unbounded array silently."""
+    return len(acct.get('ledger') or []) >= LEDGER_SIZE_WARN
+
+
+def materialize_from_ledger(acct):
+    """Deterministically rebuild the economic projection from the account's
+    accepted, append-only economic FILL events (structured fields). Used to prove
+    the stored projection matches a pure replay of the ledger."""
+    cash = D(acct.get('startingCash')) or Decimal('0')
+    qty = Decimal('0'); cost_basis = Decimal('0'); fees = Decimal('0'); realized = Decimal('0')
+    seq = 0; consumed = []
+    econ = [e for e in (acct.get('ledger') or []) if e.get('side') in ('BUY', 'SELL')]
+    for e in sorted(econ, key=lambda x: x.get('accountSequence') or 0):
+        seq = max(seq, e.get('accountSequence') or 0)
+        if e.get('side') == 'BUY':
+            cash = q_cash(cash - D(e.get('notional')))
+            qty = q_qty(qty + D(e.get('qty')))
+            cost_basis = q_cash(cost_basis + D(e.get('notional')))
+            fees = q_cash(fees + D(e.get('fee')))
+        else:  # SELL
+            cash = q_cash(cash + D(e.get('proceeds')))
+            realized = q_cash(realized + D(e.get('realized')))
+            fees = q_cash(fees + D(e.get('fee')))
+            cost_basis = q_cash(cost_basis - D(e.get('costPortion')))
+            qty = q_qty(qty - D(e.get('qty')))
+            if qty <= 0:
+                qty = Decimal('0'); cost_basis = Decimal('0')
+        if e.get('proposalId'):
+            consumed.append(e['proposalId'])
+    return {'cash': cash, 'qty': qty, 'costBasis': cost_basis, 'fees': fees,
+            'realizedPnl': realized, 'accountSequence': seq, 'consumedProposals': consumed}
+
+
+def reconcile(acct):
+    """Compare the stored projection against a pure ledger replay. Returns a dict
+    with match booleans; ANY mismatch means the caller must FAIL CLOSED."""
+    rep = materialize_from_ledger(acct)
+    lot = _btc_lot(acct)
+    proj_qty = D((lot or {}).get('qty')) or Decimal('0')
+    proj_cb = D((lot or {}).get('costBasis')) or Decimal('0')
+    checks = {
+        'cash': (D(acct.get('cash')) or Decimal('0')) == rep['cash'],
+        'qty': q_qty(proj_qty) == q_qty(rep['qty']),
+        'costBasis': q_cash(proj_cb) == q_cash(rep['costBasis']),
+        'fees': (D(acct.get('feesPaid')) or Decimal('0')) == rep['fees'],
+        'realizedPnl': (D(acct.get('realizedPnl')) or Decimal('0')) == rep['realizedPnl'],
+        'accountSequence': (acct.get('accountSequence') or 0) >= rep['accountSequence'],
+    }
+    return {'ok': all(checks.values()), 'checks': checks, 'replay': rep}
 
 
 def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
@@ -391,7 +451,9 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
                          'positionVersion': 1})
         seq = (acct.get('accountSequence') or 0) + 1
         led = _ledger_entry(seq, 'FILL', lot_id, -notional,
-                            'BUY %s BTC @ %s (fee %s) · approval' % (qty_dstr(qty), dstr(fill_px), dstr(fee)))
+                            'BUY %s BTC @ %s (fee %s) · approval' % (qty_dstr(qty), dstr(fill_px), dstr(fee)),
+                            extra={'side': 'BUY', 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px),
+                                   'fee': dstr(fee), 'notional': dstr(notional), 'proposalId': proposal_id})
         result = {'side': 'BUY', 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px),
                   'fee': dstr(fee), 'notional': dstr(notional), 'positionId': lot_id,
                   'decisionSnapshotId': canonical.get('decisionSnapshotId'), 'paperOnly': True}
@@ -401,8 +463,10 @@ def apply_buy_atomic(col, acct_id, pid, expected_version, idem_key, proposal_id,
             {'paperAccountId': acct_id, 'ownerId': pid, 'version': expected_version,
              'idemKeys': {'$ne': idem_key}, 'consumedProposals': {'$ne': proposal_id}},
             {'$set': {'cash': to128(new_cash), 'feesPaid': to128(new_fees), 'lots': lots},
-             '$push': {'ledger': led, 'idemKeys': idem_key,
-                       'consumedProposals': proposal_id, 'appliedApprovals': applied},
+             '$push': {'ledger': led,
+                       'idemKeys': {'$each': [idem_key], '$slice': -500},
+                       'consumedProposals': {'$each': [proposal_id], '$slice': -500},
+                       'appliedApprovals': {'$each': [applied], '$slice': -200}},
              '$inc': {'version': 1, 'accountSequence': 1}})
         if upd is not None:
             return result, None, 200
@@ -456,7 +520,10 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
         seq = (acct.get('accountSequence') or 0) + 1
         led = _ledger_entry(seq, 'FILL', lot.get('lotId'), proceeds,
                             'SELL %s BTC @ %s (fee %s, PnL %s) · %s'
-                            % (qty_dstr(qty), dstr(fill_px), dstr(fee), dstr(realized), source))
+                            % (qty_dstr(qty), dstr(fill_px), dstr(fee), dstr(realized), source),
+                            extra={'side': 'SELL', 'qty': qty_dstr(qty), 'fillPx': dstr(fill_px),
+                                   'fee': dstr(fee), 'proceeds': dstr(proceeds), 'realized': dstr(realized),
+                                   'costPortion': dstr(cost_portion), 'proposalId': proposal_id})
         result = {'side': 'SELL', 'qty': qty_dstr(qty), 'fillPrice': dstr(fill_px),
                   'fee': dstr(fee), 'proceeds': dstr(proceeds), 'realized': dstr(realized),
                   'paperOnly': True}
@@ -465,12 +532,13 @@ def apply_sell_atomic(col, acct_id, pid, sizing, source='approval', idem_key=Non
                 'realizedPnl': to128(new_realized), 'lots': lots, 'closedLots': closed}
         flt = {'paperAccountId': acct_id, 'ownerId': pid, 'version': expected_version}
         if idem_key:
-            push['idemKeys'] = idem_key
-            push['appliedApprovals'] = {'idemKey': idem_key, 'proposalId': proposal_id,
-                                        'result': result, 'at': datetime.datetime.utcnow().isoformat()}
+            push['idemKeys'] = {'$each': [idem_key], '$slice': -500}
+            push['appliedApprovals'] = {'$each': [{'idemKey': idem_key, 'proposalId': proposal_id,
+                                        'result': result, 'at': datetime.datetime.utcnow().isoformat()}],
+                                        '$slice': -200}
             flt['idemKeys'] = {'$ne': idem_key}
             if proposal_id:
-                push['consumedProposals'] = proposal_id
+                push['consumedProposals'] = {'$each': [proposal_id], '$slice': -500}
                 flt['consumedProposals'] = {'$ne': proposal_id}
         upd = col.find_one_and_update(flt, {'$set': setd, '$push': push, '$inc': {'version': 1, 'accountSequence': 1}})
         if upd is not None:

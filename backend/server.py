@@ -7253,7 +7253,7 @@ def _paper_get(acct_id, pid):
 @app.post('/api/v1/albert/paper/accounts')
 def paper_create_account(payload: dict = Body(...), user: dict = Depends(get_current_user)):
     pid = owner_pid(user)
-    mode = payload.get('mode', 'APPROVAL_REQUIRED')
+    mode = payload.get('mode', 'OBSERVE')  # default to the safest mode (Observe)
     # M2 mode boundary: only OBSERVE + APPROVAL_REQUIRED. AUTOPILOT is disabled.
     if mode not in ('OBSERVE', 'APPROVAL_REQUIRED'):
         raise HTTPException(status_code=422, detail='Only OBSERVE and APPROVAL_REQUIRED are available.')
@@ -7297,6 +7297,7 @@ def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail='No such paper account.')
     _paper_tick(a)
     a = paper_accounts_col.find_one({'paperAccountId': acct_id})  # refresh post-tick
+    recon = _paper_core.reconcile(a)
     eq = _paper_equity(a)
     px = eq['_px']
     positions = []
@@ -7322,6 +7323,8 @@ def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
     eqc = {k: v for k, v in eq.items() if not k.startswith('_')}
     if not PAPER_EXECUTION_ENABLED:
         pause_reason = 'PAPER_EXECUTION_DISABLED_PENDING_REMEDIATION'
+    elif not recon['ok']:
+        pause_reason = 'RECONCILIATION_MISMATCH'
     elif not eq['available']:
         pause_reason = 'EQUITY_UNAVAILABLE'
     elif a.get('runtimeState') == 'PAUSED_RISK_BREAKER':
@@ -7335,12 +7338,13 @@ def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
                             'winRatePct': round(wins / len(closed) * 100, 1) if closed else None,
                             'realizedPnl': eqc['realizedPnl'], 'fees': eqc['fees']},
             'assumptions': PAPER_EXEC_PROFILE,
-            'integrity': {'status': 'LIMITED_NO_WORKER',
+            'integrity': {'status': 'LIMITED_NO_WORKER' if recon['ok'] else 'RECONCILIATION_MISMATCH',
                           'marketData': eq['markStatus'],
                           'equityAvailable': eq['available'],
                           'executionWorker': 'NONE',
-                          'reconciliation': 'NONE',
-                          'lastReconciledAt': None,
+                          'reconciliation': 'MATCH' if recon['ok'] else 'MISMATCH',
+                          'ledgerSizeWarning': _paper_core.ledger_size_warning(a),
+                          'lastReconciledAt': datetime.datetime.utcnow().isoformat() if recon['ok'] else None,
                           'executionEnabled': PAPER_EXECUTION_ENABLED,
                           'autopilotEnabled': PAPER_AUTOPILOT_ENABLED,
                           'primaryPauseReason': pause_reason}}

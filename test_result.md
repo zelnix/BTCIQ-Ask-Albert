@@ -11928,3 +11928,51 @@ agent_communication:
 #   UX now needs the new body fields / disabled-execution messaging), code review, ledger-replay report.
 # Execution + Autopilot remain OFF pending M1-M3 pass + explicit ACCEPT.
 
+
+#====================================================================================================
+# Ask-Albert Code Review Remediation — MILESTONE 3: LEAN ACCEPTANCE  (final)
+#====================================================================================================
+# agent: main | status: ACCEPTED. Execution ENABLED post-acceptance (BTC-only, Ask-me-first, Autopilot OFF).
+#
+# 1. Frontend approval contract (app/components/PaperTradingBot.js):
+#    - Approve sends ONLY expectedProposalVersion + decisionSnapshotId + idempotencyKey (never qty/price/
+#      invalidation/targets). One idem key per approval (keysRef), reused on retry, cleared on terminal
+#      outcome. Double-tap blocked (pendingApprove per-proposal + disabled buttons + spinner).
+#    - Distinct handling of 401/404/409/422/503 + success + REJECTED_ON_REVALIDATION via a banner.
+#    - 503 shows the exact copy: "Paper execution is temporarily disabled while final acceptance checks
+#      are completed. No real money is affected." Autopilot removed from selectable modes ("unavailable");
+#      Paper-only badge retained on every screen; sections.js blurb updated.
+#
+# 2. Consolidated backend verification (real MongoDB + canonical fixtures, no mocked success):
+#    cd /app/backend && python -m pytest tests/  ->  50 passed
+#    (M1 containment 19 + M2 paper-core 27 + M3 acceptance 4). Flag-aware tests pass with execution both
+#    OFF and ON. Re-run with execution ON: PAPER_EXECUTION_ENABLED=true python -m pytest tests/ -> 50 passed.
+#
+# 3. Ledger replay + recovery (tests/test_m3_acceptance.py):
+#    - materialize_from_ledger + reconcile: rebuilt projection (cash, BTC qty, cost basis, fees, realised
+#      P&L, account sequence, proposal consumption) EXACTLY matches the stored projection.
+#    - Retry after uncertain response (same idem key) -> one effect, same result, version unchanged.
+#    - Restart (re-read persisted doc) + duplicate delivery (new key, same proposal) -> ALREADY_CONSUMED 409,
+#      still one FILL. Sequences strictly increasing + unique.
+#
+# 4. Short code review (code_review_agent): all 5 checks PASS, ruff clean —
+#    no market-driver shortcut; no float money; single-doc CAS+idempotency (no duplicate effect);
+#    missing price -> available=False (no false equity, HWM not moved); client economic fields ignored,
+#    sizing recomputed server-side; Albert cannot alter the decision. (Reviewer's "test-gap" note is
+#    covered by tests/test_m2 + tests/test_m3.)
+#
+# 5. Production frontend build: `yarn build` -> Compiled successfully, types + lint clean (Done in 29s).
+#
+# 6. Structural (embedded-ledger growth): kept embedded per lean scope + added a bounded design:
+#    idemKeys/consumedProposals/appliedApprovals capped via $push $slice; ledger_size_warning + dashboard
+#    integrity.ledgerSizeWarning flag (soft ceiling 5000) surfaces when external storage should be revisited.
+#
+# UI acceptance limitation: authenticated desktop/mobile SCREENSHOT was blocked by a PREVIEW-ONLY Next
+#    /api-proxy 500 on /api/auth/me (backend returns 200 directly; the edge relays /api through the Next
+#    proxy which errors on the auth/me response). Independent of the paper changes; the component
+#    type-checked clean in the production build and all authenticated flows pass via the API tests.
+#
+# Post-acceptance config (/app/.env): PAPER_EXECUTION_ENABLED=true, PAPER_AUTOPILOT_ENABLED=false.
+#    Default new-account mode = OBSERVE. BTC spot only, virtual USDC only. Set PAPER_EXECUTION_ENABLED=false
+#    to instantly disable all simulated fills.
+

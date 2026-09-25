@@ -6,7 +6,7 @@
 import React from 'react';
 import { API_BASE, getPid } from '../lib/api';
 import {
-  Loader2, FlaskConical, Play, Pause, Bot, Eye, HandCoins, ShieldCheck, CheckCircle2,
+  Loader2, FlaskConical, Play, Pause, Eye, HandCoins, ShieldCheck, CheckCircle2,
   XCircle, TrendingUp, AlertTriangle, Info, ArrowRight,
 } from 'lucide-react';
 
@@ -15,7 +15,6 @@ const num = (v) => (v == null ? 0 : Number(v));
 const MODES = [
   { id: 'OBSERVE', label: 'Observe only', desc: 'Albert logs signals but never trades.', Icon: Eye },
   { id: 'APPROVAL_REQUIRED', label: 'Ask me first', desc: 'Albert proposes; you approve each paper trade.', Icon: HandCoins },
-  { id: 'PAPER_AUTOPILOT', label: 'Paper Autopilot', desc: 'Albert auto-executes paper trades.', Icon: Bot },
 ];
 
 function PaperBadge() {
@@ -27,7 +26,19 @@ export default function PaperTradingBot() {
   const [acctId, setAcctId] = React.useState(null);
   const [dash, setDash] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);              // approval outcome banner
+  const [pendingApprove, setPendingApprove] = React.useState({});  // per-proposal in-flight guard
+  const keysRef = React.useRef({});                        // one idempotency key per approval action
   const pid = typeof window !== 'undefined' ? getPid() : '';
+
+  const keyFor = (proposalId) => {
+    if (!keysRef.current[proposalId]) {
+      const gen = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID() : ('idem_' + Date.now() + '_' + Math.random().toString(36).slice(2));
+      keysRef.current[proposalId] = gen;
+    }
+    return keysRef.current[proposalId];
+  };
 
   const loadAccounts = React.useCallback(async () => {
     if (!pid) { setAccounts([]); return; }
@@ -73,6 +84,64 @@ export default function PaperTradingBot() {
     setBusy(true);
     try { await fetch(`${API_BASE}/v1/albert/paper/accounts/${acctId}/mode`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid, mode }) }); } catch (e) { /* noop */ }
     await loadDash(); setBusy(false);
+  };
+
+  // Approval sends ONLY the contract fields — never quantity/price/invalidation/targets.
+  // One idempotency key per approval action, reused on retry; double-taps are blocked.
+  const approveProposal = async (p) => {
+    if (pendingApprove[p.proposalId]) return;               // double-tap protection
+    setPendingApprove((s) => ({ ...s, [p.proposalId]: true }));
+    setMsg(null);
+    const key = keyFor(p.proposalId);
+    let keepKey = true;                                     // keep key so a retry reuses it
+    try {
+      const r = await fetch(`${API_BASE}/v1/albert/paper/proposals/${p.proposalId}/approve`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expectedProposalVersion: p.version ?? 0,
+          decisionSnapshotId: p.decisionSnapshotId,
+          idempotencyKey: key,
+        }),
+      });
+      if (r.status === 503) {
+        setMsg({ t: 'info', m: 'Paper execution is temporarily disabled while final acceptance checks are completed. No real money is affected.' });
+      } else if (r.status === 401) {
+        setMsg({ t: 'err', m: 'Your session expired — please sign in again to approve.' });
+      } else if (r.status === 404) {
+        setMsg({ t: 'err', m: 'This proposal is no longer available.' }); keepKey = false;
+      } else if (r.status === 409) {
+        setMsg({ t: 'warn', m: 'This proposal expired or changed — Albert will surface a fresh one.' }); keepKey = false;
+      } else if (r.status === 422) {
+        setMsg({ t: 'err', m: 'The approval request was incomplete — please try again.' });
+      } else if (r.ok) {
+        const j = await r.json().catch(() => ({}));
+        if (j.proposalStatus === 'REJECTED_ON_REVALIDATION') {
+          setMsg({ t: 'warn', m: 'The decision changed on a fresh check — paper trade not placed.' }); keepKey = false;
+        } else {
+          setMsg({ t: 'ok', m: 'Paper trade approved and simulated. No real money was involved.' }); keepKey = false;
+        }
+      } else {
+        setMsg({ t: 'err', m: 'Something went wrong — please retry.' });
+      }
+    } catch (e) {
+      setMsg({ t: 'err', m: 'Network error — you can safely retry; it won’t double-fill.' });
+    }
+    if (!keepKey) delete keysRef.current[p.proposalId];
+    await loadDash(); await loadAccounts();
+    setPendingApprove((s) => { const n = { ...s }; delete n[p.proposalId]; return n; });
+  };
+
+  const cancelProposal = async (p) => {
+    if (pendingApprove[p.proposalId]) return;
+    setPendingApprove((s) => ({ ...s, [p.proposalId]: true }));
+    try {
+      await fetch(`${API_BASE}/v1/albert/paper/proposals/${p.proposalId}/cancel`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+      });
+    } catch (e) { /* noop */ }
+    delete keysRef.current[p.proposalId];
+    await loadDash(); await loadAccounts();
+    setPendingApprove((s) => { const n = { ...s }; delete n[p.proposalId]; return n; });
   };
 
   if (!pid) {
@@ -148,6 +217,7 @@ export default function PaperTradingBot() {
           <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />{acct.runtimeState.replace(/_/g, ' ')}</p>
         )}
         {integ.marketData === 'STALE' && <p className="mt-2 flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Market marks are stale — new paper entries are paused until data refreshes.</p>}
+        <p className="mt-2 flex items-center gap-1.5 text-[10.5px] text-slate-500"><ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />Autopilot is unavailable — every paper trade needs your approval. BTC spot, virtual USDC only.</p>
       </div>
 
       {/* Account value summary */}
@@ -160,16 +230,27 @@ export default function PaperTradingBot() {
         </div>
       </div>
 
+      {/* Approval outcome banner */}
+      {msg && (
+        <div className={`rounded-xl border p-3 text-[12px] font-medium ${
+          msg.t === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+          : msg.t === 'warn' ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+          : msg.t === 'info' ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
+          : 'border-rose-500/40 bg-rose-500/10 text-rose-200'}`}>
+          <span className="inline-flex items-center gap-1.5"><Info className="h-3.5 w-3.5" />{msg.m}</span>
+        </div>
+      )}
+
       {/* Pending proposal */}
       {proposals.map((p) => (
         <div key={p.proposalId} className="rounded-2xl border border-sky-500/30 bg-sky-500/[0.06] p-4">
           <div className="mb-1 flex items-center justify-between"><p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-sky-300"><HandCoins className="h-3.5 w-3.5" />Paper trade proposal</p><PaperBadge /></div>
           <p className="text-[15px] font-bold text-white">{p.side} {p.asset} · {usd(p.notionalValue)}</p>
-          <p className="mt-0.5 text-[12px] text-slate-400">Ref {usd(p.referencePrice)} · est. fees {usd(p.estimatedFees)} · est. slippage {usd(p.estimatedSlippage)}{p.invalidationPrice ? ` · invalidation ${usd(p.invalidationPrice)}` : ''}</p>
+          <p className="mt-0.5 text-[12px] text-slate-400">Ref {usd(p.referencePrice)} · est. fees {usd(p.estimatedFees)}{p.invalidationPrice ? ` · invalidation ${usd(p.invalidationPrice)}` : ''}</p>
           {p.reason && <p className="mt-2 text-[12px] leading-relaxed text-slate-300">{p.reason}</p>}
           <div className="mt-3 flex gap-2">
-            <button disabled={busy} onClick={() => act(`${API_BASE}/v1/albert/paper/proposals/${p.proposalId}/approve`)} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-3.5 py-1.5 text-[12px] font-semibold text-emerald-200 hover:bg-emerald-500/30"><CheckCircle2 className="h-3.5 w-3.5" />Approve paper trade</button>
-            <button disabled={busy} onClick={() => act(`${API_BASE}/v1/albert/paper/proposals/${p.proposalId}/cancel`)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-[12px] font-semibold text-slate-300 hover:text-white"><XCircle className="h-3.5 w-3.5" />Skip</button>
+            <button disabled={!!pendingApprove[p.proposalId]} onClick={() => approveProposal(p)} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-3.5 py-1.5 text-[12px] font-semibold text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-50">{pendingApprove[p.proposalId] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}Approve paper trade</button>
+            <button disabled={!!pendingApprove[p.proposalId]} onClick={() => cancelProposal(p)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-[12px] font-semibold text-slate-300 hover:text-white disabled:opacity-50"><XCircle className="h-3.5 w-3.5" />Skip</button>
           </div>
         </div>
       ))}

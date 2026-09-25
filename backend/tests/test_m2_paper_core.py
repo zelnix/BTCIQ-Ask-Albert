@@ -345,13 +345,14 @@ def test_http_autopilot_rejected_on_set_mode(http_user):
     assert r.status_code == 422
 
 
-def test_http_dashboard_execution_disabled(http_user):
+def test_http_dashboard_execution_flag(http_user):
     acct = requests.post(BASE + '/api/v1/albert/paper/accounts', headers=_h(http_user['tok']),
                          json={'name': 'dashacct'}).json()
     d = requests.get(BASE + '/api/v1/albert/paper/accounts/%s/dashboard' % acct['paperAccountId'],
                      headers=_h(http_user['tok'])).json()
-    assert d['integrity']['executionEnabled'] is False
-    assert d['integrity']['autopilotEnabled'] is False
+    exec_on = os.environ.get('PAPER_EXECUTION_ENABLED', '').lower() in ('1', 'true', 'yes', 'on')
+    assert d['integrity']['executionEnabled'] is exec_on
+    assert d['integrity']['autopilotEnabled'] is False   # Autopilot always OFF
 
 
 def _seed_proposal(acct_id, pid, expires_delta_min=30, snap='snapX'):
@@ -375,7 +376,7 @@ def test_http_approve_requires_body_fields(http_user):
     assert r.status_code == 422
 
 
-def test_http_approve_blocked_execution_disabled(http_user):
+def test_http_approve_blocked_or_revalidated(http_user):
     acct = requests.post(BASE + '/api/v1/albert/paper/accounts', headers=_h(http_user['tok']),
                          json={'name': 'a2'}).json()
     pid = _seed_proposal(acct['paperAccountId'], http_user['pid'], snap='snapX')
@@ -383,7 +384,14 @@ def test_http_approve_blocked_execution_disabled(http_user):
                       headers=_h(http_user['tok']),
                       json={'expectedProposalVersion': 0, 'decisionSnapshotId': 'snapX',
                             'idempotencyKey': 'k1', 'quantity': 999, 'price': 1})  # client economic fields ignored
-    assert r.status_code == 503
+    exec_on = os.environ.get('PAPER_EXECUTION_ENABLED', '').lower() in ('1', 'true', 'yes', 'on')
+    if exec_on:
+        # execution ON: fake snapshot never matches current canonical -> rejected on revalidation
+        assert r.status_code in (200, 409), r.text
+        if r.status_code == 200:
+            assert r.json().get('proposalStatus') == 'REJECTED_ON_REVALIDATION'
+    else:
+        assert r.status_code == 503
 
 
 def test_http_expired_proposal_rejected(http_user):
