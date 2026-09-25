@@ -115,11 +115,15 @@ def test_rotation_reduce_then_buy_produces_completed_record(monkeypatch):
     monkeypatch.setattr(server, '_paper_live_ranks', lambda: (ranks, meta))
     decisions = [_canon('ETH', 'BUY', score='95', deploy='20000', price='3000', inv='2700'),
                  _canon('ADA', 'HOLD', score='60', deploy='0', price='1', inv='0.9')]
-    monkeypatch.setattr(server, '_paper_canonical_decisions', lambda pid: decisions)
+    monkeypatch.setattr(server, '_paper_canonical_decisions', lambda pid, account=None: decisions)
     mts = datetime.datetime.utcnow().isoformat()
     marks = {'ETH': (Decimal('3000'), True), 'ADA': (Decimal('1'), True)}
-    monkeypatch.setattr(server, '_paper_mark', lambda s: (marks.get(s.upper(), (None, False))[0],
-                                                          marks.get(s.upper(), (None, False))[1], mts))
+
+    def _mk(s, ts):
+        v = marks.get(s.upper(), (None, False))
+        return v[0], v[1], {'price': v[0], 'ts': ts, 'fresh': bool(v[1]), 'source': 'test',
+                            'obsId': ('obs:%s:%s' % (s.upper(), ts)) if v[1] else None}
+    monkeypatch.setattr(server, '_paper_mark', lambda s: _mk(s, mts))
 
     # ---- Tick 1: reduce the laggard (ADA), record REDUCED, ETH not yet bought ----
     server._autopilot_process_account_multi(PA.find_one({'paperAccountId': a['paperAccountId']}))
@@ -137,8 +141,7 @@ def test_rotation_reduce_then_buy_produces_completed_record(monkeypatch):
 
     # ---- Tick 2: capital is now free -> ETH buys, rotation record COMPLETED ----
     mts2 = (datetime.datetime.utcnow() + datetime.timedelta(seconds=5)).isoformat()
-    monkeypatch.setattr(server, '_paper_mark', lambda s: (marks.get(s.upper(), (None, False))[0],
-                                                          marks.get(s.upper(), (None, False))[1], mts2))
+    monkeypatch.setattr(server, '_paper_mark', lambda s: _mk(s, mts2))
     server._autopilot_process_account_multi(PA.find_one({'paperAccountId': a['paperAccountId']}))
     a2 = PA.find_one({'paperAccountId': a['paperAccountId']})
     assert core.position_qty(a2, 'ETH') > 0             # stronger opportunity now funded

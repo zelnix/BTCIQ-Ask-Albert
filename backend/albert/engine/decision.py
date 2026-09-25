@@ -62,10 +62,13 @@ def _apply_sell(base, ctx):
     return True
 
 
-def build_decisions(pid):
+def build_decisions(pid, summary_override=None):
     reg = regime_mod.compute_regime()
     regime = reg['regime']
-    summary = deps.portfolio_summary(pid)
+    # M6 blocker #2: when an M5 paper account is the portfolio source, decisions are
+    # built from THAT account's embedded cash + positions (single source of truth),
+    # never the legacy portfolio_col / paper_portfolio_col.
+    summary = summary_override if summary_override is not None else deps.portfolio_summary(pid)
     mandate = deps.get_mandate(pid)
     total = summary['total_value'] or 0.0
     deployable = summary['deployable_usdc'] or 0.0

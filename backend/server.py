@@ -7136,38 +7136,48 @@ def _envelope_to_canonical(env):
     }
 
 
-def _paper_canonical_decision(pid):
-    """Fetch the CURRENT immutable canonical BTC decision snapshot for this owner.
-    Market Driver Intelligence is NOT consulted here — it is evidence only and can
-    never manufacture an action. Returns None (fail CLOSED) when the decision is
-    absent, mutable, incomplete, unsupported or its ids/hash are missing."""
+def _paper_hist_key(pid, account):
+    """Decision-history namespace. Account-scoped for M5 paper accounts (blocker #2)
+    so two accounts of the same owner never share/clobber snapshots."""
+    if account is not None:
+        return '%s::acct::%s' % (pid, account.get('paperAccountId'))
+    return pid
+
+
+def _paper_canonical_decision(pid, account=None):
+    """Fetch the CURRENT immutable canonical BTC decision snapshot for this owner,
+    built from the given M5 account's portfolio when provided (blocker #2). Market
+    Driver Intelligence is NOT consulted. Returns None (fail CLOSED) when absent,
+    mutable, incomplete, unsupported or its ids/hash are missing."""
     try:
-        snap = _albert_decisions(pid)
+        key = _paper_hist_key(pid, account)
+        snap = _albert_decisions(pid, account=account)
         try:
-            _decision_history_repo.reconcile(pid, snap)  # stabilise ids
+            _decision_history_repo.reconcile(key, snap)  # stabilise ids
         except Exception:  # noqa
             pass
-        env = _decision_history_repo.get_current(pid, 'BTC')
+        env = _decision_history_repo.get_current(key, 'BTC')
     except Exception:  # noqa
         traceback.print_exc()
         return None
     return _envelope_to_canonical(env)
 
 
-def _paper_canonical_decisions(pid):
-    """M5: CURRENT immutable canonical decisions for EVERY asset in the engine's
-    liquid universe (+ any held). Builds/reconciles the snapshot once, then reads
-    every stabilised per-asset envelope. Only canonical decisions are returned —
-    discovery scores alone can never appear here. Returns list[canonical dict]."""
+def _paper_canonical_decisions(pid, account=None):
+    """M5/M6: CURRENT immutable canonical decisions for EVERY asset in the engine's
+    liquid universe (+ any held), built from the given M5 account's portfolio when
+    provided (blocker #2 single source of truth). Only canonical decisions appear —
+    discovery scores alone can never. Returns list[canonical dict]."""
     out = []
     try:
-        snap = _albert_decisions(pid)
+        key = _paper_hist_key(pid, account)
+        snap = _albert_decisions(pid, account=account)
         try:
-            _decision_history_repo.reconcile(pid, snap)
+            _decision_history_repo.reconcile(key, snap)
         except Exception:  # noqa
             pass
         for d in (snap.get('decisions') or []):
-            env = _decision_history_repo.get_current(pid, d.get('symbol'))
+            env = _decision_history_repo.get_current(key, d.get('symbol'))
             can = _envelope_to_canonical(env)
             if can:
                 out.append(can)
@@ -7176,31 +7186,57 @@ def _paper_canonical_decisions(pid):
     return out
 
 
-def _paper_canonical_for(pid, asset):
+def _paper_canonical_for(pid, asset, account=None):
     """M6: the CURRENT canonical decision for ONE asset (used by approval + manual
     controls so they never fall back to the BTC-only decision)."""
     asset = (asset or 'BTC').upper()
-    for c in _paper_canonical_decisions(pid):
+    for c in _paper_canonical_decisions(pid, account=account):
         if (c.get('asset') or '').upper() == asset:
             return c
     return None
 
 
-def _paper_mark(sym):
-    """Current mark for any asset as (Decimal|None, fresh:bool, ts_iso). BTC uses
-    the authoritative run ticker (with age check); other assets use the live spot
-    price (observed 'now', so any decision made earlier is an independent later
-    observation)."""
+def _market_observation(sym):
+    """M6 blocker #3: a real PROVIDER market observation (not utcnow) for execution
+    binding. Returns {price:Decimal|None, ts:iso, obsId:str|None, fresh:bool, source}.
+    obsId = symbol:source:provider-fetch-ts — it is STABLE within a provider cache
+    window and changes only when a genuinely new observation is fetched, so execution
+    can require an observation distinct from the last one consumed."""
     sym = (sym or 'BTC').upper()
-    if sym == 'BTC':
-        return _paper_btc_mark()
     try:
-        px = _spot_price(sym)
-        if px:
-            return _paper_core.D(px), True, datetime.datetime.utcnow().isoformat()
+        data = ticker(symbol=sym)   # cached live provider (kraken/coinbase), refreshes >8s
+    except Exception:  # noqa
+        data = None
+    if not data or data.get('price') is None:
+        return {'price': None, 'ts': None, 'obsId': None, 'fresh': False, 'source': None}
+    price = _paper_core.D(str(data['price']))
+    ts = data.get('ts')             # provider fetch timestamp (iso)
+    src = data.get('source') or 'ticker'
+    fresh = True
+    try:
+        import time as _t
+        entry = _ticker_cache.get(sym)
+        if entry and entry.get('ts'):
+            fresh = (_t.time() - entry['ts']) < 60      # a recent provider observation
     except Exception:  # noqa
         pass
-    return None, False, None
+    return {'price': price, 'ts': ts, 'obsId': '%s:%s:%s' % (sym, src, ts), 'fresh': fresh, 'source': src}
+
+
+def _paper_mark(sym):
+    """Current mark for any asset as (Decimal|None, fresh:bool, obs:dict). Bound to a
+    real provider observation (blocker #3): BTC AND altcoins use the live ticker so BTC
+    is usable within its decision window and altcoins carry a genuine provider ts/obsId.
+    Falls back to the authoritative daily-run mark for BTC only if the ticker is down."""
+    sym = (sym or 'BTC').upper()
+    obs = _market_observation(sym)
+    if obs['price'] is not None and obs['fresh']:
+        return obs['price'], True, obs
+    if sym == 'BTC':
+        px, fresh, ts = _paper_btc_mark()
+        return px, fresh, {'price': px, 'ts': ts, 'source': 'run', 'fresh': fresh,
+                           'obsId': ('BTC:run:%s' % ts) if ts else None}
+    return None, False, {'price': None, 'ts': None, 'obsId': None, 'fresh': False, 'source': None}
 
 
 def _paper_live_ranks():
@@ -7482,18 +7518,18 @@ def _autopilot_process_account_multi(acct):
     excluded = set(mandate.get('excluded_coins') or [])
     approved = set(mandate.get('approved_coins') or [])
 
-    # Canonical decisions for every asset in the liquid universe (+held).
-    decisions = _paper_canonical_decisions(pid)
+    # Canonical decisions for every asset, built from THIS account's portfolio (blocker #2).
+    decisions = _paper_canonical_decisions(pid, account=acct)
     dec_by_sym = {(d.get('asset') or '').upper(): d for d in decisions}
 
     # Marks for every held + candidate asset.
     held_syms = [(l.get('asset') or '').upper() for l in (acct.get('lots') or [])
                  if (_paper_core.D(l.get('qty')) or Decimal('0')) > 0]
     universe = list(dict.fromkeys(held_syms + list(dec_by_sym.keys())))
-    marks = {}; mark_ts = {}
+    marks = {}; mark_obs = {}
     for sym in universe:
-        px, fresh, ts = _paper_mark(sym)
-        marks[sym] = (px, fresh); mark_ts[sym] = ts
+        px, fresh, obs = _paper_mark(sym)
+        marks[sym] = (px, fresh); mark_obs[sym] = obs or {}
 
     equity_info = _paper_portfolio.compute_portfolio_equity(acct, marks)
 
@@ -7528,7 +7564,7 @@ def _autopilot_process_account_multi(acct):
                 continue
             res, err, _ = _paper_core.apply_sell_atomic(
                 paper_accounts_col, acct_id, pid, sizing, source='auto_invalidation',
-                idem_key='inv:%s:%s' % (lot.get('lotId'), mark_ts.get(sym)), asset=sym)
+                idem_key='inv:%s:%s' % (lot.get('lotId'), (mark_obs.get(sym) or {}).get('obsId')), asset=sym)
             if not err:
                 _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
                 _autopilot_notify(pid, acct_id, 'Paper position auto-exited (invalidation)',
@@ -7560,17 +7596,15 @@ def _autopilot_process_account_multi(acct):
                               'Observed %s %s — no trade.' % (sym, d.get('action')))
             continue
         px, fresh = marks.get(sym, (None, False))
-        # stale decision / unverified mark: leave snapshot UNCONSUMED to retry later
-        if not d.get('fresh') or px is None or not fresh:
+        obs = mark_obs.get(sym) or {}
+        # stale decision / unverified mark / no provider observation: leave UNCONSUMED to retry
+        if not d.get('fresh') or px is None or not fresh or not obs.get('obsId'):
             continue
-        ts = mark_ts.get(sym)
-        try:
-            if ts and d.get('decisionTime') and not (ts > d['decisionTime']):
-                continue  # not an independent later observation
-        except Exception:  # noqa
-            continue
-        cur = cursors.get(sym)
-        if cur and ts and not (ts > cur):
+        # BLOCKER #3: execute only on a real provider observation DISTINCT from the last
+        # one we consumed for this asset (never re-fill on the same cached tick). We bind
+        # to the provider observation id — NOT utcnow — which also unblocks BTC (its mark
+        # is now the live ticker, not the stale daily-run timestamp).
+        if cursors.get(sym) == obs['obsId']:
             continue
         # eligibility: only canonical + profile-eligible assets can ever trade
         elig, _reason = _paper_profiles.eligible_for_trading(
@@ -7699,7 +7733,7 @@ def _autopilot_process_account_multi(acct):
             sym = c['symbol']
             if sym in traded_syms:
                 newly_seen[sym] = c['_sid']
-                cursors[sym] = mark_ts.get(sym)
+                cursors[sym] = (mark_obs.get(sym) or {}).get('obsId')
             elif c['action'] != 'BUY':
                 newly_seen[sym] = c['_sid']
             # else: untraded BUY -> leave unconsumed to retry next tick
@@ -8171,7 +8205,7 @@ def paper_proposal_action(proposal_id: str, cmd: str, payload: dict = Body(defau
     # multi-asset fix). A mandate/decision/inputs change mints a NEW snapshotId / hash
     # -> mismatch -> reject (fail closed). We compare BOTH snapshotId AND decisionInputsHash.
     asset = (prop.get('asset') or 'BTC').upper()
-    canonical = _paper_canonical_for(pid, asset)
+    canonical = _paper_canonical_for(pid, asset, account=a)
     hash_ok = bool(canonical and prop.get('decisionInputsHash')
                    and canonical.get('decisionInputsHash') == prop.get('decisionInputsHash'))
     if not (_paper_core.revalidate_ok(canonical, prop['side'], prop.get('decisionSnapshotId')) and hash_ok):
@@ -10781,8 +10815,46 @@ def _score_asset(symbol, regime):
     return _albert_scoring_mod.score_asset(symbol, regime)
 
 
-def _albert_decisions(pid):
-    return _albert_decision_mod.build_decisions(pid)
+def _portfolio_summary_from_account(a):
+    """M6 blocker #2: build the engine portfolio summary from an M5 paper account's
+    EMBEDDED cash + lots (the single source of truth), valued at live spot. Same shape
+    as _portfolio_summary so build_decisions can consume it interchangeably."""
+    pid = a.get('ownerId')
+    m = _get_mandate(pid)
+    reserve_pct = m.get('reserve_pct') or 0
+    usdc = float(_paper_core.D(a.get('cash')) or 0)   # account values are Decimal/Decimal128
+    holdings, holdings_value = [], 0.0
+    for lot in (a.get('lots') or []):
+        size = float(_paper_core.D(lot.get('qty')) or 0)
+        if size <= 0:
+            continue
+        asset = str(lot.get('asset') or '').upper()[:8]
+        if not asset or asset in ('USDC', 'USDT', 'USD'):
+            continue
+        entry = float(_paper_core.D(lot.get('avgEntry')) or 0)
+        spot = _spot_price(asset) or 0
+        val = size * spot
+        holdings_value += val
+        upnl = ((spot - entry) / entry * 100) if (spot and entry) else None
+        holdings.append({'asset': asset, 'size': size, 'avg_entry': entry, 'spot': spot,
+                         'value': round(val, 2), 'unrealized_pct': round(upnl, 2) if upnl is not None else None})
+    total = holdings_value + usdc
+    for h in holdings:
+        h['portfolio_pct'] = round((h['value'] / total * 100), 2) if total else 0
+    protected = round(usdc * reserve_pct / 100.0, 2)
+    deployable = round(max(0.0, usdc - protected), 2)
+    return {'total_value': round(total, 2), 'usdc': round(usdc, 2), 'protected_reserve': protected,
+            'deployable_usdc': deployable, 'reserve_pct': reserve_pct,
+            'holdings_value': round(holdings_value, 2), 'holdings': holdings,
+            'mandate_complete': _mandate_complete(m)}
+
+
+def _albert_decisions(pid, account=None):
+    """Build canonical decisions. When `account` (an M5 paper account) is given, the
+    engine's portfolio source is THAT account (blocker #2); otherwise the legacy
+    portfolio summary is used (for the read-only decisions endpoint / non-paper UI)."""
+    override = _portfolio_summary_from_account(account) if account is not None else None
+    return _albert_decision_mod.build_decisions(pid, summary_override=override)
 
 
 @app.get('/api/v1/albert/regime')

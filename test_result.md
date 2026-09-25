@@ -12141,3 +12141,31 @@ agent_communication:
 #
 # Flags left AS-IS in preview per owner (EXECUTION+AUTOPILOT true). Do NOT deploy autopilot until
 # #2, #3 and the acceptance sequence are complete.
+
+#----------------------------------------------------------------------------------------------------
+# M6 UPDATE — Blockers #2 & #3 DONE + unmocked acceptance sequence  (85 tests pass)
+#----------------------------------------------------------------------------------------------------
+# BLOCKER #2 (single portfolio source) DONE: build_decisions(pid, summary_override=None); server
+#   _portfolio_summary_from_account(a) values the M5 account's EMBEDDED cash+lots (Decimal-parsed) at
+#   live spot; _albert_decisions(pid, account) + _paper_canonical_decision(s)/for(pid, ..., account)
+#   are ACCOUNT-SCOPED, with a per-account decision-history namespace (pid::acct::<id>) so two
+#   accounts never clobber snapshots. Worker + approve now pass account=. A fresh $100k account is
+#   now $100k of deployable capital to the engine (never $0), and post-fill decisions see the real
+#   positions + cash.
+# BLOCKER #3 (observation binding) DONE: _market_observation(sym) returns a real PROVIDER observation
+#   {price, ts, obsId=sym:source:providerTs, fresh, source}; _paper_mark now binds BTC AND altcoins to
+#   the live ticker (BTC no longer stuck on the daily-run ts) and returns (price, fresh, obs). The
+#   worker executes only on a provider observation whose obsId DIFFERS from the last consumed one
+#   (cursor stores obsId) and is fresh — the broken utcnow "strictly later" rule is gone. Invalidation
+#   idempotency keys use obsId too.
+# ACCEPTANCE (tests/test_m6_acceptance.py, unmocked core/engine-seam/provider/reconcile): create acct
+#   -> canonical BUY sized from THAT account -> later provider observation -> real fill -> next
+#   decision's portfolio reflects the fill -> same observation does NOT re-fill -> altcoin manual
+#   close (ETH closes, BTC untouched) -> reconcile_multi ok. Plus #2 seam test, #3 obsId + stale tests.
+# Test-isolation fix: M5 _drive() restores _paper_mark/_paper_canonical_decisions globals.
+# Suite: 85 passed (M1 19 + M2 27 + M3 4 + M4 10 + M5 15 + M5.1 6 + M6 4).
+#
+# DEPLOYMENT GATE STATUS: all 5 review blockers (#1 auth/allowlist, #2 portfolio source, #3 observation
+#   binding, #4 immutable-binding hash revalidation, #5 multi-asset manual controls) + the unmocked
+#   acceptance sequence are now DONE. STILL PENDING (additive, not a blocker): Albert owner-scoped
+#   READ-ONLY context (7 functions). Recommend a short live paper observation before production autopilot.

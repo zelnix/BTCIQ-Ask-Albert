@@ -75,7 +75,17 @@ MANDATE = {'max_alloc_pct': {}, 'max_trade_risk_pct': '3', 'max_drawdown_pct': '
 @pytest.fixture(autouse=True)
 def _patch(monkeypatch):
     monkeypatch.setattr(server._albert_deps, 'get_mandate', lambda pid: dict(MANDATE))
-    yield
+    # _drive() reassigns these module globals directly; snapshot + restore so we never
+    # leak a stubbed _paper_mark/_paper_canonical_decisions into other test modules.
+    _orig_mark = server._paper_mark
+    _orig_dec = server._paper_canonical_decisions
+    _orig_gm = server._albert_deps.get_mandate
+    try:
+        yield
+    finally:
+        server._paper_mark = _orig_mark
+        server._paper_canonical_decisions = _orig_dec
+        server._albert_deps.get_mandate = _orig_gm
 
 
 def _cleanup(a):
@@ -87,10 +97,15 @@ def _cleanup(a):
 def _drive(a, decisions, marks, mandate=None):
     """Insert account, monkeypatch canonical + marks, run one multi tick."""
     PA.insert_one(dict(a))
-    server._paper_canonical_decisions = lambda pid: decisions
+    server._paper_canonical_decisions = lambda pid, account=None: decisions
     mark_ts = datetime.datetime.utcnow().isoformat()
-    server._paper_mark = lambda sym: (marks.get(sym.upper(), (None, False))[0],
-                                      marks.get(sym.upper(), (None, False))[1], mark_ts)
+
+    def _mk(sym):
+        v = marks.get(sym.upper(), (None, False))
+        obs = {'price': v[0], 'ts': mark_ts, 'fresh': bool(v[1]), 'source': 'test',
+               'obsId': ('obs:%s:%s' % (sym.upper(), mark_ts)) if v[1] else None}
+        return v[0], v[1], obs
+    server._paper_mark = _mk
     if mandate is not None:
         server._albert_deps.get_mandate = lambda pid: dict(mandate)
     fresh = PA.find_one({'paperAccountId': a['paperAccountId']})
