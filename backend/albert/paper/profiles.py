@@ -99,8 +99,8 @@ def cap_tier(symbol, rank=None):
     return 'SPEC'
 
 
-def per_asset_cap_pct(symbol, rank=None, profile=AGGRESSIVE_EXPERIENCED_V1):
-    tier = cap_tier(symbol, rank)
+def per_asset_cap_pct(symbol, rank=None, profile=AGGRESSIVE_EXPERIENCED_V1, tier=None):
+    tier = tier or cap_tier(symbol, rank)
     return {
         'BTC': profile['btcAllocPct'], 'LARGE': profile['largeCapAllocPct'],
         'MID': profile['midCapAllocPct'], 'SPEC': profile['specAllocPct'],
@@ -128,10 +128,12 @@ _PRICE_Q_OVERRIDE = {
 }
 
 
-def asset_profile(symbol, rank=None):
-    """Deterministic execution profile for an asset. Returns Decimals."""
+def asset_profile(symbol, rank=None, tier=None):
+    """Deterministic execution profile for an asset. Returns Decimals. `tier`
+    override forces a liquidity tier (M5.1: conservative SPEC when live rank
+    is unavailable)."""
     sym = (symbol or '').upper()
-    tier = cap_tier(sym, rank)
+    tier = tier or cap_tier(sym, rank)
     prof = dict(_TIER_EXEC[tier])
     if sym in _PRICE_Q_OVERRIDE:
         prof['priceQ'] = _PRICE_Q_OVERRIDE[sym]

@@ -12071,3 +12071,36 @@ agent_communication:
 #
 # Not in scope this milestone (deferred): OCO/limit orders; live discovery-rank wiring (uses static rank
 #   fallback + engine universe today); read-only exchange integration.
+
+#====================================================================================================
+# MILESTONE 5.1 — Visibility + Live-Data pass  [main agent, pytest-only + production build]
+#====================================================================================================
+# Four enhancements bundled as one small pass on top of M5. No new API key. 81 tests pass.
+#
+# 1) LIVE MARKET-CAP RANKS: server._paper_live_ranks() reads the cached top-100 Discovery
+#    snapshot (CoinGecko) -> {SYMBOL:{rank,source,snapshotId,observedAt,fresh}} + meta.
+#    server._paper_rank_for() resolves (rank,tier,rankMeta): BTC keeps its tier by identity;
+#    fresh+available altcoin rank -> tier by rank; UNAVAILABLE/STALE -> conservative SPEC cap +
+#    rankMeta.available=False (never a silent static rank). profiles.per_asset_cap_pct/asset_profile
+#    accept a tier override. Verified live: dashboard rankingSnapshot = {available:true, source:
+#    coingecko, snapshotId:<uuid>, fresh:true}.
+# 2) PORTFOLIO ALLOCATION PANEL: dashboard now returns `allocation` = equity, deployed%/limit,
+#    BTC%/limit, altcoin%/limit, combined-open-risk%/limit, positions/limit, protected USDC, free
+#    USDC, regime deploy ceiling, profile AGGRESSIVE_EXPERIENCED_V1 (value-vs-limit; unavailable
+#    state surfaced). Frontend LimitBar renders each with a labelled bar + text (never colour alone).
+# 3) ROTATION RECORDS: new config.paper_rotations_col. On a rotation EXIT the worker writes a
+#    REDUCED record (reducedAsset/score, targetAsset/score, regime, reduced+target snapshotIds,
+#    rankingSnapshotId, primaryReason, headline); when the target later BUYS it is COMPLETED with
+#    allocationMovedUsd + newPositionBoundBy. Two independent canonical actions: reduce first, buy
+#    only after cash frees (untraded BUY snapshots are left UNCONSUMED to retry) -> never exceeds
+#    cash/risk. Surfaced in dashboard `rotations` + a frontend "Rotation activity" section.
+# 4) INTERFACE: production `yarn build` -> Compiled successfully (route / 310 kB). Dev preview
+#    compiles + serves 200. Positions render per-asset with tier/rank badges, truncated long names,
+#    flex-wrap (no mobile horizontal overflow), Paper-only language retained. NOTE: authenticated
+#    automated screenshots remain blocked by the known preview /api/auth/me proxy 500 artifact; the
+#    dashboard API contract was verified end-to-end with a seeded session instead.
+#
+# Tests: tests/test_m5_1_visibility.py (NEW, 6) — live-rank fresh/unavailable/stale fallback, BTC
+#   tier identity, meta shape, and a two-tick rotation reduce->buy producing a COMPLETED record.
+#   Full suite: PAPER_EXECUTION_ENABLED=true PAPER_AUTOPILOT_ENABLED=true PAPER_MULTI_ASSET_ENABLED=true
+#   python -m pytest tests/  -> 81 passed (M1 19 + M2 27 + M3 4 + M4 10 + M5 15 + M5.1 6).

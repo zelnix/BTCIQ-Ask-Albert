@@ -137,7 +137,7 @@ def _stop_dist(mark_px, invalidation):
 
 # ============================ capital allocation ============================= #
 def allocate(*, acct, equity_info, candidates, regime, marks,
-             profile=P.AGGRESSIVE_EXPERIENCED_V1):
+             profile=P.AGGRESSIVE_EXPERIENCED_V1, holding_scores=None):
     """Produce deterministic per-asset trade intents from ranked canonical
     opportunities, respecting every profile + regime limit.
 
@@ -226,8 +226,8 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
             entry['skip'] = 'MAX_CONCURRENT_POSITIONS'
             unfunded_strong.append(c); diag['skipped'].append(entry); continue
 
-        tier = P.cap_tier(sym, c.get('rank'))
-        cap_pct = P.per_asset_cap_pct(sym, c.get('rank'), profile)
+        tier = c.get('tier') or P.cap_tier(sym, c.get('rank'))
+        cap_pct = P.per_asset_cap_pct(sym, c.get('rank'), profile, tier=tier)
         per_asset_cap_val = equity * cap_pct / Decimal('100')
         room_cap = per_asset_cap_val - cur_pos_val
         room_deploy = max_deploy_val - cur_deployed
@@ -240,13 +240,18 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
         remaining_combined_risk = combined_risk_budget - cur_open_risk
         max_by_combined_risk = (remaining_combined_risk / stop_dist) if stop_dist > 0 else Decimal('0')
 
-        prof = P.asset_profile(sym, c.get('rank'))
+        prof = P.asset_profile(sym, c.get('rank'), tier=tier)
         liq_scale = prof['liquidityScale']
 
-        notional = rec
-        for cap in (room_cap, room_deploy, room_alt, max_by_trade_risk, max_by_combined_risk, deployable):
-            if cap is not None:
-                notional = min(notional, cap)
+        # find the BINDING limit (M5.1: surfaced on the intent for the rotation record)
+        cap_labels = [('PER_ASSET_CAP', room_cap), ('REGIME_DEPLOY_CEILING', room_deploy),
+                      ('ALTCOIN_EXPOSURE_CAP', room_alt), ('PER_TRADE_RISK', max_by_trade_risk),
+                      ('COMBINED_OPEN_RISK', max_by_combined_risk), ('FREE_USDC', deployable),
+                      ('CANONICAL_AMOUNT', rec)]
+        bound_by, notional = 'CANONICAL_AMOUNT', rec
+        for label, cap in cap_labels:
+            if cap is not None and cap < notional:
+                notional = cap; bound_by = label
         notional = notional * liq_scale
         notional = core.q_cash(notional)
 
@@ -262,7 +267,7 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
         added_risk = notional * stop_dist
         intents.append({'symbol': sym, 'action': action, 'notional': notional,
                         'markPx': px, 'stopDist': stop_dist, 'riskPct': risk_pct,
-                        'tier': tier, 'profile': prof, 'canonical': c,
+                        'tier': tier, 'boundBy': bound_by, 'profile': prof, 'canonical': c,
                         'invalidationPrice': _d(c.get('invalidationPrice'))})
         # decrement running budgets
         cur_deployed += notional
@@ -278,14 +283,17 @@ def allocate(*, acct, equity_info, candidates, regime, marks,
     # ---- deterministic rotation: free a slot/exposure for a stronger opportunity ----
     rot = plan_rotation(equity_info=equity_info, unfunded_strong=unfunded_strong,
                         candidates=candidates, marks=marks, profile=profile,
-                        existing_intents=intents)
+                        existing_intents=intents, holding_scores=holding_scores)
     if rot:
         intents.append(rot)
-        diag['rotation'] = {'exit': rot['symbol'], 'for': rot.get('rotateFor')}
+        diag['rotation'] = {'exit': rot['symbol'], 'for': rot.get('rotateFor'),
+                            'reducedScore': str(rot.get('reducedScore')),
+                            'targetScore': str(rot.get('targetScore'))}
     return {'intents': intents, 'diagnostics': diag}
 
 
-def plan_rotation(*, equity_info, unfunded_strong, candidates, marks, profile, existing_intents):
+def plan_rotation(*, equity_info, unfunded_strong, candidates, marks, profile,
+                  existing_intents, holding_scores=None):
     """If a strong approved BUY was blocked ONLY by slot/exposure limits, and a
     weaker HELD asset lags it by at least the rotation margin, emit a single EXIT
     of the weakest laggard to free capital/slot for the next tick. Deterministic
@@ -296,9 +304,13 @@ def plan_rotation(*, equity_info, unfunded_strong, candidates, marks, profile, e
     best = rank_opportunities(unfunded_strong)[0]
     best_score = _d(best.get('score')) or Decimal('0')
 
-    # scores of held assets from their canonical candidates
+    # scores of held assets: prefer the full holding_scores map (covers HOLD decisions),
+    # fall back to the actionable candidates.
     score_by_sym = {(c.get('symbol') or '').upper(): (_d(c.get('score')) or Decimal('0'))
                     for c in candidates}
+    if holding_scores:
+        for k, v in holding_scores.items():
+            score_by_sym[(k or '').upper()] = _d(v) or Decimal('0')
     already = {i['symbol'] for i in existing_intents if i.get('action') in ('EXIT', 'TRIM', 'SELL')}
     laggards = []
     for p in equity_info.get('positions', []):
@@ -316,4 +328,5 @@ def plan_rotation(*, equity_info, unfunded_strong, candidates, marks, profile, e
     if (best_score - hs) < profile['rotationMargin']:
         return None
     return {'symbol': sym, 'action': 'EXIT', 'fraction': Decimal('1'),
-            'reason': 'ROTATION', 'rotateFor': (best.get('symbol') or '').upper()}
+            'reason': 'ROTATION', 'rotateFor': (best.get('symbol') or '').upper(),
+            'reducedScore': hs, 'targetScore': best_score}

@@ -22,6 +22,25 @@ function PaperBadge() {
   return <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300"><FlaskConical className="h-3 w-3" />Paper only</span>;
 }
 
+// M5.1 — one metric row: current value vs its limit, with a labelled bar (never colour alone).
+function LimitBar({ label, valuePct, limitPct }) {
+  const v = valuePct == null ? null : Number(valuePct);
+  const lim = limitPct == null ? null : Number(limitPct);
+  const ratio = (v != null && lim) ? Math.min(1, v / lim) : 0;
+  const near = (v != null && lim) ? (v / lim >= 0.9) : false;
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+      <div className="flex items-baseline justify-between text-[11px]">
+        <span className="text-slate-400">{label}</span>
+        <span className="font-mono font-semibold text-slate-200">{v == null ? '—' : v + '%'}<span className="text-slate-500"> / {lim == null ? '—' : lim + '%'}</span>{near ? <span className="ml-1 font-bold text-amber-300">near limit</span> : null}</span>
+      </div>
+      <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+        <div className={`h-full ${near ? 'bg-amber-400' : 'bg-sky-400'}`} style={{ width: (ratio * 100).toFixed(0) + '%' }} />
+      </div>
+    </div>
+  );
+}
+
 export default function PaperTradingBot() {
   const [accounts, setAccounts] = React.useState(null);
   const [acctId, setAcctId] = React.useState(null);
@@ -185,6 +204,9 @@ export default function PaperTradingBot() {
   const integ = dash?.integrity || {};
   const perf = dash?.performance || {};
   const ap = dash?.autopilot || {};
+  const alloc = dash?.allocation || null;
+  const rankSnap = dash?.rankingSnapshot || null;
+  const rotations = dash?.rotations || [];
   const fmtTs = (t) => { try { return t ? new Date(t).toLocaleTimeString() : '—'; } catch (e) { return '—'; } };
 
   return (
@@ -252,6 +274,70 @@ export default function PaperTradingBot() {
         </div>
       </div>
 
+      {/* M5.1 — Portfolio allocation panel (value vs limit) */}
+      {alloc && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Portfolio allocation</p>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[10px] font-bold text-violet-200">{alloc.profile}</span>
+              <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-semibold text-slate-300">regime {alloc.regime} · ceiling {alloc.regimeDeployCeilingPct}%</span>
+            </div>
+          </div>
+          {!alloc.available && <p className="mb-2 flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Live valuation unavailable (a held asset lacks a fresh mark) — limits shown, current values paused.</p>}
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <LimitBar label="Deployed" valuePct={alloc.deployed?.pct} limitPct={alloc.deployed?.limitPct} />
+            <LimitBar label="BTC exposure" valuePct={alloc.btc?.pct} limitPct={alloc.btc?.limitPct} />
+            <LimitBar label="Altcoin exposure" valuePct={alloc.altcoins?.pct} limitPct={alloc.altcoins?.limitPct} />
+            <LimitBar label="Combined open risk" valuePct={alloc.openRisk?.pct} limitPct={alloc.openRisk?.limitPct} />
+            <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+              <div className="flex items-baseline justify-between text-[11px]"><span className="text-slate-400">Open positions</span><span className="font-mono font-semibold text-slate-200">{alloc.positions?.count} / {alloc.positions?.limit}</span></div>
+              <div className="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-slate-800"><div className="h-full bg-sky-400" style={{ width: ((Math.min(1, (alloc.positions?.count || 0) / (alloc.positions?.limit || 8))) * 100).toFixed(0) + '%' }} /></div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2"><p className="text-[11px] text-slate-400">Protected USDC</p><p className="font-mono text-[12px] font-semibold text-emerald-300">{usd(alloc.protectedUsdc)}</p></div>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-2"><p className="text-[11px] text-slate-400">Free USDC</p><p className="font-mono text-[12px] font-semibold text-slate-200">{usd(alloc.freeUsdc)}</p></div>
+            </div>
+          </div>
+          {rankSnap && (
+            <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[10.5px] text-slate-500">
+              <Info className="h-3.5 w-3.5" />
+              {rankSnap.available
+                ? <>Ranks: {rankSnap.source || 'discovery'} · snapshot {String(rankSnap.snapshotId || '').slice(0, 8)}… · {rankSnap.fresh ? 'fresh' : 'stale'} {rankSnap.observedAt ? '· ' + fmtTs(rankSnap.observedAt) : ''}</>
+                : <span className="text-amber-300">Live market-cap ranking unavailable — new altcoin sizing uses the conservative speculative cap.</span>}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* M5.1 — Rotation activity */}
+      {rotations.length > 0 && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+          <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Rotation activity</p>
+          <div className="space-y-2">
+            {rotations.map((r) => (
+              <div key={r._id || (r.reducedAsset + r.at)} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-[12px]">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-bold text-white">{r.reducedAsset}</span>
+                  <ArrowRight className="h-3.5 w-3.5 text-slate-500" />
+                  <span className="font-bold text-white">{r.targetAsset}</span>
+                  <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-bold ${r.status === 'COMPLETED' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}>{r.status === 'COMPLETED' ? 'completed' : 'reduced — awaiting buy'}</span>
+                </div>
+                <p className="mt-1 leading-relaxed text-slate-300">{r.headline}</p>
+                <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10.5px] text-slate-500">
+                  <span>scores {r.reducedScore} → {r.targetScore}</span>
+                  <span>regime {r.regime}</span>
+                  {r.allocationMovedUsd != null && <span>moved {usd(r.allocationMovedUsd)}</span>}
+                  {r.newPositionBoundBy && <span>bound by {String(r.newPositionBoundBy).replace(/_/g, ' ').toLowerCase()}</span>}
+                  <span>ranks {String(r.rankingSnapshotId || '—').slice(0, 8)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+
       {/* Approval outcome banner */}
       {msg && (
         <div className={`rounded-xl border p-3 text-[12px] font-medium ${
@@ -284,8 +370,9 @@ export default function PaperTradingBot() {
           <div className="space-y-1.5">
             {positions.map((p) => (
               <div key={p.paperPositionId} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-[12px]">
-                <span className="font-bold text-white">{p.asset}</span>
-                <span className="text-slate-400">{Number(p.netQuantity).toFixed(6)} @ {usd(p.averageEntryPrice)}</span>
+                <span className="max-w-[45%] truncate font-bold text-white">{p.asset}</span>
+                {p.tier && <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-slate-300">{p.tier}{p.marketCapRank ? ` · #${p.marketCapRank}` : ''}{p.rankAvailable === false ? ' · rank n/a' : ''}</span>}
+                <span className="text-slate-400">{Number(p.netQuantity).toLocaleString(undefined, { maximumFractionDigits: 8 })} @ {usd(p.averageEntryPrice)}</span>
                 <span className="text-slate-500">now {usd(p.currentPrice)}</span>
                 <span className={num(p.unrealizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}>uPnL {usd(p.unrealizedPnl)}</span>
                 <button disabled={busy} onClick={() => act(`${API_BASE}/v1/albert/paper/positions/${p.paperPositionId}/close`)} className="ml-auto rounded-md border border-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-300 hover:text-white">Close</button>

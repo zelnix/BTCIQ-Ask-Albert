@@ -66,7 +66,7 @@ from config import (
     driver_alert_subs_col, driver_alert_state_col, driver_alerts_col,
     diagnostics_runs_col, diagnostics_reports_col,
     paper_accounts_col, paper_proposals_col, paper_orders_col,
-    paper_positions_col, paper_ledger_col, paper_notif_col,
+    paper_positions_col, paper_ledger_col, paper_notif_col, paper_rotations_col,
     users_col, auth_sessions_col, GOOGLE_CLIENT_ID,
 )
 from email_service import send_email, resend_configured
@@ -7184,6 +7184,63 @@ def _paper_mark(sym):
     return None, False, None
 
 
+def _paper_live_ranks():
+    """M5.1: live market-cap ranks from the cached top-100 Discovery snapshot (no
+    new API key). Returns (ranks, meta):
+      ranks: {SYMBOL: {rank, source, snapshotId, observedAt, fresh}}
+      meta:  {available, snapshotId, source, observedAt, fresh}
+    Never blocks (Discovery rebuilds in a background thread). When ranking is
+    unavailable/stale the caller must fall back to the conservative SPEC cap and
+    surface that live ranking was unavailable — never silently use a static rank."""
+    try:
+        core = _discovery_core()
+    except Exception:  # noqa
+        core = None
+    if not core:
+        return {}, {'available': False, 'snapshotId': None, 'source': None,
+                    'observedAt': None, 'fresh': False}
+    try:
+        fresh = (_time_mod.time() - _DISCOVERY_CACHE['ts']) < _discovery_mod.DISCOVERY_TTL_SEC
+    except Exception:  # noqa
+        fresh = False
+    observed = core.get('sourceTimestamp') or core.get('generatedAt')
+    meta = {'available': True, 'snapshotId': core.get('universeSnapshotId'),
+            'source': core.get('source'), 'observedAt': observed, 'fresh': bool(fresh)}
+    ranks = {}
+    for a in (core.get('assets') or []):
+        sym = (a.get('symbol') or '').upper()
+        if not sym:
+            continue
+        ranks[sym] = {'rank': a.get('rank'), 'source': core.get('source'),
+                      'snapshotId': core.get('universeSnapshotId'),
+                      'observedAt': observed, 'fresh': bool(fresh)}
+    return ranks, meta
+
+
+def _paper_rank_for(sym, ranks, meta):
+    """Resolve (rank, tier, rankMeta) for allocation. BTC keeps its own tier by
+    identity. For altcoins, live+fresh rank -> tier by rank; otherwise conservative
+    SPEC tier with rankMeta.available=False (never a silent static rank)."""
+    sym = (sym or '').upper()
+    rm = ranks.get(sym) if ranks else None
+    live_ok = bool(meta.get('available') and meta.get('fresh') and rm and rm.get('rank'))
+    if sym == 'BTC':
+        rank = (rm or {}).get('rank') or 1
+        tier = 'BTC'
+    elif live_ok:
+        rank = rm['rank']; tier = _paper_profiles.cap_tier(sym, rank)
+    else:
+        rank = None; tier = 'SPEC'   # conservative fallback
+    rank_meta = {'symbol': sym, 'rank': (rm or {}).get('rank'),
+                 'source': (rm or {}).get('source') or meta.get('source'),
+                 'snapshotId': (rm or {}).get('snapshotId') or meta.get('snapshotId'),
+                 'observedAt': (rm or {}).get('observedAt') or meta.get('observedAt'),
+                 'fresh': bool((rm or {}).get('fresh')),
+                 'available': live_ok, 'appliedTier': tier}
+    return rank, tier, rank_meta
+
+
+
 def _paper_proposal_public(prop):
     return {k: v for k, v in (prop or {}).items() if k != '_id'}
 
@@ -7467,6 +7524,8 @@ def _autopilot_process_account_multi(acct):
     processed = dict(acct.get('processedDecisionSnapshots') or {})   # {asset: snapshotId}
     cursors = dict(acct.get('marketObservationCursors') or {})       # {asset: ts}
     regime = next((d.get('regime') for d in decisions if d.get('regime')), 'RANGE')
+    live_ranks, rank_meta_top = _paper_live_ranks()   # M5.1 live market-cap ranks
+    holding_scores = {(d.get('asset') or '').upper(): d.get('score') for d in decisions}
 
     # Build the set of NEW, actionable, eligible, independently-observed candidates.
     candidates = []
@@ -7503,9 +7562,11 @@ def _autopilot_process_account_multi(acct):
             _paper_ledger_add(acct_id, 'OBSERVED', 'decision', sid, None, None,
                               'Observed %s BUY but not eligible to trade — skipped.' % sym)
             continue
+        rank, tier, rmeta = _paper_rank_for(sym, live_ranks, rank_meta_top)
         candidates.append({'symbol': sym, 'action': d.get('action'),
                            'score': d.get('score'), 'confidence': d.get('confidence'),
-                           'rank': d.get('rank'), 'recommendedDeployNowUsd': d.get('recommendedDeployNowUsd'),
+                           'rank': rank, 'tier': tier, 'rankMeta': rmeta,
+                           'recommendedDeployNowUsd': d.get('recommendedDeployNowUsd'),
                            'invalidationPrice': d.get('invalidationPrice'),
                            'sellPlan': d.get('sellPlan'), 'held': sym in held_syms,
                            '_sid': sid, '_canonical': d})
@@ -7527,10 +7588,11 @@ def _autopilot_process_account_multi(acct):
                 continue  # one open proposal per asset
             can = c['_canonical']
             px, _ = marks.get(sym, (None, False))
-            prof = _paper_profiles.asset_profile(sym, c.get('rank'))
+            prof = _paper_profiles.asset_profile(sym, c.get('rank'), tier=c.get('tier'))
             if c['action'] == 'BUY':
                 alloc = _paper_portfolio.allocate(acct=acct, equity_info=equity_info,
-                                                  candidates=[c], regime=regime, marks=marks)
+                                                  candidates=[c], regime=regime, marks=marks,
+                                                  holding_scores=holding_scores)
                 intent = next((i for i in alloc['intents'] if i['symbol'] == sym and i['action'] in ('BUY', 'ADD')), None)
                 if not intent:
                     newly_seen[sym] = c['_sid']; continue
@@ -7563,7 +7625,8 @@ def _autopilot_process_account_multi(acct):
         # SELLs (reduce-only) allowed even when paused; BUYs suppressed while paused.
         alloc_candidates = [c for c in candidates if c['action'] == 'SELL' or not paused]
         alloc = _paper_portfolio.allocate(acct=acct, equity_info=equity_info,
-                                          candidates=alloc_candidates, regime=regime, marks=marks)
+                                          candidates=alloc_candidates, regime=regime, marks=marks,
+                                          holding_scores=holding_scores)
         traded_syms = set()
         for intent in alloc['intents']:
             sym = intent['symbol']
@@ -7571,7 +7634,8 @@ def _autopilot_process_account_multi(acct):
             sid = (next((c['_sid'] for c in candidates if c['symbol'] == sym), can.get('decisionSnapshotId'))
                    or 'rot_%s' % sym)
             px, fresh2 = marks.get(sym, (None, False))
-            prof = _paper_profiles.asset_profile(sym, can.get('rank'))
+            _rk, _tier, _rmeta = _paper_rank_for(sym, live_ranks, rank_meta_top)
+            prof = _paper_profiles.asset_profile(sym, _rk, tier=_tier)
             idem = 'auto:%s:%s:%s' % (acct_id, sym, sid)
             if intent['action'] in ('BUY', 'ADD'):
                 sizing = _paper_core.size_buy(sym, intent['notional'], px, profile=prof, price_q=prof['priceQ'])
@@ -7582,6 +7646,7 @@ def _autopilot_process_account_multi(acct):
                     sizing, can, base_currency=acct.get('baseCurrency', 'USDC'), asset=sym, price_q=prof['priceQ'])
                 if not err:
                     traded_syms.add(sym)
+                    _paper_complete_rotation(acct_id, sym, intent, sizing)   # M5.1 finish a pending rotation
                     _autopilot_notify(pid, acct_id, 'Paper Autopilot bought %s' % sym,
                                       'Auto-executed a simulated %s on %s. Paper only — no real money.'
                                       % (intent['action'], sym))
@@ -7600,17 +7665,25 @@ def _autopilot_process_account_multi(acct):
                     idem_key=idem, proposal_id='auto_%s_%s' % (sym, sid), canonical=can, asset=sym)
                 if not err:
                     traded_syms.add(sym)
+                    if intent.get('reason') == 'ROTATION':      # M5.1 open a rotation record
+                        _paper_record_rotation_reduce(acct_id, pid, intent, dec_by_sym, rank_meta_top,
+                                                      regime, res)
                     _autopilot_notify(pid, acct_id, 'Paper Autopilot reduced %s' % sym,
                                       'Auto-executed a simulated %s on %s. Paper only — no real money.'
                                       % (intent['action'], sym))
                     acct = paper_accounts_col.find_one({'paperAccountId': acct_id}) or acct
-        # Consume snapshots + advance cursors for every candidate we evaluated this tick.
+        # Consume snapshots + advance cursors. A BUY snapshot is consumed ONLY when it
+        # actually traded; an untraded BUY (blocked by a limit or awaiting rotation
+        # capital) is left UNCONSUMED so a later tick can act once cash frees. SELL/other
+        # resolved candidates are consumed. Traded assets advance their observation cursor.
         for c in candidates:
-            if c['action'] == 'BUY' and paused:
-                continue  # leave BUY snapshot unconsumed so resume can act
-            newly_seen[c['symbol']] = c['_sid']
-            if c['symbol'] in traded_syms:
-                cursors[c['symbol']] = mark_ts.get(c['symbol'])
+            sym = c['symbol']
+            if sym in traded_syms:
+                newly_seen[sym] = c['_sid']
+                cursors[sym] = mark_ts.get(sym)
+            elif c['action'] != 'BUY':
+                newly_seen[sym] = c['_sid']
+            # else: untraded BUY -> leave unconsumed to retry next tick
         if traded_syms:
             _autopilot_set_vis(acct_id, lastTradeAt=now_iso)
         _persist_multi_cursors(acct_id, processed, newly_seen, cursors)
@@ -7626,6 +7699,53 @@ def _persist_multi_cursors(acct_id, processed, newly_seen, cursors):
     paper_accounts_col.update_one(
         {'paperAccountId': acct_id},
         {'$set': {'processedDecisionSnapshots': processed, 'marketObservationCursors': cursors}})
+
+
+def _paper_record_rotation_reduce(acct_id, pid, intent, dec_by_sym, rank_meta, regime, sell_res):
+    """M5.1: open a rotation audit record when Autopilot REDUCES a laggard to fund a
+    stronger opportunity. The buy is a separate later canonical action; this record is
+    completed once the target actually buys (reduce-first, buy-only-after-cash)."""
+    reduced = (intent.get('symbol') or '').upper()
+    target = (intent.get('rotateFor') or '').upper()
+    rs = intent.get('reducedScore'); ts = intent.get('targetScore')
+    headline = ('Autopilot reduced %s and is rotating into %s — %s showed stronger relative '
+                'strength (score %s vs %s), higher opportunity quality and sufficient liquidity.'
+                % (reduced, target, target, _paper_core.dstr(ts, Decimal('0.1')) if ts is not None else '?',
+                   _paper_core.dstr(rs, Decimal('0.1')) if rs is not None else '?'))
+    try:
+        paper_rotations_col.insert_one({
+            '_id': 'rot_' + uuid.uuid4().hex[:16], 'paperAccountId': acct_id, 'ownerId': pid,
+            'reducedAsset': reduced, 'reducedScore': _paper_core.dstr(rs, Decimal('0.1')) if rs is not None else None,
+            'targetAsset': target, 'targetScore': _paper_core.dstr(ts, Decimal('0.1')) if ts is not None else None,
+            'regime': regime,
+            'reducedSnapshotId': (dec_by_sym.get(reduced) or {}).get('decisionSnapshotId'),
+            'targetSnapshotId': (dec_by_sym.get(target) or {}).get('decisionSnapshotId'),
+            'rankingSnapshotId': rank_meta.get('snapshotId'),
+            'primaryReason': 'STRONGER_RELATIVE_STRENGTH',
+            'reducedProceeds': (sell_res or {}).get('proceeds'),
+            'allocationMovedUsd': None, 'newPositionBoundBy': None,
+            'status': 'REDUCED', 'headline': headline,
+            'at': datetime.datetime.utcnow().isoformat(), 'completedAt': None, 'paperOnly': True})
+    except Exception:  # noqa
+        traceback.print_exc()
+
+
+def _paper_complete_rotation(acct_id, target_sym, intent, sizing):
+    """M5.1: complete a pending rotation record once the target opportunity is bought,
+    recording the capital actually moved + which risk limit bound the new position."""
+    try:
+        rec = paper_rotations_col.find_one(
+            {'paperAccountId': acct_id, 'targetAsset': (target_sym or '').upper(), 'status': 'REDUCED'},
+            sort=[('at', -1)])
+        if not rec:
+            return
+        paper_rotations_col.update_one({'_id': rec['_id']}, {'$set': {
+            'allocationMovedUsd': _paper_core.dstr(sizing.get('notional')),
+            'newPositionBoundBy': intent.get('boundBy'),
+            'status': 'COMPLETED', 'completedAt': datetime.datetime.utcnow().isoformat()}})
+    except Exception:  # noqa
+        traceback.print_exc()
+
 
 
 def _paper_make_proposal_multi(acct_id, pid, side, canonical, sizing, asset):
@@ -7820,22 +7940,29 @@ def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
             mpx, mfresh, _ts = _paper_mark(sym)
             marks[sym] = (mpx, mfresh)
         pe = _paper_portfolio.compute_portfolio_equity(a, marks)
+        live_ranks, rank_meta_top = _paper_live_ranks()   # M5.1 provenance for the panel
         lots_by_id = {(l.get('asset') or '').upper(): l for l in (a.get('lots') or [])}
         positions = []
         unreal_total = Decimal('0'); unreal_known = True
+        btc_val = Decimal('0')
         for p in pe['positions']:
             sym = p['symbol']; lot = lots_by_id.get(sym, {})
-            pq = _paper_profiles.asset_profile(sym).get('priceQ', _paper_core.PRICE_Q)
+            _rk, _tier, _rmeta = _paper_rank_for(sym, live_ranks, rank_meta_top)
+            pq = _paper_profiles.asset_profile(sym, _rk, tier=_tier).get('priceQ', _paper_core.PRICE_Q)
             if p['unrealized'] is not None:
                 unreal_total += p['unrealized']
             else:
                 unreal_known = False
+            if sym == 'BTC' and p.get('value') is not None:
+                btc_val = p['value']
             positions.append({
                 'paperPositionId': lot.get('lotId'), 'asset': sym,
                 'netQuantity': _paper_core.qty_dstr(p['qty']),
                 'averageEntryPrice': _paper_core.dstr(p['avgEntry'], pq),
                 'costBasis': _paper_core.dstr(lot.get('costBasis')),
                 'entryDecisionSnapshotId': lot.get('entryDecisionSnapshotId'),
+                'tier': _tier, 'marketCapRank': _rmeta.get('rank'),
+                'rankAvailable': _rmeta.get('available'), 'rankSource': _rmeta.get('source'),
                 'invalidationPrice': _paper_core.dstr(p['invalidation'], pq) if p.get('invalidation') is not None else None,
                 'currentPrice': _paper_core.dstr(p['markPx'], pq) if p['markFresh'] else None,
                 'unrealizedPnl': _paper_core.dstr(p['unrealized']) if p['unrealized'] is not None else None})
@@ -7849,7 +7976,36 @@ def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
               'realizedPnl': _s(pe['realizedPnl']), 'fees': _s(pe['fees']),
               'unrealizedPnl': _s(unreal_total) if unreal_known else None,
               'drawdownPct': _s(pe['drawdownPct'], _paper_core.PCT_Q), 'highWater': _s(pe['highWater'])}
+
+        # ---- M5.1 portfolio allocation panel (value vs limit) ----
+        try:
+            regime_now = (_albert_deps.regime_col.find_one({'_id': 'albert_regime'}) or {}).get('regime') or 'RANGE'
+        except Exception:  # noqa
+            regime_now = 'RANGE'
+        _prof = _paper_profiles.AGGRESSIVE_EXPERIENCED_V1
+        _band = _paper_profiles.regime_band(regime_now)
+        _equity = pe['equity']
+
+        def _pct(v):
+            if _equity is None or _equity <= 0 or v is None:
+                return None
+            return _paper_core.dstr(v / _equity * Decimal('100'), Decimal('0.1'))
+        _protected = (_equity * _prof['protectedUsdcPct'] / Decimal('100')) if _equity is not None else None
+        allocation_panel = {
+            'profile': _prof['profileId'], 'regime': regime_now, 'available': pe['available'],
+            'equity': pe['equityStr'],
+            'deployed': {'pct': _pct(pe['positionValueTotal']), 'limitPct': str(_band['maxDeployPct'])},
+            'btc': {'pct': _pct(btc_val), 'limitPct': str(_prof['btcAllocPct'])},
+            'altcoins': {'pct': _pct(pe['altcoinValueTotal']), 'limitPct': str(_band['altCeilingPct'])},
+            'openRisk': {'pct': _pct(pe['openRiskUsd']), 'limitPct': str(_prof['maxCombinedOpenRiskPct'])},
+            'positions': {'count': pe['openPositionsCount'], 'limit': _prof['maxConcurrentPositions']},
+            'protectedUsdc': _s(_protected), 'freeUsdc': _s(pe['deployableCash']),
+            'regimeDeployCeilingPct': str(_band['maxDeployPct'])}
+        ranking_snapshot = rank_meta_top
+        rotations = [_paper_jsonify(r) for r in paper_rotations_col.find(
+            {'paperAccountId': acct_id}).sort('at', -1).limit(10)]
     else:
+        allocation_panel = None; ranking_snapshot = None; rotations = []
         recon = _paper_core.reconcile(a)
         eq = _paper_equity(a, persist=False)
         px = eq['_px']
@@ -7901,6 +8057,8 @@ def paper_dashboard(acct_id: str, user: dict = Depends(get_current_user)):
                           'executionEnabled': PAPER_EXECUTION_ENABLED,
                           'autopilotEnabled': PAPER_AUTOPILOT_ENABLED,
                           'primaryPauseReason': pause_reason},
+            'allocation': allocation_panel, 'rankingSnapshot': ranking_snapshot,
+            'rotations': rotations,
             'autopilot': _paper_autopilot_status(a)}
 
 
