@@ -92,3 +92,6 @@ credentials.json
 .credentials
 .next/cache/webpack/client-production/0.pack
 .next/cache/webpack/server-production/0.pack
+.env
+.env.*
+*.env
