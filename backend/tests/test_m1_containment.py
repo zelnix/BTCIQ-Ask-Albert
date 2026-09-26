@@ -178,7 +178,7 @@ def test_diagnostics_no_fabricated_pass(users):
     checks = {c['check_id']: c for c in body['technical_details']['checks']}
     # Device/client-owned + non-observable checks must be NOT_TESTABLE, not PASS.
     for cid in ('app.version.compatibility', 'app.runtime.integrity', 'app.cache.integrity',
-                'network.internet.reachability', 'network.btciq.tls', 'engine.health'):
+                'network.internet.reachability', 'network.askalbert.tls', 'engine.health'):
         assert checks[cid]['result'] == 'NOT_TESTABLE', f'{cid} was {checks[cid]["result"]}'
     # Auth is derived from the (valid) session -> PASS with SESSION_VALID evidence.
     assert checks['auth.session.validity']['result'] == 'PASS'

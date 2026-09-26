@@ -3658,7 +3658,7 @@ export default function DashboardPage() {
     if (active === 'performance') return <PerformanceHubSection d={d} />;
     if (active === 'timemachine') return <TimeMachineSection />;
     if (active === 'ask') return <AskAlbert onNav={setActive} />;
-    if (active === 'strategies') return <StrategyStudio />;
+    if (active === 'strategies') return <StrategyStudio onNav={setActive} />;
     if (active === 'alert-engine') return <AlertEngineSection />;
     if (active === 'alerts') return <AlertsSection d={d} alertsData={alertsData} onAck={ackAlerts} filter={alertFilter} onFilter={setAlertFilter} coins={coins} />;
     if (active === 'settings') return <SettingsSection />;
@@ -3763,7 +3763,7 @@ export default function DashboardPage() {
         {/* Main */}
         <div className="min-w-0 flex-1">
           {/* Top bar */}
-          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/80 px-4 py-3 backdrop-blur md:px-8">
+          <div className="sticky top-0 z-10 flex min-w-0 flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/80 px-4 py-3 backdrop-blur md:px-8">
             <div className="flex items-center gap-2 md:hidden"><img src="/ask-albert-logo.png" alt="Ask Albert" className="h-9 w-auto object-contain" /></div>
             <CoinPicker coins={coins} symbol={symbol} onSelect={setSymbol} />
             {symbol !== 'BTC' && (
@@ -3772,7 +3772,7 @@ export default function DashboardPage() {
                 <Scale className="h-4 w-4" /><span className="hidden sm:inline">vs Bitcoin</span>
               </button>
             )}
-            <div className="hidden items-center gap-2 md:flex">
+            <div className="hidden min-w-0 items-center gap-2 xl:flex">
               <span className="flex items-center gap-1 text-xs font-bold text-emerald-400">
                 <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" /><span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" /></span>LIVE
               </span>

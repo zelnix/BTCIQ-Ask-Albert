@@ -1,364 +1,284 @@
 'use client';
-// Paper-Trading Bot — paper-only forward test of Albert's deterministic engine.
-// Create an account, pick a mode (Observe / Ask me first / Autopilot), review & approve
-// proposals, watch simulated fills, positions, equity and the activity ledger. No real
-// money, no exchange keys — ever. Every screen carries a "Paper only" badge.
+// Paper Trading — the AGGREGATE view (M-G).
+//
+// This screen is review-only. There is NO setup here and no separate "Observe"
+// mode: a strategy is started from the strategy itself (Strategies → pick one →
+// Start paper trading), and it trades its own ring-fenced virtual wallet. Here we
+// simply add it all up so you can see how the whole programme is doing.
+//
+// No real money, no exchange keys — ever.
 import React from 'react';
-import { API_BASE, getPid } from '../lib/api';
+import { API_BASE } from '../lib/api';
 import {
-  Loader2, FlaskConical, Play, Pause, Bot, Eye, HandCoins, ShieldCheck, CheckCircle2,
-  XCircle, TrendingUp, AlertTriangle, Info, ArrowRight,
+  Loader2, FlaskConical, Crosshair, ShieldCheck, TrendingUp, Info, ArrowRight,
+  HandCoins, Bot, AlertTriangle, Wallet,
 } from 'lucide-react';
 
 const usd = (v) => (v == null ? '\u2014' : '$' + Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }));
-const num = (v) => (v == null ? 0 : Number(v));
-const MODES = [
-  { id: 'OBSERVE', label: 'Observe only', desc: 'Albert logs signals but never trades.', Icon: Eye },
-  { id: 'APPROVAL_REQUIRED', label: 'Ask me first', desc: 'Albert proposes; you approve each paper trade.', Icon: HandCoins },
-  { id: 'PAPER_AUTOPILOT', label: 'Run Paper Autopilot', desc: 'Albert trades automatically in the background — paper only.', Icon: Bot },
-];
+const signed = (v) => (v == null ? '\u2014' : (Number(v) >= 0 ? '+' : '') + usd(v).replace('$-', '-$'));
+const pnlColor = (v) => (v == null ? 'text-slate-200' : Number(v) >= 0 ? 'text-emerald-300' : 'text-rose-300');
+
+const STATUS = {
+  SAVED: { label: 'Saved · not trading', color: 'text-slate-300', dot: 'bg-slate-500' },
+  STOPPED: { label: 'Stopped', color: 'text-amber-300', dot: 'bg-amber-400' },
+  LIVE: { label: 'Paper trading', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+  HALTED_RISK: { label: 'Halted — drawdown limit', color: 'text-rose-300', dot: 'bg-rose-400' },
+  ARCHIVED: { label: 'Archived', color: 'text-slate-500', dot: 'bg-slate-600' },
+};
+const st = (s) => STATUS[s] || STATUS.SAVED;
+const approvalLabel = (m) => (m === 'AUTOPILOT' ? 'Autopilot' : m === 'REVIEW' ? 'Review and approve' : '—');
 
 function PaperBadge() {
   return <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300"><FlaskConical className="h-3 w-3" />Paper only</span>;
 }
 
+function timeAgo(iso) {
+  if (!iso) return '';
+  const t = Date.now() - new Date(String(iso).replace('Z', '') + 'Z').getTime();
+  if (Number.isNaN(t)) return '';
+  const m = Math.floor(t / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
+
 export default function PaperTradingBot({ onNav }) {
-  const [accounts, setAccounts] = React.useState(null);
-  const [acctId, setAcctId] = React.useState(null);
-  const [dash, setDash] = React.useState(null);
-  const [busy, setBusy] = React.useState(false);
-  const [msg, setMsg] = React.useState(null);              // approval outcome banner
-  const [pendingApprove, setPendingApprove] = React.useState({});  // per-proposal in-flight guard
-  const keysRef = React.useRef({});                        // one idempotency key per approval action
-  const pid = typeof window !== 'undefined' ? getPid() : '';
+  const [d, setD] = React.useState(null);
+  const [state, setState] = React.useState('loading'); // loading | ready | signedout | error
 
-  const keyFor = (proposalId) => {
-    if (!keysRef.current[proposalId]) {
-      const gen = (typeof crypto !== 'undefined' && crypto.randomUUID)
-        ? crypto.randomUUID() : ('idem_' + Date.now() + '_' + Math.random().toString(36).slice(2));
-      keysRef.current[proposalId] = gen;
-    }
-    return keysRef.current[proposalId];
-  };
-
-  const loadAccounts = React.useCallback(async () => {
-    if (!pid) { setAccounts([]); return; }
+  const load = React.useCallback(async () => {
     try {
-      const r = await fetch(`${API_BASE}/v1/albert/paper/accounts?pid=${encodeURIComponent(pid)}`, { cache: 'no-store' });
-      const j = await r.json();
-      setAccounts(j.accounts || []);
-      if (!acctId && j.accounts && j.accounts.length) setAcctId(j.accounts[0].paperAccountId);
-    } catch (e) { setAccounts([]); }
-  }, [pid, acctId]);
-
-  const loadDash = React.useCallback(async () => {
-    if (!acctId || !pid) return;
-    try {
-      const r = await fetch(`${API_BASE}/v1/albert/paper/accounts/${acctId}/dashboard?pid=${encodeURIComponent(pid)}`, { cache: 'no-store' });
-      const j = await r.json();
-      setDash(j && j.status === 'ready' ? j : null);
-    } catch (e) { setDash(null); }
-  }, [acctId, pid]);
-
-  React.useEffect(() => { loadAccounts(); }, [loadAccounts]);
-  React.useEffect(() => { loadDash(); }, [loadDash]);
-
-  const createAccount = async (mode) => {
-    setBusy(true);
-    try {
-      const r = await fetch(`${API_BASE}/v1/albert/paper/accounts`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pid, name: 'Multi-Asset Forward Test', startingCash: '100000', mode }),
+      const r = await fetch(`${API_BASE}/v1/albert/paper/overview`, {
+        credentials: 'include', cache: 'no-store',
       });
+      if (r.status === 401 || r.status === 403) { setState('signedout'); return; }
       const j = await r.json();
-      if (j.paperAccountId) { setAcctId(j.paperAccountId); await loadAccounts(); }
-    } catch (e) { /* noop */ }
-    setBusy(false);
-  };
+      if (r.ok && j.status === 'ready') { setD(j); setState('ready'); }
+      else setState('error');
+    } catch (e) { setState('error'); }
+  }, []);
 
-  const act = async (url, body) => {
-    setBusy(true);
-    const idempotencyKey = 'ui_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    try { await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid, confirm: true, idempotencyKey, ...(body || {}) }) }); } catch (e) { /* noop */ }
-    await loadDash(); await loadAccounts(); setBusy(false);
-  };
-  const setMode = async (mode) => {
-    setBusy(true);
-    const idempotencyKey = 'ui_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-    try { await fetch(`${API_BASE}/v1/albert/paper/accounts/${acctId}/mode`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid, mode, confirm: true, idempotencyKey }) }); } catch (e) { /* noop */ }
-    await loadDash(); setBusy(false);
-  };
+  React.useEffect(() => { load(); }, [load]);
+  // Aggregate figures refresh quietly; this screen never writes anything.
+  React.useEffect(() => {
+    const t = setInterval(load, 30000);
+    return () => clearInterval(t);
+  }, [load]);
 
-  // Approval sends ONLY the contract fields — never quantity/price/invalidation/targets.
-  // One idempotency key per approval action, reused on retry; double-taps are blocked.
-  const approveProposal = async (p) => {
-    if (pendingApprove[p.proposalId]) return;               // double-tap protection
-    setPendingApprove((s) => ({ ...s, [p.proposalId]: true }));
-    setMsg(null);
-    const key = keyFor(p.proposalId);
-    let keepKey = true;                                     // keep key so a retry reuses it
-    try {
-      const r = await fetch(`${API_BASE}/v1/albert/paper/proposals/${p.proposalId}/approve`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          expectedProposalVersion: p.version ?? 0,
-          decisionSnapshotId: p.decisionSnapshotId,
-          idempotencyKey: key,
-        }),
-      });
-      if (r.status === 503) {
-        setMsg({ t: 'info', m: 'Paper execution is temporarily disabled while final acceptance checks are completed. No real money is affected.' });
-      } else if (r.status === 401) {
-        setMsg({ t: 'err', m: 'Your session expired — please sign in again to approve.' });
-      } else if (r.status === 404) {
-        setMsg({ t: 'err', m: 'This proposal is no longer available.' }); keepKey = false;
-      } else if (r.status === 409) {
-        setMsg({ t: 'warn', m: 'This proposal expired or changed — Albert will surface a fresh one.' }); keepKey = false;
-      } else if (r.status === 422) {
-        setMsg({ t: 'err', m: 'The approval request was incomplete — please try again.' });
-      } else if (r.ok) {
-        const j = await r.json().catch(() => ({}));
-        if (j.proposalStatus === 'REJECTED_ON_REVALIDATION') {
-          setMsg({ t: 'warn', m: 'The decision changed on a fresh check — paper trade not placed.' }); keepKey = false;
-        } else {
-          setMsg({ t: 'ok', m: 'Paper trade approved and simulated. No real money was involved.' }); keepKey = false;
-        }
-      } else {
-        setMsg({ t: 'err', m: 'Something went wrong — please retry.' });
-      }
-    } catch (e) {
-      setMsg({ t: 'err', m: 'Network error — you can safely retry; it won’t double-fill.' });
-    }
-    if (!keepKey) delete keysRef.current[p.proposalId];
-    await loadDash(); await loadAccounts();
-    setPendingApprove((s) => { const n = { ...s }; delete n[p.proposalId]; return n; });
-  };
+  const goStrategies = () => onNav && onNav('strategies');
 
-  const cancelProposal = async (p) => {
-    if (pendingApprove[p.proposalId]) return;
-    setPendingApprove((s) => ({ ...s, [p.proposalId]: true }));
-    try {
-      await fetch(`${API_BASE}/v1/albert/paper/proposals/${p.proposalId}/cancel`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
-      });
-    } catch (e) { /* noop */ }
-    delete keysRef.current[p.proposalId];
-    await loadDash(); await loadAccounts();
-    setPendingApprove((s) => { const n = { ...s }; delete n[p.proposalId]; return n; });
-  };
+  const Header = ({ children }) => (
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h2 className="flex flex-wrap items-center gap-2 text-xl font-bold text-white">
+          <FlaskConical className="h-5 w-5 text-amber-300" />Paper Trading <PaperBadge />
+        </h2>
+        <p className="mt-0.5 text-[12px] text-slate-400">
+          How every strategy is doing with virtual money — added up. Start or stop trading on the strategy itself.
+        </p>
+      </div>
+      {children}
+    </div>
+  );
 
-  if (!pid) {
-    return <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-6 text-[13px] text-slate-400">Sign in to run a paper-trading forward test.</div>;
+  if (state === 'loading') {
+    return <div className="flex items-center gap-2 text-[13px] text-slate-400"><Loader2 className="h-4 w-4 animate-spin" />Loading your paper performance…</div>;
   }
-  if (accounts === null) {
-    return <div className="flex items-center gap-2 text-[13px] text-slate-400"><Loader2 className="h-4 w-4 animate-spin" />Loading paper accounts…</div>;
+  if (state === 'signedout') {
+    return <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-6 text-[13px] text-slate-400">Sign in to see how your strategies are doing on paper.</div>;
   }
-
-  // Empty state — no account yet.
-  if (!accounts.length) {
+  if (state === 'error' || !d) {
     return (
-      <div className="space-y-4">
-        <div><h2 className="flex items-center gap-2 text-xl font-bold text-white"><FlaskConical className="h-5 w-5 text-amber-300" />Paper Trading Bot</h2>
-          <p className="mt-0.5 text-[12px] text-slate-400">Forward-test Albert’s engine with virtual money — no exchange keys, no real orders.</p></div>
-        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-5">
-          <PaperBadge />
-          <p className="mt-3 text-[13px] text-slate-300">Start a paper account with $100,000 virtual cash and choose how hands-on you want to be:</p>
-          <div className="mt-3 grid gap-2 sm:grid-cols-3">
-            {MODES.map((m) => (
-              <button key={m.id} disabled={busy} onClick={() => createAccount(m.id)}
-                className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 text-left hover:border-sky-500/40 disabled:opacity-60">
-                <m.Icon className="h-5 w-5 text-sky-300" />
-                <p className="mt-1.5 text-[13px] font-bold text-white">{m.label}</p>
-                <p className="text-[11px] text-slate-400">{m.desc}</p>
-              </button>
-            ))}
-          </div>
-          <p className="mt-3 flex items-center gap-1.5 text-[11px] text-slate-500"><ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />This never connects to an exchange or places real trades.</p>
+      <div className="space-y-3">
+        <Header />
+        <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-5 text-[13px] text-slate-400">
+          Albert couldn&rsquo;t load your paper performance just now.
+          <button onClick={load} className="ml-2 font-semibold text-sky-400 hover:text-sky-300">Try again</button>
         </div>
       </div>
     );
   }
 
-  const eq = dash?.equity || {};
-  const acct = dash?.account || {};
-  const positions = dash?.positions || [];
-  const proposals = dash?.pendingProposals || [];
-  const activity = dash?.recentActivity || [];
-  const integ = dash?.integrity || {};
-  const perf = dash?.performance || {};
-  const ap = dash?.autopilot || {};
-  const strat = dash?.strategy || null;
-  const fmtTs = (t) => { try { return t ? new Date(t).toLocaleTimeString() : '—'; } catch (e) { return '—'; } };
+  const t = d.totals || {};
+  const rows = d.strategies || [];
+  const traded = rows.filter((r) => r.paperAccountId);
+  const live = rows.filter((r) => r.paperStatus === 'LIVE');
+  const activity = d.activity || [];
+  const positions = d.positions || [];
+  const needsApproval = d.pendingApprovals || [];
 
-  // ---- M-F plain-English summary (deterministic, straight from the payload) ----
-  const modeLabel = (MODES.find((m) => m.id === acct.mode) || {}).label || acct.mode || '—';
-  const running = acct.runtimeState === 'RUNNING';
-  const RISK_PLAIN = {
-    PAPER_EXECUTION_DISABLED_PENDING_REMEDIATION: 'Paper execution switched off',
-    RECONCILIATION_MISMATCH: 'Ledger check failed — trading stopped',
-    EQUITY_UNAVAILABLE: 'Valuation unavailable — holding',
-    DRAWDOWN_BREAKER: 'Drawdown limit hit — entries paused',
-  };
-  const riskCondition = integ.primaryPauseReason
-    ? (RISK_PLAIN[integ.primaryPauseReason] || String(integ.primaryPauseReason).replace(/_/g, ' ').toLowerCase())
-    : (eq.drawdownPct != null && Number(eq.drawdownPct) < 0 ? `Within limits · ${eq.drawdownPct}% off high` : 'Within your limits');
-  const freshnessPlain = integ.marketData === 'CURRENT' ? 'Fresh'
-    : integ.marketData === 'STALE' ? 'Stale — entries paused'
-    : integ.marketData === 'FLAT' ? 'No positions to price' : (integ.marketData || 'Unknown');
-  const lastAct = activity[0] || null;
-  const lastActionPlain = lastAct
-    ? `${(lastAct.eventType || '').replace(/_/g, ' ').toLowerCase()} · ${fmtTs(lastAct.recordedAt || lastAct.effectiveAt)}`
-    : 'Nothing yet';
-  const plainSummary = [
-    `Albert is in ${modeLabel} on this account and is ${running ? 'running' : 'paused'}.`,
-    strat ? `He is working to your “${strat.name}” strategy (${(strat.assets || []).join(', ') || 'no assets'}).`
-      : 'No strategy is assigned yet, so he only acts on the engine’s own decisions.',
-    eq.value != null
-      ? `The account is worth ${usd(eq.value)}, with ${usd(eq.deployableCash)} free to invest and ${positions.length} open ${positions.length === 1 ? 'position' : 'positions'}.`
-      : `Live valuation is unavailable right now, so Albert is holding; ${positions.length} ${positions.length === 1 ? 'position is' : 'positions are'} still tracked exactly.`,
-    integ.marketData === 'STALE'
-      ? 'Price data is stale, so no new entries will be taken until it refreshes.'
-      : integ.primaryPauseReason ? `${riskCondition} — new entries are on hold.`
-        : 'Price data is fresh and everything is inside your limits.',
-    lastAct ? `Last action: ${lastAct.note || (lastAct.eventType || '').replace(/_/g, ' ').toLowerCase()}.`
-      : 'Nothing has happened on this account yet.',
+  // ---- Nothing is trading yet: point at the one journey, don't offer a setup ----
+  if (!traded.length) {
+    return (
+      <div className="space-y-4">
+        <Header />
+        <div className="rounded-2xl border border-dashed border-slate-700 bg-slate-950/40 p-6 text-center">
+          <Wallet className="mx-auto h-7 w-7 text-slate-500" />
+          <p className="mt-2 text-[14px] font-semibold text-white">No strategy is paper trading yet</p>
+          <p className="mx-auto mt-1 max-w-[52ch] text-[12.5px] leading-relaxed text-slate-400">
+            {rows.length
+              ? `You have ${rows.length} saved ${rows.length === 1 ? 'strategy' : 'strategies'}. Open one and tap “Start paper trading” — it gets its own virtual wallet, and its results appear here.`
+              : 'Build a strategy with Albert, save it, then tap “Start paper trading” on it. Each strategy gets its own virtual wallet, and its results appear here.'}
+          </p>
+          <button onClick={goStrategies} className="mx-auto mt-3 inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3.5 py-2 text-[13px] font-semibold text-white hover:bg-violet-500">
+            <Crosshair className="h-4 w-4" />{rows.length ? 'Go to your strategies' : 'Build a strategy'}
+          </button>
+          <p className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-slate-500">
+            <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />Paper only — this never connects to an exchange or places a real order.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ---- Plain-English roll-up, composed straight from the payload ----
+  const summary = [
+    live.length
+      ? `${live.length} of your ${rows.length} ${rows.length === 1 ? 'strategy is' : 'strategies are'} paper trading right now${t.autopilotStrategies ? ` (${t.autopilotStrategies} on autopilot)` : ''}.`
+      : `None of your strategies are trading right now — ${traded.length} ${traded.length === 1 ? 'has' : 'have'} a wallet with history you can pick back up.`,
+    t.valueAvailable && t.value != null
+      ? `Together they hold ${usd(t.value)} of the ${usd(t.startingCash)} they started with, so you are ${Number(t.pnlUsd) >= 0 ? 'up' : 'down'} ${signed(t.pnlUsd).replace('+', '')}${t.pnlPct != null ? ` (${t.pnlPct}%)` : ''}.`
+      : 'Live valuation is unavailable for at least one wallet right now, so the combined total is being withheld rather than guessed.',
+    t.closedTrades
+      ? `${t.closedTrades} ${t.closedTrades === 1 ? 'trade has' : 'trades have'} closed${t.winRatePct != null ? ` with a ${t.winRatePct}% win rate` : ''}, and ${positions.length} ${positions.length === 1 ? 'position is' : 'positions are'} open.`
+      : `${positions.length} ${positions.length === 1 ? 'position is' : 'positions are'} open and nothing has closed yet.`,
+    needsApproval.length
+      ? `${needsApproval.length} ${needsApproval.length === 1 ? 'trade needs' : 'trades need'} your approval — you approve those on the strategy itself.`
+      : 'Nothing is waiting on you.',
   ].join(' ');
 
   return (
     <div className="space-y-4">
-      {/* Header + status */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h2 className="flex items-center gap-2 text-xl font-bold text-white"><FlaskConical className="h-5 w-5 text-amber-300" />Paper Trading Bot <PaperBadge /></h2>
-          <p className="mt-0.5 text-[12px] text-slate-400">{acct.name} · {acct.baseCurrency} · started {usd(acct.startingCash)}</p></div>
-        <div className="flex items-center gap-2">
-          {acct.runtimeState === 'RUNNING'
-            ? <button disabled={busy} onClick={() => act(`${API_BASE}/v1/albert/paper/accounts/${acctId}/pause`)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-[12px] font-semibold text-slate-300 hover:text-white"><Pause className="h-3.5 w-3.5" />Pause</button>
-            : <button disabled={busy} onClick={() => act(`${API_BASE}/v1/albert/paper/accounts/${acctId}/resume`)} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-[12px] font-semibold text-emerald-300"><Play className="h-3.5 w-3.5" />Resume</button>}
-        </div>
-      </div>
+      <Header>
+        <button onClick={() => onNav && onNav('paperengine')}
+          className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300">
+          Technical detail<ArrowRight className="h-3.5 w-3.5" />
+        </button>
+      </Header>
 
-      {/* Mode selector */}
+      {/* ---- Combined performance ---- */}
       <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-        <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Mode</p>
-        <div className="grid gap-2 sm:grid-cols-3">
-          {MODES.map((m) => {
-            const on = acct.mode === m.id;
-            return (
-              <button key={m.id} disabled={busy} onClick={() => setMode(m.id)}
-                className={`rounded-xl border p-3 text-left ${on ? 'border-sky-500/50 bg-sky-500/10' : 'border-slate-800 bg-slate-900/60 hover:border-slate-600'}`}>
-                <m.Icon className={`h-4 w-4 ${on ? 'text-sky-300' : 'text-slate-400'}`} />
-                <p className={`mt-1 text-[12px] font-bold ${on ? 'text-sky-200' : 'text-slate-200'}`}>{m.label}</p>
-                <p className="text-[10.5px] text-slate-500">{m.desc}</p>
-              </button>
-            );
-          })}
+        <p className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+          <TrendingUp className="h-3.5 w-3.5" />Combined performance
+        </p>
+        <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-slate-500">Total value</p>
+            <p className="text-2xl font-bold text-white">{t.valueAvailable ? usd(t.value) : 'unavailable'}</p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-wide text-slate-500">Profit / loss</p>
+            <p className={`text-2xl font-bold ${pnlColor(t.pnlUsd)}`}>
+              {signed(t.pnlUsd)}{t.pnlPct != null ? <span className="ml-1.5 text-sm font-semibold">{t.pnlPct}%</span> : null}
+            </p>
+          </div>
         </div>
-        {acct.runtimeState && acct.runtimeState !== 'RUNNING' && (
-          <p className="mt-2 flex items-center gap-1.5 text-[11px] font-semibold text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />{acct.runtimeState.replace(/_/g, ' ')}</p>
-        )}
-        {integ.marketData === 'STALE' && <p className="mt-2 flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Market marks are stale — new paper entries are paused until data refreshes.</p>}
-        <p className="mt-2 flex items-center gap-1.5 text-[10.5px] text-slate-500"><ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />Paper only — no real money, no exchange. {ap.multiAssetEnabled ? 'BTC + approved altcoins' : 'BTC spot'}, virtual USDC, long-only{ap.tradingProfile ? ` · ${ap.tradingProfile}` : ''}.</p>
-      </div>
-
-      {/* M-F: plain-English summary — the eight things that matter, in words.
-          Every calculation, diagnostic and id behind them is preserved in
-          More → Technical Centre → Paper Engine (moved, not removed). */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Where you stand</p>
-          <button onClick={() => onNav && onNav('paperengine')}
-            className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 hover:text-sky-300">
-            Technical detail<ArrowRight className="h-3.5 w-3.5" />
-          </button>
-        </div>
-        <p className="max-w-[85ch] text-[13.5px] leading-relaxed text-slate-200">{plainSummary}</p>
         <div className="mt-3 grid grid-cols-2 gap-2 text-[12px] sm:grid-cols-4">
-          {[['Mode', modeLabel],
-            ['Status', running ? 'Running' : ((acct.runtimeState || 'Paused').replace(/_/g, ' ').toLowerCase())],
-            ['Account value', eq.value != null ? usd(eq.value) : 'unavailable'],
-            ['Free to invest', usd(eq.deployableCash)],
+          {[['Started with', usd(t.startingCash)],
+            ['Strategies trading', `${t.liveStrategies ?? 0} of ${rows.length}`],
             ['Open positions', String(positions.length)],
-            ['Risk condition', riskCondition],
-            ['Price data', freshnessPlain],
-            ['Last action', lastActionPlain]].map(([k, v], i) => (
-            <div key={i} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+            ['Closed trades', String(t.closedTrades ?? 0)],
+            ['Win rate', t.winRatePct != null ? `${t.winRatePct}%` : '—'],
+            ['Booked profit', signed(t.realizedPnl)],
+            ['Costs paid', usd(t.fees)],
+            ['Awaiting you', String(needsApproval.length)]].map(([k, v]) => (
+            <div key={k} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 p-2">
               <p className="text-[10px] uppercase tracking-wide text-slate-500">{k}</p>
               <p className="truncate font-semibold text-slate-200" title={String(v)}>{v}</p>
             </div>
           ))}
         </div>
-        {acct.mode === 'PAPER_AUTOPILOT' && (
-          <p className="mt-2 flex items-center gap-1.5 text-[11px] text-slate-400">
-            <Bot className="h-3.5 w-3.5 text-violet-300" />
-            {running
-              ? 'Autopilot runs on the server — you can close the app and it keeps working.'
-              : 'Autopilot is paused: no new entries, but protective exits still run.'}
-          </p>
-        )}
+        <p className="mt-3 max-w-[85ch] text-[13px] leading-relaxed text-slate-200">{summary}</p>
       </div>
 
-      {/* Approval outcome banner */}
-      {msg && (
-        <div className={`rounded-xl border p-3 text-[12px] font-medium ${
-          msg.t === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
-          : msg.t === 'warn' ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
-          : msg.t === 'info' ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
-          : 'border-rose-500/40 bg-rose-500/10 text-rose-200'}`}>
-          <span className="inline-flex items-center gap-1.5"><Info className="h-3.5 w-3.5" />{msg.m}</span>
+      {/* ---- Anything waiting on you (approved on the strategy, not here) ---- */}
+      {needsApproval.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-sky-500/30 bg-sky-500/[0.06] p-4">
+          <HandCoins className="h-5 w-5 shrink-0 text-sky-300" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-bold text-white">
+              {needsApproval.length} paper {needsApproval.length === 1 ? 'trade needs' : 'trades need'} your approval
+            </p>
+            <p className="truncate text-[11.5px] text-slate-400">
+              {needsApproval.slice(0, 3).map((p) => `${p.side} ${p.asset} on “${p.strategyName}”`).join(' · ')}
+              {needsApproval.length > 3 ? ` +${needsApproval.length - 3} more` : ''}
+            </p>
+          </div>
+          <button onClick={goStrategies} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-sky-500/20 px-3 py-1.5 text-[12px] font-semibold text-sky-200 hover:bg-sky-500/30">
+            Review on the strategy<ArrowRight className="h-3.5 w-3.5" />
+          </button>
         </div>
       )}
 
-      {/* Pending proposal */}
-      {proposals.map((p) => (
-        <div key={p.proposalId} className="rounded-2xl border border-sky-500/30 bg-sky-500/[0.06] p-4">
-          <div className="mb-1 flex items-center justify-between"><p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-sky-300"><HandCoins className="h-3.5 w-3.5" />Paper trade proposal</p><PaperBadge /></div>
-          <p className="text-[15px] font-bold text-white">{p.side} {p.asset} · {usd(p.notionalValue)}</p>
-          <p className="mt-0.5 text-[12px] text-slate-400">Ref {usd(p.referencePrice)} · est. fees {usd(p.estimatedFees)}{p.invalidationPrice ? ` · invalidation ${usd(p.invalidationPrice)}` : ''}</p>
-          {p.reason && <p className="mt-2 text-[12px] leading-relaxed text-slate-300">{p.reason}</p>}
-          <div className="mt-3 flex gap-2">
-            <button disabled={!!pendingApprove[p.proposalId]} onClick={() => approveProposal(p)} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 px-3.5 py-1.5 text-[12px] font-semibold text-emerald-200 hover:bg-emerald-500/30 disabled:opacity-50">{pendingApprove[p.proposalId] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}Approve paper trade</button>
-            <button disabled={!!pendingApprove[p.proposalId]} onClick={() => cancelProposal(p)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-3 py-1.5 text-[12px] font-semibold text-slate-300 hover:text-white disabled:opacity-50"><XCircle className="h-3.5 w-3.5" />Skip</button>
-          </div>
-        </div>
-      ))}
-
-      {/* Positions */}
+      {/* ---- Per-strategy breakdown ---- */}
       <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-        <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Open positions</p>
-        {positions.length ? (
-          <div className="space-y-1.5">
-            {positions.map((p) => (
-              <div key={p.paperPositionId} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-[12px]">
-                <span className="max-w-[45%] truncate font-bold text-white">{p.asset}</span>
-                <span className="text-slate-400">{Number(p.netQuantity).toLocaleString(undefined, { maximumFractionDigits: 8 })} @ {usd(p.averageEntryPrice)}</span>
-                <span className="text-slate-500">now {usd(p.currentPrice)}</span>
-                <span className={num(p.unrealizedPnl) >= 0 ? 'text-emerald-400' : 'text-rose-400'}>uPnL {usd(p.unrealizedPnl)}</span>
-                <button disabled={busy} onClick={() => act(`${API_BASE}/v1/albert/paper/positions/${p.paperPositionId}/close`)} className="ml-auto rounded-md border border-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-300 hover:text-white">Close</button>
+        <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">By strategy</p>
+        <div className="space-y-1.5">
+          {rows.map((r) => {
+            const m = st(r.paperStatus);
+            return (
+              <button key={r.strategyId} onClick={goStrategies}
+                className="w-full rounded-xl border border-slate-800 bg-slate-950/60 p-3 text-left transition-colors hover:border-sky-500/40">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${m.dot}`} />
+                  <span className="truncate text-[13px] font-bold text-white">{r.name}</span>
+                  <span className={`text-[11px] font-semibold ${m.color}`}>{m.label}</span>
+                  {r.approvalMode && (
+                    <span className="inline-flex items-center gap-1 rounded bg-slate-800/80 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300">
+                      {r.approvalMode === 'AUTOPILOT' ? <Bot className="h-3 w-3" /> : <HandCoins className="h-3 w-3" />}
+                      {approvalLabel(r.approvalMode)}
+                    </span>
+                  )}
+                  <span className="ml-auto text-[11px] text-slate-500">{(r.assets || []).join(' · ')}</span>
+                </div>
+                {r.paperAccountId ? (
+                  <div className="mt-2 grid grid-cols-2 gap-2 text-[11.5px] sm:grid-cols-4">
+                    <span><span className="block text-[10px] uppercase tracking-wide text-slate-500">Value</span>
+                      <span className="font-semibold text-slate-200">{r.valueAvailable === false ? 'unavailable' : usd(r.value)}</span></span>
+                    <span><span className="block text-[10px] uppercase tracking-wide text-slate-500">P&amp;L</span>
+                      <span className={`font-semibold ${pnlColor(r.pnlUsd)}`}>{signed(r.pnlUsd)}{r.pnlPct != null ? ` · ${r.pnlPct}%` : ''}</span></span>
+                    <span><span className="block text-[10px] uppercase tracking-wide text-slate-500">Open</span>
+                      <span className="font-semibold text-slate-200">{r.openPositions ?? 0}{r.pendingApprovals ? ` · ${r.pendingApprovals} to approve` : ''}</span></span>
+                    <span className="min-w-0"><span className="block text-[10px] uppercase tracking-wide text-slate-500">Last action</span>
+                      <span className="block truncate font-semibold text-slate-300" title={r.lastActivity || ''}>{r.lastActivity ? timeAgo(r.lastActivityAt) || '—' : 'nothing yet'}</span></span>
+                  </div>
+                ) : (
+                  <p className="mt-1.5 text-[11.5px] text-slate-500">Not trading yet — open it to start paper trading.</p>
+                )}
+                {r.pauseReason && (
+                  <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />{String(r.pauseReason).replace(/_/g, ' ').toLowerCase()}</p>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ---- Combined activity ---- */}
+      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
+        <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Recent activity · all strategies</p>
+        {activity.length ? (
+          <div className="space-y-1">
+            {activity.map((a, i) => (
+              <div key={i} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[11px]">
+                <span className="w-32 shrink-0 truncate font-semibold text-slate-300" title={a.strategyName}>{a.strategyName}</span>
+                <span className="w-32 shrink-0 text-slate-400">{(a.eventType || '').replace(/_/g, ' ').toLowerCase()}</span>
+                <span className="min-w-0 flex-1 truncate text-slate-500" title={a.note}>{a.note}</span>
+                {a.amount != null && <span className="font-mono text-slate-400">{usd(a.amount)}</span>}
+                <span className="w-16 shrink-0 text-right text-slate-600">{timeAgo(a.recordedAt || a.effectiveAt)}</span>
               </div>
             ))}
           </div>
-        ) : <p className="text-[12px] text-slate-500">No open paper positions.</p>}
-      </div>
-
-      {/* Activity */}
-      <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">
-        <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Activity · {perf.closedTrades || 0} closed{perf.winRatePct != null ? ` · ${perf.winRatePct}% win` : ''}</p>
-        <div className="space-y-1">
-          {activity.map((a, i) => (
-            <div key={i} className="flex items-center gap-2 text-[11px]">
-              <span className="w-40 shrink-0 font-semibold text-slate-300">{(a.eventType || '').replace(/_/g, ' ')}</span>
-              <span className="flex-1 text-slate-500">{a.note}</span>
-              {a.amount != null && <span className="font-mono text-slate-400">{usd(a.amount)}</span>}
-            </div>
-          ))}
-          {!activity.length && <p className="text-[12px] text-slate-500">No activity yet.</p>}
-        </div>
+        ) : <p className="text-[12px] text-slate-500">No activity yet.</p>}
       </div>
 
       <p className="flex items-start gap-1 text-[10.5px] leading-relaxed text-slate-600">
         <Info className="mt-0.5 h-3 w-3 shrink-0" />
-        Paper trading only — virtual money, no exchange keys, and it can never place a live order. Execution costs,
-        allocation limits, worker diagnostics and the full evidence chain live in More → Technical Centre → Paper Engine.
+        Paper trading only — virtual money, no exchange keys, and it can never place a live order. Each strategy trades
+        its own ring-fenced wallet, so results are never co-mingled. Execution costs, allocation limits, worker
+        diagnostics and the full evidence chain live in More → Technical Centre → Paper Engine.
       </p>
     </div>
   );

@@ -26,7 +26,7 @@ for _k in ('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'NEXT_PUBLIC_GOOGLE_CLIEN
     if _v:
         os.environ[_k] = _v
 
-logger = logging.getLogger("btciq.config")
+logger = logging.getLogger("askalbert.config")
 
 # --- environment sanity check -------------------------------------------------
 # MONGO_URL / DB_NAME are injected by the deployment platform from the app secrets.

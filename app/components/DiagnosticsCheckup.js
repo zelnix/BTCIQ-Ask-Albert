@@ -56,7 +56,7 @@ export default function DiagnosticsCheckup() {
     <div className="space-y-4">
       <div>
         <h2 className="flex items-center gap-2 text-xl font-bold text-white"><Stethoscope className="h-5 w-5 text-sky-300" />App Checkup</h2>
-        <p className="mt-0.5 text-[12px] text-slate-400">Albert can check the parts of BTCIQ needed for the app to work correctly.</p>
+        <p className="mt-0.5 text-[12px] text-slate-400">Albert can check the parts of Ask Albert needed for the app to work correctly.</p>
       </div>
 
       <div className="rounded-2xl border border-slate-800 bg-slate-950/40 p-4">

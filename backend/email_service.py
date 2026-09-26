@@ -9,7 +9,7 @@ import requests
 
 from config import RESEND_API_KEY, RESEND_FROM
 
-logger = logging.getLogger("btciq.email")
+logger = logging.getLogger("askalbert.email")
 RESEND_URL = "https://api.resend.com/emails"
 
 

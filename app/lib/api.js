@@ -11,7 +11,7 @@ export function getReadingLevel() {
 export function setReadingLevel(v) {
   try {
     window.localStorage.setItem('btciq_reading_level', v);
-    window.dispatchEvent(new CustomEvent('btciq:reading-level', { detail: v }));
+    window.dispatchEvent(new CustomEvent('albert:reading-level', { detail: v }));
   } catch (e) { /* noop */ }
 }
 

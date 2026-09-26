@@ -1,101 +1,38 @@
 'use client';
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  Sparkles, TrendingUp, TrendingDown, Activity, AlertTriangle, CheckCircle2,
-  Gauge, FlaskConical, Crosshair, MessageCircle, ArrowRight, Loader2, ShieldCheck,
-  Clock, Wallet, Layers, Database, Lightbulb, Lock, PauseCircle, PlayCircle, ChevronRight,
+  Sparkles, Activity, AlertTriangle, Gauge, MessageCircle, Loader2, Database,
+  Wallet, Clock, LineChart, Crown, TrendingUp, TrendingDown, RefreshCw,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { API_BASE } from '../lib/api';
+import {
+  money, signedPct, timeAgo, EvidenceButton, KnowledgeBadge, StreamHeader, StatusBadge,
+} from './albert/common';
+import EvidenceDrawer from './albert/EvidenceDrawer';
+import ScenarioChart from './albert/ScenarioChart';
+import ScenarioAnalysis from './albert/ScenarioAnalysis';
+import MarketStream from './albert/MarketStream';
+import ResearchFindings from './albert/ResearchFindings';
+import StrategiesStream from './albert/StrategiesStream';
 
-/* ----------------------------- helpers ----------------------------- */
-const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
-const money = (v) => {
-  const n = num(v);
-  if (n === null || Number.isNaN(n)) return '—';
-  return '$' + n.toLocaleString(undefined, { maximumFractionDigits: n >= 1000 ? 0 : 2 });
-};
-const pct = (v) => {
-  const n = num(v);
-  if (n === null || Number.isNaN(n)) return null;
-  return n;
-};
-const REGIME_META = {
-  BULL: { label: 'Bullish', color: 'text-emerald-400', dot: 'bg-emerald-400' },
-  BEAR: { label: 'Bearish', color: 'text-red-400', dot: 'bg-red-400' },
-  RANGE: { label: 'Range-bound', color: 'text-amber-400', dot: 'bg-amber-400' },
-  UNKNOWN: { label: 'Uncertain', color: 'text-slate-400', dot: 'bg-slate-500' },
-};
-const MODE_META = {
-  OBSERVE: { label: 'Observe', hint: 'Albert monitors and explains — no paper orders are placed.', color: 'text-sky-300', ring: 'ring-sky-500/30' },
-  APPROVAL_REQUIRED: { label: 'Approval Required', hint: 'Albert prepares proposals; you approve or reject before any paper trade.', color: 'text-amber-300', ring: 'ring-amber-500/30' },
-  PAPER_AUTOPILOT: { label: 'Paper Autopilot', hint: 'The deterministic worker executes simulated trades within your strategy and mandate.', color: 'text-violet-300', ring: 'ring-violet-500/30' },
+const REGIME = {
+  BULL: { label: 'Bullish', cls: 'text-emerald-400', dot: 'bg-emerald-400' },
+  BEAR: { label: 'Bearish', cls: 'text-red-400', dot: 'bg-red-400' },
+  RANGE: { label: 'Range-bound', cls: 'text-amber-400', dot: 'bg-amber-400' },
+  UNKNOWN: { label: 'Uncertain', cls: 'text-slate-400', dot: 'bg-slate-500' },
 };
 
-function timeAgo(iso) {
-  if (!iso) return '';
-  const t = Date.now() - new Date(String(iso).replace('Z', '') + 'Z').getTime();
-  if (Number.isNaN(t)) return '';
-  const m = Math.floor(t / 60000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
-
-// Deep-link ("/?section=paper&proposal=..") → SPA section id.
-function sectionFromDeepLink(dl) {
-  if (!dl) return null;
-  try {
-    const q = new URLSearchParams(dl.split('?')[1] || '');
-    return q.get('section');
-  } catch (e) { return null; }
-}
-
-/* --------------- deterministic plain-English briefing --------------- */
-// Composed strictly from the authoritative state of play — Albert explains, he
-// does not invent. (LLM enrichment arrives in the Ask-Albert milestone.)
-function buildBriefing(sop) {
-  if (!sop) return [];
-  const lines = [];
-  const rm = REGIME_META[sop.market?.regime] || REGIME_META.UNKNOWN;
-  const fresh = sop.market?.freshness;
-  if (fresh === 'STALE' || fresh === 'MISSING') {
-    lines.push(`I'm holding off on new action calls — the market read is ${fresh === 'MISSING' ? 'unavailable' : 'not fresh'} right now, so I'd rather wait for reliable data than guess.`);
-  } else {
-    lines.push(`The market is reading **${rm.label.toLowerCase()}** at the moment. I'm using that to frame how I weigh every other signal.`);
-  }
-  const p = sop.portfolio;
-  if (p) {
-    lines.push(`Your paper account is worth ${money(p.totalValue)} with ${money(p.deployableCapital)} deployable after your protected reserve of ${money(p.protectedReserve)}.`);
-    const positions = (p.positions || []).length;
-    if (positions > 0) lines.push(`You're holding ${positions} open ${positions === 1 ? 'position' : 'positions'}, which I'm monitoring against their invalidation levels.`);
-  }
-  const acts = (sop.attention || []).filter((a) => a.severity === 'ACTION');
-  if (acts.length) lines.push(`There ${acts.length === 1 ? 'is' : 'are'} ${acts.length} ${acts.length === 1 ? 'decision' : 'decisions'} waiting on you below.`);
-  else lines.push(`Nothing needs a decision from you right now — I'll surface something the moment it's genuinely actionable.`);
-  return lines;
-}
-
-function boldToJsx(text) {
-  const parts = String(text).split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((p, i) => (p.startsWith('**') && p.endsWith('**'))
-    ? <strong key={i} className="font-semibold text-white">{p.slice(2, -2)}</strong>
-    : <span key={i}>{p}</span>);
-}
-
-/* ------------------------------ sub-cards ------------------------------ */
-function StatusStrip({ sop }) {
-  const rm = REGIME_META[sop.market?.regime] || REGIME_META.UNKNOWN;
-  const p = sop.portfolio || {};
-  const perf = sop.paper?.performance || {};
-  const chg = pct(p.unrealizedPnl);
+function StatusStrip({ sop, streams }) {
+  const r = REGIME[sop.market?.regime] || REGIME.UNKNOWN;
+  const totals = sop.paperAggregate?.totals || {};
+  const pnl = totals.pnlUsd !== undefined && totals.pnlUsd !== null ? Number(totals.pnlUsd) : null;
+  const lead = (streams?.phaseAssessment?.phase) || sop.marketStreams?.phaseAssessment?.phase;
   const dq = sop.dataQuality?.status || 'HEALTHY';
-  const dqColor = dq === 'HEALTHY' ? 'text-emerald-400' : dq === 'DEGRADED' ? 'text-amber-400' : 'text-red-400';
+  const dqCls = dq === 'HEALTHY' ? 'text-emerald-400' : dq === 'DEGRADED' ? 'text-amber-400' : 'text-red-400';
   const Item = ({ icon: Icon, label, children }) => (
     <div className="flex min-w-0 items-center gap-2.5 rounded-xl border border-slate-800 bg-slate-950/50 px-3.5 py-2.5">
       <Icon className="h-4 w-4 shrink-0 text-slate-500" />
@@ -108,250 +45,217 @@ function StatusStrip({ sop }) {
   return (
     <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
       <Item icon={Activity} label="Market stance">
-        <span className={rm.color}><span className={`mr-1.5 inline-block h-2 w-2 rounded-full ${rm.dot} align-middle`} />{rm.label}</span>
+        <span className={r.cls}><span className={`mr-1.5 inline-block h-2 w-2 rounded-full ${r.dot} align-middle`} />{r.label}</span>
       </Item>
-      <Item icon={Wallet} label="Paper value">{money(p.totalValue)}</Item>
-      <Item icon={Gauge} label="Deployable">{money(p.deployableCapital)}</Item>
-      <Item icon={p && chg >= 0 ? TrendingUp : TrendingDown} label="Unrealised P&L">
-        <span className={chg == null ? 'text-slate-300' : chg >= 0 ? 'text-emerald-400' : 'text-red-400'}>{p.unrealizedPnl != null ? money(p.unrealizedPnl) : '—'}</span>
+      <Item icon={Crown} label="Leadership">
+        <span className="text-slate-200">{lead ? String(lead).replace(/_/g, ' ') : '—'}</span>
       </Item>
-      <Item icon={Database} label="Data status"><span className={dqColor}>{dq === 'HEALTHY' ? 'Healthy' : dq === 'DEGRADED' ? 'Degraded' : 'Limited'}</span></Item>
+      <Item icon={Wallet} label="Paper wallets">{totals.valueAvailable ? money(totals.value) : '—'}</Item>
+      <Item icon={pnl !== null && pnl >= 0 ? TrendingUp : TrendingDown} label="Net result">
+        <span className={pnl === null ? 'text-slate-300' : pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}>
+          {pnl === null ? '—' : money(pnl)}
+        </span>
+      </Item>
+      <Item icon={Database} label="Data status">
+        <span className={dqCls}>{dq === 'HEALTHY' ? 'Healthy' : dq === 'DEGRADED' ? 'Degraded' : 'Limited'}</span>
+      </Item>
     </div>
   );
 }
 
-function EvidenceLink({ label = 'Evidence', deepLink, onEvidence }) {
-  if (!deepLink) return null;
+/* --------------------------- executive briefing --------------------------- */
+// Albert's briefing is the join between the two streams. Every line is a server-composed
+// CLAIM with its knowledge kind and a link to the snapshot it was made from — the
+// language model neither writes nor restates any figure here.
+function Briefing({ sop, onNav, onEvidence, onAsk }) {
+  const claims = sop.briefing?.claims || [];
   return (
-    <button onClick={() => onEvidence(deepLink)}
-      className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 underline decoration-sky-500/40 underline-offset-2 hover:text-sky-300">
-      <ShieldCheck className="h-3 w-3" />{label}
-    </button>
-  );
-}
-
-function BriefingCard({ sop, onNav, onEvidence }) {
-  const lines = buildBriefing(sop);
-  const ev = sop.evidenceIndex?.['market.regime'];
-  return (
-    <Card className="border-0 bg-gradient-to-br from-sky-500/[0.07] via-violet-500/[0.06] to-slate-900 p-6 ring-1 ring-sky-500/25">
-      <div className="mb-3 flex items-center gap-3">
+    <Card className="border-0 bg-gradient-to-br from-sky-500/[0.07] via-violet-500/[0.06] to-slate-900 p-5 ring-1 ring-sky-500/25">
+      <div className="mb-3 flex flex-wrap items-center gap-3">
         <img src="/albert.png" alt="Albert" className="h-11 w-11 rounded-full object-cover ring-2 ring-sky-500/40" />
-        <div>
+        <div className="min-w-0">
           <h2 className="text-base font-bold text-white">Albert’s briefing</h2>
-          <p className="text-[11px] text-slate-400">Your HuCentAI trading companion · {timeAgo(sop.generatedAt) || 'live'}</p>
+          <p className="text-[11px] text-slate-400">
+            Your HuCentAI trading companion · {timeAgo(sop.generatedAt) || 'live'}
+          </p>
         </div>
         <Badge variant="outline" className="ml-auto border-slate-700 text-[10px] text-slate-300">Paper only</Badge>
       </div>
-      <div className="max-w-[70ch] space-y-2 text-[15px] leading-relaxed text-slate-200">
-        {lines.map((l, i) => <p key={i}>{boldToJsx(l)}</p>)}
-      </div>
-      {(sop.changesSinceLastVisit || []).length > 0 && (
+
+      {claims.length ? (
+        <ul className="space-y-2.5">
+          {claims.map((c) => (
+            <li key={c.claimId} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+              <KnowledgeBadge kind={c.kind} className="translate-y-[1px]" />
+              <span className="min-w-0 max-w-[85ch] text-[14.5px] leading-relaxed text-slate-200">{c.text}</span>
+              <EvidenceButton snapshotId={(c.evidenceRefs || []).filter((r) => String(r).startsWith('snap_')).slice(-1)[0]}
+                onEvidence={onEvidence} label="Evidence" />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-[14px] text-slate-300">
+          Albert has no briefing claims to make from the current state — rather than fill the
+          gap with prose, he is saying so.
+        </p>
+      )}
+
+      {(sop.changesSinceLastVisit || []).length > 0 ? (
         <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/50 p-3">
-          <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400"><Clock className="h-3.5 w-3.5" />What changed since you were last here</p>
+          <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <Clock className="h-3.5 w-3.5" />What changed since you were last here
+          </p>
           <ul className="space-y-1 text-[13px] text-slate-300">
             {sop.changesSinceLastVisit.slice(0, 5).map((c, i) => (
-              <li key={i} className="flex items-start gap-2"><span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" /><span>{c.detail || c.kind} <span className="text-slate-500">· {timeAgo(c.at)}</span></span></li>
+              <li key={i} className="flex items-start gap-2">
+                <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400" />
+                <span>{c.detail || c.kind} <span className="text-slate-500">· {timeAgo(c.at)}</span></span>
+              </li>
             ))}
           </ul>
         </div>
-      )}
+      ) : null}
+
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={() => onNav('ask')} className="gap-1.5 bg-gradient-to-r from-sky-500 to-violet-600 text-white hover:from-sky-400 hover:to-violet-500">
+        <Button size="sm" onClick={() => onAsk(null, 'Walk me through my state of play right now — the market, my wallets and anything waiting on me.')}
+          className="gap-1.5 bg-gradient-to-r from-sky-500 to-violet-600 text-white hover:from-sky-400 hover:to-violet-500">
           <MessageCircle className="h-4 w-4" />Ask Albert
         </Button>
-        <EvidenceLink deepLink={ev?.deepLink} onEvidence={onEvidence} />
+        <button type="button" onClick={() => onNav && onNav('paper')}
+          className="text-[12px] font-semibold text-sky-400 hover:text-sky-300">Open Paper Trading</button>
+        {sop.briefing?.note ? (
+          <p className="ml-auto max-w-[52ch] text-[10.5px] leading-relaxed text-slate-600">{sop.briefing.note}</p>
+        ) : null}
       </div>
     </Card>
   );
 }
 
-function DecisionCard({ item, onNav, onEvidence }) {
-  const isAction = item.severity === 'ACTION';
-  const isWarn = item.severity === 'WARNING';
-  const tone = isAction ? 'border-amber-500/40 bg-amber-500/[0.06]' : isWarn ? 'border-red-500/40 bg-red-500/[0.06]' : 'border-sky-500/30 bg-sky-500/[0.05]';
-  const Icon = isAction ? AlertTriangle : isWarn ? AlertTriangle : Lightbulb;
-  const iconColor = isAction ? 'text-amber-400' : isWarn ? 'text-red-400' : 'text-sky-400';
-  const target = sectionFromDeepLink(item.deepLink) || 'paper';
-  return (
-    <div className={`rounded-xl border p-4 ${tone}`}>
-      <div className="flex items-start gap-2.5">
-        <Icon className={`mt-0.5 h-4 w-4 shrink-0 ${iconColor}`} />
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-white">{item.title}</p>
-          {item.expiresAt && <p className="mt-0.5 text-[11px] text-slate-400">Expires {timeAgo(item.expiresAt) || 'soon'} · re-checked freshly on approval</p>}
-          <div className="mt-2.5 flex flex-wrap items-center gap-2">
-            <Button size="sm" onClick={() => onNav(target)}
-              className="h-7 gap-1 bg-slate-100 px-2.5 text-[12px] font-semibold text-slate-900 hover:bg-white">
-              {item.kind === 'PROPOSAL_APPROVAL' ? 'Review paper trade' : item.kind === 'MANDATE_INCOMPLETE' ? 'Set up mandate' : item.kind === 'NO_ASSIGNED_STRATEGY' ? 'Build a strategy' : item.kind === 'NO_PAPER_ACCOUNT' ? 'Create paper account' : 'Open'}
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Button>
-            <EvidenceLink deepLink={item.deepLink} onEvidence={onEvidence} />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function NeedsDecision({ sop, onNav, onEvidence }) {
-  const items = (sop.attention || []).filter((a) => a.severity === 'ACTION' || a.severity === 'WARNING');
-  if (!items.length) {
-    return (
-      <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-        <div className="flex items-center gap-2 text-sm font-semibold text-white"><CheckCircle2 className="h-4 w-4 text-emerald-400" />Nothing needs your decision</div>
-        <p className="mt-1 text-[13px] text-slate-400">You're all caught up. Albert will raise something the instant it's genuinely actionable.</p>
-      </Card>
-    );
-  }
-  return (
-    <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-      <h3 className="mb-3 flex items-center gap-2 text-sm font-bold text-white"><AlertTriangle className="h-4 w-4 text-amber-400" />Needs your decision</h3>
-      <div className="space-y-2.5">
-        {items.map((it) => <DecisionCard key={it.id} item={it} onNav={onNav} onEvidence={onEvidence} />)}
-      </div>
-    </Card>
-  );
-}
-
-function Managing({ sop, onNav, onEvidence }) {
-  const paper = sop.paper;
-  if (!paper) {
-    return (
-      <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-        <h3 className="mb-1 flex items-center gap-2 text-sm font-bold text-white"><FlaskConical className="h-4 w-4 text-sky-400" />Albert is managing</h3>
-        <p className="text-[13px] text-slate-400">No paper account yet. Create one and Albert can put an authorised strategy into simulated action.</p>
-        <Button size="sm" onClick={() => onNav('paper')} className="mt-3 gap-1.5 bg-sky-500 hover:bg-sky-400">Create paper account<ArrowRight className="h-3.5 w-3.5" /></Button>
-      </Card>
-    );
-  }
-  const mode = MODE_META[paper.mode] || MODE_META.OBSERVE;
-  const acct = paper.selectedAccount || {};
-  const wh = paper.workerHealth || {};
-  const positions = paper.positions || [];
-  const lastAct = (paper.recentActivity || [])[0];
-  const paused = acct.runtimeState && acct.runtimeState !== 'RUNNING';
-  return (
-    <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-bold text-white"><FlaskConical className="h-4 w-4 text-sky-400" />Albert is managing</h3>
-        <span className={`ml-auto rounded-full px-2.5 py-0.5 text-[11px] font-semibold ring-1 ${mode.ring} ${mode.color}`}>{mode.label}</span>
-      </div>
-      <p className="mb-3 text-[12px] text-slate-400">{mode.hint}</p>
-      <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
-        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-500">Account</p><p className="truncate text-sm font-bold text-white">{acct.name || '—'}</p></div>
-        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-500">Strategy</p><p className="truncate text-sm font-bold text-white">{acct.assignedStrategy?.name || paper.assignedStrategy?.name || 'None assigned'}</p></div>
-        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-500">Open positions</p><p className="text-sm font-bold text-white">{positions.length}</p></div>
-        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3"><p className="text-[10px] uppercase tracking-wider text-slate-500">Pending</p><p className="text-sm font-bold text-white">{(paper.pendingProposals || []).length}</p></div>
-      </div>
-      {positions.length > 0 && (
-        // M-F: no duplicated positions table here — Paper Trading owns the list and
-        // the Technical Centre owns the per-position evidence. Albert just says it plainly.
-        <p className="mt-3 max-w-[80ch] text-[13px] leading-relaxed text-slate-300">
-          {(() => {
-            const names = positions.slice(0, 4).map((x) => x.asset).join(', ');
-            const more = positions.length > 4 ? ` and ${positions.length - 4} more` : '';
-            const known = positions.every((x) => x.unrealizedPnl != null);
-            const total = known ? positions.reduce((t, x) => t + Number(x.unrealizedPnl), 0) : null;
-            return `He is holding ${names}${more}, ${total == null ? 'with live valuation of at least one holding unavailable, so he is not quoting a P&L' : `currently ${total >= 0 ? 'up' : 'down'} ${money(Math.abs(total))} unrealised`}, each watched against its invalidation level.`;
-          })()}
-        </p>
-      )}
-      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12px] text-slate-400">
-        {lastAct && <span className="flex items-center gap-1"><Activity className="h-3.5 w-3.5 text-slate-500" />Last: {lastAct.note || lastAct.type} <span className="text-slate-600">· {timeAgo(lastAct.recordedAt || lastAct.effectiveAt)}</span></span>}
-        {paused ? (
-          <span className="flex items-center gap-1 text-amber-400"><PauseCircle className="h-3.5 w-3.5" />{acct.runtimeState === 'PAUSED_RISK_BREAKER' ? 'Paused by drawdown breaker' : 'Paused'}</span>
-        ) : (
-          <span className="flex items-center gap-1 text-emerald-400"><PlayCircle className="h-3.5 w-3.5" />Running</span>
-        )}
-        <button onClick={() => onNav('paper')} className="ml-auto inline-flex items-center gap-1 font-semibold text-sky-400 hover:text-sky-300">Open Paper Trading<ChevronRight className="h-3.5 w-3.5" /></button>
-      </div>
-    </Card>
-  );
-}
-
-function StrategiesRow({ sop, onNav }) {
-  const s = sop.strategies || {};
-  const all = [...(s.needsAttention || []), ...(s.active || []), ...(s.drafts || [])];
-  const seen = new Set();
-  const cards = all.filter((x) => x.id && !seen.has(x.id) && seen.add(x.id)).slice(0, 4);
-  return (
-    <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-      <div className="mb-3 flex items-center gap-2">
-        <h3 className="flex items-center gap-2 text-sm font-bold text-white"><Crosshair className="h-4 w-4 text-violet-400" />Your strategies</h3>
-        <button onClick={() => onNav('strategies')} className="ml-auto inline-flex items-center gap-1 text-[12px] font-semibold text-sky-400 hover:text-sky-300">Open Strategies<ChevronRight className="h-3.5 w-3.5" /></button>
-      </div>
-      {cards.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/40 p-4 text-center">
-          <p className="text-[13px] text-slate-400">You haven’t built a strategy yet. Describe your objective and Albert will draft one with you.</p>
-          <Button size="sm" onClick={() => onNav('strategies')} className="mt-3 gap-1.5 bg-violet-600 hover:bg-violet-500">Build a strategy<ArrowRight className="h-3.5 w-3.5" /></Button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-          {cards.map((c) => (
-            <button key={c.id} onClick={() => onNav('strategies')} className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-left transition-colors hover:border-violet-500/40">
-              <div className="flex items-center justify-between gap-2">
-                <p className="truncate text-sm font-semibold text-white">{c.name}</p>
-                <Badge variant="outline" className="shrink-0 border-slate-700 text-[10px] capitalize text-slate-300">{(c.status || '').replace(/_/g, ' ') || 'draft'}</Badge>
-              </div>
-              <p className="mt-1 truncate text-[12px] text-slate-500">{Array.isArray(c.assets) ? c.assets.map((a) => a.symbol || a.asset || a).join(' · ') : (c.symbol || 'Multi-asset')}</p>
-            </button>
-          ))}
-        </div>
-      )}
-    </Card>
-  );
-}
-
-function OppsRisks({ sop }) {
-  // Keep the four states distinct (spec §4.1 F): opportunity ≠ mandate ≠ strategy ≠ recommend now.
-  const rows = [
-    { label: 'Opportunity exists', ok: (sop.market?.freshness === 'FRESH') && sop.market?.regime === 'BULL', note: sop.market?.regime ? `Market is ${(REGIME_META[sop.market.regime] || REGIME_META.UNKNOWN).label.toLowerCase()}.` : 'Waiting for a fresh market read.' },
-    { label: 'Your mandate permits action', ok: sop.user?.mandateStatus === 'COMPLETE', note: sop.user?.mandateStatus === 'COMPLETE' ? 'Mandate is complete.' : 'Complete your mandate first.' },
-    { label: 'Your strategy permits action', ok: (sop.strategies?.active || []).length > 0, note: (sop.strategies?.active || []).length > 0 ? 'An active strategy is available.' : 'No active strategy assigned yet.' },
-    { label: 'Albert recommends action now', ok: (sop.attention || []).some((a) => a.severity === 'ACTION'), note: (sop.attention || []).some((a) => a.severity === 'ACTION') ? 'There is a decision waiting.' : 'No action recommended right now.' },
-  ];
-  return (
-    <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
-      <h3 className="mb-3 flex items-center gap-2 text-sm font-bold text-white"><Layers className="h-4 w-4 text-emerald-400" />Opportunities &amp; risks</h3>
-      <div className="space-y-2">
-        {rows.map((r) => (
-          <div key={r.label} className="flex items-center gap-2.5 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2">
-            {r.ok ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" /> : <Lock className="h-4 w-4 shrink-0 text-slate-500" />}
-            <div className="min-w-0">
-              <p className="text-[13px] font-semibold text-slate-200">{r.label}</p>
-              <p className="truncate text-[11px] text-slate-500">{r.note}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-      <p className="mt-3 text-[11px] leading-relaxed text-slate-500">These four checks are independent — an opportunity is not permission, and permission is not a recommendation. Albert only acts when your mandate, strategy and safety checks all pass.</p>
-    </Card>
-  );
-}
-
-/* ------------------------------ main ------------------------------ */
+/* ---------------------------------- main ---------------------------------- */
 export default function AlbertHome({ onNav }) {
   const [sop, setSop] = useState(null);
-  const [status, setStatus] = useState('loading'); // loading | ready | error | signedout
+  const [status, setStatus] = useState('loading');
   const [err, setErr] = useState('');
 
-  const load = useCallback(async () => {
+  const [streams, setStreams] = useState(null);
+  const [streamsLoading, setStreamsLoading] = useState(true);
+
+  const [asset, setAsset] = useState('BTC');
+  const [horizon, setHorizon] = useState('P7D');
+  const [outlook, setOutlook] = useState(null);
+  const [outlookLoading, setOutlookLoading] = useState(true);
+  const [outlookErr, setOutlookErr] = useState('');
+  const reqRef = useRef(0);
+
+  const [evidenceId, setEvidenceId] = useState(null);
+  const [expanded, setExpanded] = useState(false);
+
+  /* ---- state of play (fast: renders the page immediately) ---- */
+  const loadSop = useCallback(async () => {
     try {
       const r = await fetch(`${API_BASE}/v1/albert/state-of-play`, { credentials: 'include', cache: 'no-store' });
       if (r.status === 401 || r.status === 403) { setStatus('signedout'); return; }
       if (!r.ok) { setErr('Could not load your state of play.'); setStatus('error'); return; }
-      const j = await r.json();
-      setSop(j); setStatus('ready');
-    } catch (e) { setErr('Network error loading your state of play.'); setStatus('error'); }
+      setSop(await r.json());
+      setStatus('ready');
+    } catch (e) {
+      setErr('Network error loading your state of play.'); setStatus('error');
+    }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  /* ---- stream 1 (progressive: never blocks the page) ---- */
+  const loadStreams = useCallback(async (refresh) => {
+    setStreamsLoading(true);
+    try {
+      const r = await fetch(`${API_BASE}/v1/albert/market-streams${refresh ? '?refresh=1' : ''}`,
+        { credentials: 'include', cache: 'no-store' });
+      if (r.ok) setStreams(await r.json());
+    } catch (e) { /* the panel states its own unavailability */ }
+    setStreamsLoading(false);
+  }, []);
 
-  const onEvidence = useCallback((deepLink) => {
-    const s = sectionFromDeepLink(deepLink);
-    if (s && onNav) onNav(s);
+  /* ---- the scenario, selected ATOMICALLY ---- */
+  const loadOutlook = useCallback(async (a, h) => {
+    const mine = reqRef.current + 1;
+    reqRef.current = mine;
+    const expected = `${a}|USD|${h}|ASSESSED|`;
+    setOutlook(null); setOutlookErr(''); setOutlookLoading(true);
+    try {
+      const r = await fetch(`${API_BASE}/v1/albert/scenario-outlooks/preview`, {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assetId: a, horizon: h, quoteCurrency: 'USD', phaseMode: 'ASSESSED' }),
+      });
+      if (mine !== reqRef.current) return;         // superseded selection: discard
+      if (r.status === 401 || r.status === 403) { setOutlookErr('Please sign in to see the scenario.'); return; }
+      if (!r.ok) { setOutlookErr('The scenario provider could not be reached.'); return; }
+      const j = await r.json();
+      if (mine !== reqRef.current) return;
+      // The selection key binds asset, quote, horizon and mode. A response that does not
+      // match the current selection is REJECTED rather than shown under the wrong title.
+      const got = String(j.selectionKey || '').split('|').slice(0, 5).join('|');
+      if (got !== expected) {
+        setOutlookErr('That response did not match the current selection, so it was discarded.');
+        return;
+      }
+      setOutlook(j);
+    } catch (e) {
+      if (mine === reqRef.current) setOutlookErr('Network error loading the scenario.');
+    } finally {
+      if (mine === reqRef.current) setOutlookLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { loadSop(); loadStreams(false); }, [loadSop, loadStreams]);
+
+  // On a cold start the universe is still rebuilding, so state-of-play legitimately has
+  // no leadership or turnover claim. Once Stream 1 reports a reading, re-read it ONCE so
+  // the briefing catches up rather than sitting on an honest but empty answer.
+  const caughtUp = useRef(false);
+  useEffect(() => {
+    if (caughtUp.current) return;
+    const live = streams?.phaseAssessment?.phase;
+    const have = sop?.marketStreams?.phaseAssessment?.phase;
+    if (live && live !== 'UNKNOWN' && (!have || have === 'UNKNOWN')) {
+      caughtUp.current = true;
+      loadSop();
+    }
+  }, [streams, sop, loadSop]);
+  useEffect(() => { loadOutlook(asset, horizon); }, [asset, horizon, loadOutlook]);
+
+  // Evidence deep links (/?section=home&evidence=snap_…) open the panel in place.
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      const e = q.get('evidence');
+      if (e) setEvidenceId(e);
+    } catch (e) { /* noop */ }
+  }, []);
+
+  const onEvidence = useCallback((id) => { if (id) setEvidenceId(id); }, []);
+
+  const onAsk = useCallback((context, question) => {
+    try {
+      window.__albertPendingAsk = {
+        question: question || 'Explain this using only the evidence attached.',
+        context: context || undefined,
+      };
+    } catch (e) { /* noop */ }
+    if (onNav) onNav('ask');
   }, [onNav]);
+
+  const askAboutBand = useCallback((snapshotId) => {
+    const b = outlook?.band;
+    onAsk({ snapshotId, stateId: sop?.stateId },
+      b?.available
+        ? `Explain the ${outlook.assetId} historical scenario range of ${signedPct(b.lowerPct)} to ${signedPct(b.upperPct)} over ${b.horizonDays} days. What does it actually mean for me, what would invalidate it, and why is the middle of the band not a forecast?`
+        : `Why is there no scenario range for ${asset} over this horizon right now?`);
+  }, [outlook, sop, asset, onAsk]);
+
+  const askAboutFinding = useCallback((f) => {
+    onAsk({ findingId: f.findingId, snapshotId: f.snapshotId, stateId: sop?.stateId },
+      `Explain this research finding: "${f.title}". What would confirm or invalidate it, and what should I do about it — if anything?`);
+  }, [sop, onAsk]);
 
   if (status === 'loading') {
     return (
@@ -363,8 +267,10 @@ export default function AlbertHome({ onNav }) {
   if (status === 'error') {
     return (
       <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800">
-        <p className="flex items-center gap-2 text-sm font-semibold text-amber-300"><AlertTriangle className="h-4 w-4" />{err}</p>
-        <Button size="sm" onClick={load} className="mt-3 bg-sky-500 hover:bg-sky-400">Retry</Button>
+        <p className="flex items-center gap-2 text-sm font-semibold text-amber-300">
+          <AlertTriangle className="h-4 w-4" />{err}
+        </p>
+        <Button size="sm" onClick={loadSop} className="mt-3 bg-sky-500 hover:bg-sky-400">Retry</Button>
       </Card>
     );
   }
@@ -376,30 +282,72 @@ export default function AlbertHome({ onNav }) {
     );
   }
 
+  const research = streams?.researchFindings || sop.marketStreams?.researchFindings;
+  const assets = (sop.capabilities?.forecast?.assets || ['BTC']);
+  // One source for leadership: the market assessment. The chart never re-derives it and
+  // never offers it as a control.
+  const lead = streams?.phaseAssessment?.phase || sop.marketStreams?.phaseAssessment?.phase;
+  const leadership = (lead && lead !== 'UNKNOWN') ? lead : null;
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2.5">
+    <div className="w-full min-w-0 space-y-4 overflow-x-hidden">
+      <div className="flex flex-wrap items-center gap-2.5">
         <Sparkles className="h-5 w-5 text-amber-400" />
         <h1 className="text-lg font-bold text-white">Albert</h1>
         <span className="text-[12px] text-slate-500">Your HuCentAI trading companion</span>
+        <button type="button" onClick={() => { loadSop(); loadStreams(true); loadOutlook(asset, horizon); }}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-slate-700 px-2.5 py-1 text-[11.5px] font-semibold text-slate-300 hover:border-slate-500 hover:text-white">
+          <RefreshCw className={`h-3.5 w-3.5 ${streamsLoading ? 'animate-spin' : ''}`} />Refresh
+        </button>
       </div>
 
-      <StatusStrip sop={sop} />
+      <StatusStrip sop={sop} streams={streams} />
 
-      {/* Desktop/laptop: briefing + positions on the left, decisions on the right. */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
-          <BriefingCard sop={sop} onNav={onNav} onEvidence={onEvidence} />
-          <Managing sop={sop} onNav={onNav} onEvidence={onEvidence} />
-          <StrategiesRow sop={sop} onNav={onNav} />
+      <Briefing sop={sop} onNav={onNav} onEvidence={onEvidence} onAsk={onAsk} />
+
+      {/* TWO STREAMS, joined above by the briefing. */}
+      <div className="grid w-full min-w-0 grid-cols-1 gap-4 xl:grid-cols-3">
+        <div className="min-w-0 space-y-3 xl:col-span-2">
+          <StreamHeader icon={LineChart} title="Market & opportunities"
+            subtitle="What the market is doing, who is moving it, and what is worth researching"
+            right={<StatusBadge status={streams?.direction?.status} />} />
+
+          {/* The what-if chart is the dominant visual here, directly below the briefing. */}
+          <ScenarioChart outlook={outlook} loading={outlookLoading} error={outlookErr}
+            asset={asset} assets={assets} horizon={horizon}
+            onAsset={setAsset} onHorizon={setHorizon}
+            onEvidence={onEvidence} onExpand={() => setExpanded(true)}
+            onAsk={askAboutBand} chartHeight={310} histCount={45} leadership={leadership} />
+
+          <ResearchFindings research={research} onEvidence={onEvidence} onAsk={askAboutFinding} />
+
+          <MarketStream streams={streams} loading={streamsLoading} onEvidence={onEvidence} />
         </div>
-        <div className="space-y-4">
-          <NeedsDecision sop={sop} onNav={onNav} onEvidence={onEvidence} />
-          <OppsRisks sop={sop} />
+
+        <div className="min-w-0 space-y-3">
+          <StreamHeader icon={Gauge} title="Your strategies" accent="violet"
+            subtitle="Every strategy’s own ring-fenced paper wallet, aggregated"
+            right={<Badge variant="outline" className="border-slate-700 text-[10px] text-slate-300">Paper only</Badge>} />
+          <StrategiesStream sop={sop} onNav={onNav} onEvidence={onEvidence} />
         </div>
       </div>
 
-      <p className="pt-1 text-center text-[11px] text-slate-600">Paper trading only — no real orders are placed. Albert explains the deterministic engine’s decisions; he never invents or alters trades.</p>
+      <p className="pt-1 text-center text-[11px] text-slate-600">
+        Paper trading only — no real orders are placed. Albert explains the deterministic
+        engine’s decisions; he never invents or alters trades.
+      </p>
+
+      {expanded ? (
+        <ScenarioAnalysis outlook={outlook} asset={asset} assets={assets} horizon={horizon}
+          onAsset={setAsset} onHorizon={setHorizon} onEvidence={onEvidence}
+          onAsk={askAboutBand} onClose={() => setExpanded(false)} leadership={leadership} />
+      ) : null}
+
+      {evidenceId ? (
+        <EvidenceDrawer snapshotId={evidenceId} onClose={() => setEvidenceId(null)}
+          onAsk={(sid) => { setEvidenceId(null); onAsk({ snapshotId: sid, stateId: sop.stateId },
+            'Explain this evidence record in plain English, and tell me what it does and does not prove.'); }} />
+      ) : null}
     </div>
   );
 }

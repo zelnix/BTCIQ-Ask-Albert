@@ -58,6 +58,11 @@ def assemble_core(*, rows, regime, tradable_set, score_fn, engine_version, sourc
             'symbol': sym, 'name': row.get('name'), 'rank': row.get('rank'),
             'marketCapUsd': row.get('marketCapUsd'), 'priceUsd': row.get('priceUsd'),
             'volume24hUsd': vol, 'liquidity': liquidity, 'dataQuality': dq, 'tradable': tradable,
+            # N-A: point-in-time relative performance carried through for the market-phase
+            # assessment. Absent values stay None - never zero-filled.
+            'change24hPct': row.get('change24hPct'),
+            'change7dPct': row.get('change7dPct'),
+            'change30dPct': row.get('change30dPct'),
             'opportunityScore': score, 'confidence': confidence, 'invalidation': invalidation,
             'buyThreshold': buy_threshold, 'scorable': bool(tradable and not is_stable),
         })

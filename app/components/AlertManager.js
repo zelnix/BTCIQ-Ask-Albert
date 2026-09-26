@@ -22,8 +22,8 @@ export default function AlertManager() {
     load();
     const id = setInterval(load, 20000);
     const onCreated = () => load();
-    window.addEventListener('btciq:alert-created', onCreated);
-    return () => { clearInterval(id); window.removeEventListener('btciq:alert-created', onCreated); };
+    window.addEventListener('albert:alert-created', onCreated);
+    return () => { clearInterval(id); window.removeEventListener('albert:alert-created', onCreated); };
   }, [load]);
 
   const cancel = async (id) => {

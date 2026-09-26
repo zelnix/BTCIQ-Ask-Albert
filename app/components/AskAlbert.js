@@ -7,6 +7,7 @@ import {
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { API_BASE } from '../lib/api';
+import EvidenceDrawer from './albert/EvidenceDrawer';
 
 const FRESH_COLOR = { FRESH: 'text-emerald-400', STALE: 'text-amber-400', MISSING: 'text-red-400', UNKNOWN: 'text-slate-400' };
 function sectionFromDeepLink(dl) {
@@ -61,15 +62,19 @@ function ConfirmationCard({ card, onDone }) {
   );
 }
 
-function EvidenceRow({ evidence, onNav }) {
+function EvidenceRow({ evidence, onNav, onEvidence }) {
   if (!evidence || !evidence.length) return null;
   return (
     <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
       {evidence.map((e, i) => {
         const sec = sectionFromDeepLink(e.deepLink);
         const fc = FRESH_COLOR[e.freshness] || FRESH_COLOR.UNKNOWN;
+        // A snapshot id resolves to the EXACT record the claim was made from; only fall
+        // back to a screen when no snapshot exists for that source.
+        const open = () => (e.snapshotId && onEvidence ? onEvidence(e.snapshotId)
+          : (sec && onNav && onNav(sec)));
         return (
-          <button key={i} onClick={() => sec && onNav && onNav(sec)}
+          <button key={i} onClick={open}
             title={`${e.sourceId || ''}${e.asOf ? ` · ${e.asOf}` : ''}`}
             className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[10px] font-semibold text-sky-300 hover:border-sky-500/50 hover:text-sky-200">
             <ShieldCheck className="h-3 w-3" />{(e.label || 'evidence').replace(/_/g, ' ')}
@@ -133,6 +138,8 @@ export default function AskAlbert({ onNav }) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [entity, setEntity] = useState(null);
+  const [context, setContext] = useState(null);
+  const [evidenceId, setEvidenceId] = useState(null);
   const [sop, setSop] = useState(null);
   const endRef = useRef(null);
   const sessionId = useRef('ask_' + Math.random().toString(36).slice(2, 10));
@@ -142,11 +149,12 @@ export default function AskAlbert({ onNav }) {
       .then((r) => (r.ok ? r.json() : null)).then((j) => j && setSop(j)).catch(() => {});
   }, [messages.length]);
 
-  const send = useCallback(async (text, ent) => {
+  const send = useCallback(async (text, ent, ctx) => {
     const q = (text ?? input).trim();
     if (!q || sending) return;
     setInput('');
     const useEnt = ent !== undefined ? ent : entity;
+    const useCtx = ctx !== undefined ? ctx : context;
     setMessages((m) => [...m, { role: 'user', text: q }]);
     setSending(true);
     try {
@@ -171,29 +179,32 @@ export default function AskAlbert({ onNav }) {
       }
       const r = await fetch(`${API_BASE}/v1/albert/ask`, {
         method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: q, session_id: sessionId.current, entity: useEnt || undefined }),
+        body: JSON.stringify({ message: q, session_id: sessionId.current,
+          entity: useEnt || undefined, context: useCtx || undefined }),
       });
       if (r.status === 401 || r.status === 403) {
         setMessages((m) => [...m, { role: 'albert', text: 'Please sign in to talk with Albert.' }]);
       } else {
         const j = await r.json();
         setMessages((m) => [...m, { role: 'albert', text: j.reply || 'No answer came back.',
-          evidence: j.evidence, model: j.model, contextFunctions: j.contextFunctions }]);
+          evidence: j.evidence, model: j.model, contextFunctions: j.contextFunctions,
+          answerSnapshotId: j.answerSnapshotId }]);
       }
     } catch (e) {
       setMessages((m) => [...m, { role: 'albert', text: 'Network error — please try again.' }]);
     } finally {
-      setSending(false); setEntity(null);
+      setSending(false); setEntity(null); setContext(null);
     }
-  }, [input, sending, entity]);
+  }, [input, sending, entity, context]);
 
   // Prefilled handoff: another screen opened Ask Albert with a question + entity.
   useEffect(() => {
     let pending = null;
     try { pending = window.__albertPendingAsk; window.__albertPendingAsk = null; } catch (e) { /* noop */ }
-    if (pending && (pending.question || pending.entity)) {
+    if (pending && (pending.question || pending.entity || pending.context)) {
       setEntity(pending.entity || null);
-      if (pending.question) send(pending.question, pending.entity || null);
+      setContext(pending.context || null);
+      if (pending.question) send(pending.question, pending.entity || null, pending.context || null);
       else setInput(pending.prefill || '');
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -237,7 +248,13 @@ export default function AskAlbert({ onNav }) {
                     <div className="min-w-0 flex-1 rounded-2xl rounded-tl-sm bg-slate-800/60 px-3.5 py-2.5">
                       <p className="max-w-[70ch] whitespace-pre-wrap text-[14px] leading-relaxed text-slate-100">{m.text}</p>
                       {m.card && <ConfirmationCard card={m.card} />}
-                      <EvidenceRow evidence={m.evidence} onNav={onNav} />
+                      <EvidenceRow evidence={m.evidence} onNav={onNav} onEvidence={setEvidenceId} />
+                      {m.answerSnapshotId ? (
+                        <button onClick={() => setEvidenceId(m.answerSnapshotId)}
+                          className="mt-1.5 inline-flex items-center gap-1 text-[11px] font-semibold text-sky-400 underline decoration-sky-500/40 underline-offset-2 hover:text-sky-300">
+                          <ShieldCheck className="h-3 w-3" />Open the exact evidence set behind this answer
+                        </button>
+                      ) : null}
                       {(m.model || (m.evidence || []).length > 0) && <TechnicalDetails msg={m} />}
                     </div>
                   </div>
@@ -250,6 +267,12 @@ export default function AskAlbert({ onNav }) {
             </div>
             <div className="border-t border-slate-800 p-3">
               {entity && <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-violet-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-violet-300"><Sparkles className="h-3 w-3" />Context: {entity.type} attached</div>}
+              {context && (
+                <div className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-sky-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-sky-300">
+                  <ShieldCheck className="h-3 w-3" />
+                  Evidence attached{context.findingId ? ' · research finding' : ''}{context.snapshotId ? ' · snapshot' : ''} · re-checked on the server
+                </div>
+              )}
               <div className="flex items-end gap-2">
                 <textarea rows={1} value={input} onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
@@ -269,6 +292,10 @@ export default function AskAlbert({ onNav }) {
           <p className="mt-3 px-1 text-center text-[11px] text-slate-600">Paper trading only — Albert has read-only visibility. He explains the deterministic engine; he never invents or alters trades.</p>
         </div>
       </div>
+
+      {evidenceId ? (
+        <EvidenceDrawer snapshotId={evidenceId} onClose={() => setEvidenceId(null)} />
+      ) : null}
     </div>
   );
 }

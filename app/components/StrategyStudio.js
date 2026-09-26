@@ -2,8 +2,8 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import {
-  Crosshair, Plus, Loader2, Sparkles, ShieldCheck, ChevronDown, Play, Pause, Archive,
-  Link2, Unlink, FlaskConical, CheckCircle2, AlertTriangle, ArrowRight, X,
+  Crosshair, Plus, Loader2, Sparkles, ShieldCheck, ChevronDown, Play, Square, Archive,
+  FlaskConical, CheckCircle2, AlertTriangle, ArrowRight, X, HandCoins, Bot, XCircle, Info,
 } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -17,10 +17,28 @@ const post = (path, body) => fetch(`${API_BASE}${path}`, {
 });
 const get = (path) => fetch(`${API_BASE}${path}`, { credentials: 'include', cache: 'no-store' });
 
-const STATE_COLOR = {
-  REVIEWED: 'text-sky-300', PAPER_ASSIGNED: 'text-amber-300', PAPER_ACTIVE: 'text-emerald-300',
-  PAUSED: 'text-orange-300', ARCHIVED: 'text-slate-500',
+const usd = (v) => (v == null ? '\u2014' : '$' + Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }));
+const signed = (v) => (v == null ? '\u2014' : (Number(v) >= 0 ? '+' : '') + usd(v).replace('$-', '-$'));
+
+// One unified status per strategy: saved -> paper trading -> stopped.
+const PAPER_STATUS = {
+  SAVED: { label: 'Saved · not trading', color: 'text-slate-300', dot: 'bg-slate-500' },
+  STOPPED: { label: 'Stopped', color: 'text-amber-300', dot: 'bg-amber-400' },
+  LIVE: { label: 'Paper trading', color: 'text-emerald-300', dot: 'bg-emerald-400' },
+  HALTED_RISK: { label: 'Halted — drawdown limit', color: 'text-rose-300', dot: 'bg-rose-400' },
+  ARCHIVED: { label: 'Archived', color: 'text-slate-500', dot: 'bg-slate-600' },
 };
+const ps = (s) => PAPER_STATUS[s] || PAPER_STATUS.SAVED;
+
+// Trade approval — the ONLY two ways a live strategy can behave. "Observe" is gone.
+const APPROVALS = [
+  { id: 'REVIEW', label: 'Review and approve', desc: 'Albert proposes each trade; nothing happens until you approve it.', Icon: HandCoins },
+  { id: 'AUTOPILOT', label: 'Autopilot', desc: 'Albert places the simulated trades himself, in the background.', Icon: Bot },
+];
+
+function PaperBadge() {
+  return <span className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300"><FlaskConical className="h-3 w-3" />Paper only</span>;
+}
 
 function ConfirmBtn({ label, icon: Icon, onConfirm, tone = 'sky', busy }) {
   const [armed, setArmed] = useState(false);
@@ -142,7 +160,7 @@ function Builder({ onSaved, onCancel }) {
           <div className="flex items-center gap-2">
             <ConfirmBtn label="Save strategy" icon={CheckCircle2} tone="emerald" busy={busy}
               onConfirm={save} />
-            <span className="text-[11px] text-slate-500">Saves the EXACT reviewed contract as an immutable version.</span>
+            <span className="text-[11px] text-slate-500">Saves the exact plan you reviewed. Saving never starts trading &mdash; you choose that next.</span>
           </div>
         </div>
       )}
@@ -178,10 +196,279 @@ function Methodology({ bt, contractHash }) {
   );
 }
 
+/* ===================================================================
+   Paper trading, ON the strategy (M-G)
+   -------------------------------------------------------------------
+   Build -> save -> start paper trading. No separate setup, no Observe
+   mode, no account picker: the strategy owns its own paper wallet and
+   its own Status, Trade approval, Activity and Performance.
+   =================================================================== */
+function PaperPanel({ sid, name, onChange }) {
+  const [p, setP] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const [msg, setMsg] = useState(null);
+  const [choice, setChoice] = useState('REVIEW');   // default: Review and approve
+  const [arming, setArming] = useState(false);
+  const [pending, setPending] = useState({});
+  const keysRef = React.useRef({});
+
+  const load = useCallback(async () => {
+    try {
+      const r = await get(`/v1/albert/studio/strategies/${sid}/paper`);
+      const j = await r.json();
+      if (r.ok) { setP(j); if (j.approvalMode) setChoice(j.approvalMode); }
+    } catch (e) { /* noop */ }
+  }, [sid]);
+  useEffect(() => { setP(null); setArming(false); setMsg(null); load(); }, [load]);
+  // Live strategies refresh on their own so the card stays honest without a reload.
+  useEffect(() => {
+    if (!p?.isLive) return undefined;
+    const t = setInterval(load, 20000);
+    return () => clearInterval(t);
+  }, [p?.isLive, load]);
+
+  const cmd = async (path, body) => {
+    setBusy(true); setErr(''); setMsg(null);
+    try {
+      const r = await post(`/v1/albert/studio/strategies/${sid}/${path}`,
+        { confirm: true, idempotencyKey: idem(), ...(body || {}) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) setErr(j.detail || 'That did not go through — please try again.');
+      else await load();
+      if (r.ok) onChange && onChange();
+    } catch (e) { setErr('Network problem — please try again.'); }
+    finally { setBusy(false); setArming(false); }
+  };
+
+  const keyFor = (id) => {
+    if (!keysRef.current[id]) {
+      keysRef.current[id] = (typeof crypto !== 'undefined' && crypto.randomUUID)
+        ? crypto.randomUUID() : 'idem_' + Date.now() + Math.random().toString(36).slice(2);
+    }
+    return keysRef.current[id];
+  };
+
+  // Approval sends ONLY the contract fields — never quantity/price/targets. One
+  // idempotency key per action, reused on retry, so a double-tap can't double-fill.
+  const approve = async (pr) => {
+    if (pending[pr.proposalId]) return;
+    setPending((s) => ({ ...s, [pr.proposalId]: true })); setMsg(null);
+    let keep = true;
+    try {
+      const r = await post(`/v1/albert/paper/proposals/${pr.proposalId}/approve`, {
+        expectedProposalVersion: pr.version ?? 0,
+        decisionSnapshotId: pr.decisionSnapshotId, idempotencyKey: keyFor(pr.proposalId),
+      });
+      if (r.status === 503) setMsg({ t: 'info', m: 'Paper execution is temporarily switched off. No real money is affected.' });
+      else if (r.status === 401) setMsg({ t: 'err', m: 'Your session expired — please sign in again.' });
+      else if (r.status === 404) { setMsg({ t: 'err', m: 'That proposal is no longer available.' }); keep = false; }
+      else if (r.status === 409) { setMsg({ t: 'warn', m: 'That proposal expired or changed — Albert will surface a fresh one.' }); keep = false; }
+      else if (r.ok) {
+        const j = await r.json().catch(() => ({}));
+        if (j.proposalStatus === 'REJECTED_ON_REVALIDATION') { setMsg({ t: 'warn', m: 'The decision changed on a fresh check — no paper trade was placed.' }); keep = false; }
+        else { setMsg({ t: 'ok', m: 'Paper trade approved and simulated. No real money was involved.' }); keep = false; }
+      } else setMsg({ t: 'err', m: 'Something went wrong — please retry.' });
+    } catch (e) { setMsg({ t: 'err', m: 'Network error — you can safely retry; it won’t double-fill.' }); }
+    if (!keep) delete keysRef.current[pr.proposalId];
+    await load();
+    setPending((s) => { const n = { ...s }; delete n[pr.proposalId]; return n; });
+  };
+
+  const skip = async (pr) => {
+    if (pending[pr.proposalId]) return;
+    setPending((s) => ({ ...s, [pr.proposalId]: true }));
+    try { await post(`/v1/albert/paper/proposals/${pr.proposalId}/cancel`, {}); } catch (e) { /* noop */ }
+    delete keysRef.current[pr.proposalId];
+    await load();
+    setPending((s) => { const n = { ...s }; delete n[pr.proposalId]; return n; });
+  };
+
+  const closePos = async (posId) => {
+    setBusy(true);
+    try { await post(`/v1/albert/paper/positions/${posId}/close`, { confirm: true, idempotencyKey: idem() }); } catch (e) { /* noop */ }
+    await load(); setBusy(false);
+  };
+
+  if (!p) {
+    return (
+      <div className="mt-4 border-t border-slate-800 pt-3">
+        <Loader2 className="h-4 w-4 animate-spin text-slate-500" />
+      </div>
+    );
+  }
+
+  const meta = ps(p.paperStatus);
+  const perf = p.performance || {};
+  const live = p.paperStatus === 'LIVE';
+  const approvals = p.pendingApprovals || [];
+  const positions = p.positions || [];
+  const activity = p.activity || [];
+  const stale = p.marketData === 'STALE';
+
+  return (
+    <div className="mt-4 space-y-3 border-t border-slate-800 pt-3">
+      {/* ---- Status + start/stop ---- */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="flex items-center gap-1.5 text-[12px] font-semibold uppercase tracking-wider text-slate-400">
+          <FlaskConical className="h-3.5 w-3.5" />Paper trading
+        </span>
+        <span className={`inline-flex items-center gap-1.5 rounded-full bg-slate-950/70 px-2 py-0.5 text-[11px] font-semibold ${meta.color}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />{meta.label}
+        </span>
+        <PaperBadge />
+        <div className="ml-auto flex items-center gap-2">
+          {live ? (
+            arming ? (
+              <>
+                <Button size="sm" disabled={busy} onClick={() => cmd('stop-paper')} className="h-7 gap-1 bg-red-600 px-2.5 text-[12px] hover:bg-red-500">
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}Confirm stop
+                </Button>
+                <button onClick={() => setArming(false)} className="rounded p-1 text-slate-400 hover:text-white"><X className="h-3.5 w-3.5" /></button>
+              </>
+            ) : (
+              <Button size="sm" variant="outline" onClick={() => setArming(true)} className="h-7 gap-1 border-slate-700 px-2.5 text-[12px] text-slate-200 hover:bg-slate-800">
+                <Square className="h-3.5 w-3.5" />Stop paper trading
+              </Button>
+            )
+          ) : (
+            arming ? (
+              <>
+                <Button size="sm" disabled={busy} onClick={() => cmd('start-paper', { approvalMode: choice })} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
+                  {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                  Confirm start · {choice === 'AUTOPILOT' ? 'Autopilot' : 'Review and approve'}
+                </Button>
+                <button onClick={() => setArming(false)} className="rounded p-1 text-slate-400 hover:text-white"><X className="h-3.5 w-3.5" /></button>
+              </>
+            ) : (
+              <Button size="sm" disabled={p.paperStatus === 'ARCHIVED'} onClick={() => setArming(true)} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
+                <Play className="h-3.5 w-3.5" />{p.paperStatus === 'STOPPED' ? 'Resume paper trading' : 'Start paper trading'}
+              </Button>
+            )
+          )}
+        </div>
+      </div>
+
+      {/* ---- Trade approval ---- */}
+      <div>
+        <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">Trade approval</p>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {APPROVALS.map((a) => {
+            const on = (live || p.approvalMode) ? p.approvalMode === a.id : choice === a.id;
+            return (
+              <button key={a.id} disabled={busy}
+                onClick={() => (p.approvalMode ? cmd('approval-mode', { approvalMode: a.id }) : setChoice(a.id))}
+                className={`rounded-xl border p-2.5 text-left transition-colors ${on ? 'border-sky-500/50 bg-sky-500/10' : 'border-slate-800 bg-slate-950/50 hover:border-slate-600'} disabled:opacity-60`}>
+                <span className="flex items-center gap-1.5">
+                  <a.Icon className={`h-3.5 w-3.5 ${on ? 'text-sky-300' : 'text-slate-400'}`} />
+                  <span className={`text-[12px] font-bold ${on ? 'text-sky-200' : 'text-slate-200'}`}>{a.label}</span>
+                  {on && <CheckCircle2 className="ml-auto h-3.5 w-3.5 text-sky-300" />}
+                </span>
+                <span className="mt-0.5 block text-[10.5px] leading-snug text-slate-500">{a.desc}</span>
+              </button>
+            );
+          })}
+        </div>
+        {!p.approvalMode && <p className="mt-1 text-[10.5px] text-slate-500">Pick how hands-on you want to be, then start. You can change this at any time.</p>}
+      </div>
+
+      {err && <p className="text-[12px] font-medium text-red-400">{err}</p>}
+      {msg && (
+        <p className={`rounded-lg border p-2 text-[12px] font-medium ${
+          msg.t === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+            : msg.t === 'warn' ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
+              : msg.t === 'info' ? 'border-sky-500/40 bg-sky-500/10 text-sky-200'
+                : 'border-rose-500/40 bg-rose-500/10 text-rose-200'}`}>{msg.m}</p>
+      )}
+      {p.paperStatus === 'HALTED_RISK' && (
+        <p className="flex items-center gap-1.5 text-[12px] font-semibold text-rose-300"><AlertTriangle className="h-3.5 w-3.5" />This strategy hit its drawdown limit and needs a reviewed reset before it can trade again.</p>
+      )}
+      {live && stale && (
+        <p className="flex items-center gap-1.5 text-[11px] text-amber-300"><AlertTriangle className="h-3.5 w-3.5" />Price data is stale — no new entries until it refreshes.</p>
+      )}
+
+      {/* ---- Performance (this strategy's own money) ---- */}
+      {p.paperAccountId && (
+        <div>
+          <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">Performance</p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {[['Value', perf.valueAvailable === false ? 'unavailable' : usd(perf.value)],
+              ['Profit / loss', signed(perf.pnlUsd) + (perf.pnlPct != null ? ` · ${perf.pnlPct}%` : '')],
+              ['Free to invest', usd(perf.deployableCash)],
+              ['Open positions', String(positions.length)],
+              ['Closed trades', String(perf.closedTrades ?? 0)],
+              ['Win rate', perf.winRatePct != null ? `${perf.winRatePct}%` : '—'],
+              ['Worst dip', perf.drawdownPct != null ? `${perf.drawdownPct}%` : '—'],
+              ['Started with', usd(perf.startingCash)]].map(([k, v]) => (
+              <div key={k} className="min-w-0 rounded-lg border border-slate-800 bg-slate-950/60 p-2">
+                <p className="text-[10px] uppercase tracking-wide text-slate-500">{k}</p>
+                <p className="truncate text-[12.5px] font-semibold text-slate-100" title={String(v)}>{v}</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-1.5 text-[10.5px] text-slate-500">This strategy trades its own ring-fenced {usd(perf.startingCash)} of virtual cash, so its results are never mixed with your other strategies.</p>
+        </div>
+      )}
+
+      {/* ---- Waiting for your approval ---- */}
+      {approvals.map((pr) => (
+        <div key={pr.proposalId} className="rounded-xl border border-sky-500/30 bg-sky-500/[0.06] p-3">
+          <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-sky-300"><HandCoins className="h-3.5 w-3.5" />Needs your approval</p>
+          <p className="mt-0.5 text-[14px] font-bold text-white">{pr.side} {pr.asset} · {usd(pr.notionalValue)}</p>
+          <p className="text-[11.5px] text-slate-400">Ref {usd(pr.referencePrice)} · est. fees {usd(pr.estimatedFees)}{pr.invalidationPrice ? ` · invalidation ${usd(pr.invalidationPrice)}` : ''}</p>
+          {pr.reason && <p className="mt-1 text-[12px] leading-relaxed text-slate-300">{pr.reason}</p>}
+          <div className="mt-2 flex gap-2">
+            <Button size="sm" disabled={!!pending[pr.proposalId]} onClick={() => approve(pr)} className="h-7 gap-1 bg-emerald-600 px-2.5 text-[12px] hover:bg-emerald-500">
+              {pending[pr.proposalId] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}Approve
+            </Button>
+            <Button size="sm" variant="outline" disabled={!!pending[pr.proposalId]} onClick={() => skip(pr)} className="h-7 gap-1 border-slate-700 px-2.5 text-[12px] text-slate-300">
+              <XCircle className="h-3.5 w-3.5" />Skip
+            </Button>
+          </div>
+        </div>
+      ))}
+
+      {/* ---- Positions ---- */}
+      {positions.length > 0 && (
+        <div>
+          <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">Open positions</p>
+          <div className="space-y-1.5">
+            {positions.map((q) => (
+              <div key={q.paperPositionId} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-slate-800 bg-slate-950/60 px-2.5 py-1.5 text-[11.5px]">
+                <span className="font-bold text-white">{q.asset}</span>
+                <span className="text-slate-400">{Number(q.netQuantity).toLocaleString(undefined, { maximumFractionDigits: 8 })} @ {usd(q.averageEntryPrice)}</span>
+                <span className="text-slate-500">now {usd(q.currentPrice)}</span>
+                <span className={Number(q.unrealizedPnl || 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}>{signed(q.unrealizedPnl)}</span>
+                <button disabled={busy} onClick={() => closePos(q.paperPositionId)} className="ml-auto rounded-md border border-slate-700 px-2 py-0.5 text-[11px] font-semibold text-slate-300 hover:text-white">Close</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ---- Activity ---- */}
+      {p.paperAccountId && (
+        <div>
+          <p className="mb-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">Activity</p>
+          {activity.length ? (
+            <div className="space-y-1">
+              {activity.slice(0, 8).map((a, i) => (
+                <div key={i} className="flex items-start gap-2 text-[11px]">
+                  <span className="w-36 shrink-0 font-semibold text-slate-300">{(a.eventType || '').replace(/_/g, ' ').toLowerCase()}</span>
+                  <span className="flex-1 text-slate-500">{a.note}</span>
+                  {a.amount != null && <span className="font-mono text-slate-400">{usd(a.amount)}</span>}
+                </div>
+              ))}
+            </div>
+          ) : <p className="text-[12px] text-slate-500">Nothing has happened on this strategy yet.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Detail({ sid, onChange }) {
   const [s, setS] = useState(null);
-  const [accounts, setAccounts] = useState([]);
-  const [acct, setAcct] = useState('');
   const [bt, setBt] = useState(null);
   const [btBusy, setBtBusy] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -192,7 +479,6 @@ function Detail({ sid, onChange }) {
     setS(j); setBt(j.backtest || null);
   }, [sid]);
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { get('/v1/albert/paper/accounts').then((r) => r.json()).then((j) => setAccounts(j.accounts || [])).catch(() => {}); }, []);
 
   const runBt = async () => {
     setBtBusy(true);
@@ -212,12 +498,12 @@ function Detail({ sid, onChange }) {
   };
 
   if (!s) return <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><Loader2 className="h-5 w-5 animate-spin text-slate-400" /></Card>;
-  const st = s.lifecycleState;
+  const meta = ps(s.paperStatus);
   return (
     <Card className="border-0 bg-slate-900 p-5 ring-1 ring-slate-800">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <h3 className="text-base font-bold text-white">{s.name}</h3>
-        <Badge variant="outline" className={`border-slate-700 text-[11px] ${STATE_COLOR[st] || 'text-slate-300'}`}>{(st || '').replace(/_/g, ' ')}</Badge>
+        <Badge variant="outline" className={`border-slate-700 text-[11px] ${meta.color}`}>{meta.label}</Badge>
         <span className="text-[11px] text-slate-500">v{s.version}</span>
       </div>
       <p className="text-[13px] text-slate-300">{s.summary}</p>
@@ -262,32 +548,16 @@ function Detail({ sid, onChange }) {
         {bt && bt.error && <p className="mt-2 text-[12px] text-amber-400">No historical data available for these assets right now.</p>}
       </div>
 
-      {/* Lifecycle */}
-      <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-slate-800 pt-3">
-        {st === 'REVIEWED' && (
-          <>
-            <select value={acct} onChange={(e) => setAcct(e.target.value)} className="rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-[12px] text-slate-200">
-              <option value="">Choose paper account…</option>
-              {accounts.map((a) => <option key={a.paperAccountId} value={a.paperAccountId}>{a.name}</option>)}
-            </select>
-            <ConfirmBtn label="Assign" icon={Link2} tone="amber" busy={busy} onConfirm={() => acct && doCmd('assign', { paperAccountId: acct })} />
-            <ConfirmBtn label="Archive" icon={Archive} tone="slate" busy={busy} onConfirm={() => doCmd('archive')} />
-          </>
-        )}
-        {st === 'PAPER_ASSIGNED' && (<>
-          <ConfirmBtn label="Activate" icon={Play} tone="emerald" busy={busy} onConfirm={() => doCmd('activate')} />
-          <ConfirmBtn label="Unassign" icon={Unlink} tone="slate" busy={busy} onConfirm={() => doCmd('unassign')} />
-        </>)}
-        {st === 'PAPER_ACTIVE' && (<>
-          <ConfirmBtn label="Pause" icon={Pause} tone="amber" busy={busy} onConfirm={() => doCmd('pause')} />
-          <ConfirmBtn label="Close" icon={X} tone="slate" busy={busy} onConfirm={() => doCmd('close')} />
-        </>)}
-        {st === 'PAUSED' && (<>
-          <ConfirmBtn label="Activate" icon={Play} tone="emerald" busy={busy} onConfirm={() => doCmd('activate')} />
-          <ConfirmBtn label="Archive" icon={Archive} tone="slate" busy={busy} onConfirm={() => doCmd('archive')} />
-        </>)}
-        {s.assignedPaperAccountId && <span className="text-[11px] text-slate-500">Assigned · availability only — assigning never places a trade.</span>}
-      </div>
+      {/* Paper trading lives HERE, on the strategy — one journey, no separate setup. */}
+      <PaperPanel sid={sid} name={s.name} onChange={() => { load(); onChange && onChange(); }} />
+
+      {/* Archive is only offered when the strategy is not trading. */}
+      {s.paperStatus !== 'LIVE' && s.paperStatus !== 'ARCHIVED' && (
+        <div className="mt-3 flex items-center gap-2 border-t border-slate-800 pt-3">
+          <ConfirmBtn label="Archive strategy" icon={Archive} tone="slate" busy={busy} onConfirm={() => doCmd('archive')} />
+          <span className="text-[11px] text-slate-500">Archiving hides it from your list; nothing is deleted.</span>
+        </div>
+      )}
       {err && <p className="mt-2 text-[12px] font-medium text-red-400">{err}</p>}
     </Card>
   );
@@ -305,13 +575,19 @@ export default function StrategyStudio() {
     catch (e) { /* noop */ } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
+  const liveCount = list.filter((s) => s.paperStatus === 'LIVE').length;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2.5">
+      <div className="flex flex-wrap items-center gap-2.5">
         <Crosshair className="h-5 w-5 text-violet-400" />
         <h1 className="text-lg font-bold text-white">Strategies</h1>
-        <span className="text-[12px] text-slate-500">Plans you build with Albert · paper only</span>
+        <span className="text-[12px] text-slate-500">Build with Albert &rarr; save &rarr; start paper trading</span>
+        {liveCount > 0 && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
+            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />{liveCount} paper trading
+          </span>
+        )}
         <Button size="sm" onClick={() => { setBuilding(true); setSel(null); }} className="ml-auto gap-1.5 bg-violet-600 hover:bg-violet-500"><Plus className="h-4 w-4" />New with Albert</Button>
       </div>
 
@@ -324,16 +600,24 @@ export default function StrategyStudio() {
               <Button size="sm" onClick={() => setBuilding(true)} className="mt-3 gap-1.5 bg-violet-600 hover:bg-violet-500"><Plus className="h-4 w-4" />New with Albert</Button>
             </Card>
           )}
-          {list.map((s) => (
-            <button key={s.strategyId} onClick={() => { setSel(s.strategyId); setBuilding(false); }}
-              className={`w-full rounded-lg border p-3 text-left transition-colors ${sel === s.strategyId ? 'border-violet-500/50 bg-violet-500/[0.06]' : 'border-slate-800 bg-slate-900 hover:border-slate-700'}`}>
-              <div className="flex items-center justify-between gap-2">
-                <p className="truncate text-sm font-semibold text-white">{s.name}</p>
-                <Badge variant="outline" className={`shrink-0 border-slate-700 text-[10px] ${STATE_COLOR[s.lifecycleState] || 'text-slate-300'}`}>{(s.lifecycleState || '').replace(/_/g, ' ')}</Badge>
-              </div>
-              <p className="mt-1 truncate text-[12px] text-slate-500">{(s.contract?.assets || []).map((a) => a.symbol).join(' · ')} · v{s.version}</p>
-            </button>
-          ))}
+          {list.map((s) => {
+            const m = ps(s.paperStatus);
+            return (
+              <button key={s.strategyId} onClick={() => { setSel(s.strategyId); setBuilding(false); }}
+                className={`w-full rounded-lg border p-3 text-left transition-colors ${sel === s.strategyId ? 'border-violet-500/50 bg-violet-500/[0.06]' : 'border-slate-800 bg-slate-900 hover:border-slate-700'}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="truncate text-sm font-semibold text-white">{s.name}</p>
+                  <span className={`inline-flex shrink-0 items-center gap-1 text-[10px] font-semibold ${m.color}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${m.dot}`} />{m.label}
+                  </span>
+                </div>
+                <p className="mt-1 truncate text-[12px] text-slate-500">
+                  {(s.contract?.assets || []).map((a) => a.symbol).join(' · ')} · v{s.version}
+                  {s.approvalMode ? ` · ${s.approvalMode === 'AUTOPILOT' ? 'Autopilot' : 'Review and approve'}` : ''}
+                </p>
+              </button>
+            );
+          })}
         </div>
         <div className="lg:col-span-2">
           {building ? <Builder onCancel={() => setBuilding(false)} onSaved={(sid) => { setBuilding(false); load(); setSel(sid); }} />
@@ -341,7 +625,10 @@ export default function StrategyStudio() {
             : <Card className="border-0 bg-slate-900 p-6 ring-1 ring-slate-800"><p className="text-[13px] text-slate-400">Select a strategy, or build a new one with Albert.</p></Card>}
         </div>
       </div>
-      <p className="pt-1 text-center text-[11px] text-slate-600">Paper trading only. Saving stores the exact reviewed contract as an immutable, hashed version. Assigning makes it available to the paper engine — it never places a trade.</p>
+      <p className="flex items-start justify-center gap-1.5 pt-1 text-center text-[11px] text-slate-600">
+        <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500/70" />
+        Paper trading only — virtual money, no exchange keys, and it can never place a real order. Saving stores the exact reviewed plan as an immutable, hashed version; starting binds that exact version to the strategy&rsquo;s own paper wallet.
+      </p>
     </div>
   );
 }

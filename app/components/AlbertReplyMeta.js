@@ -67,7 +67,7 @@ export default function AlbertReplyMeta({ text, sources = [], symbol = 'BTC', pi
         body: JSON.stringify({ pid, asset: symbol, level }),
       });
       // Let the Alert Manager card refresh immediately (instead of waiting for its poll).
-      try { window.dispatchEvent(new CustomEvent('btciq:alert-created')); } catch (e) { /* noop */ }
+      try { window.dispatchEvent(new CustomEvent('albert:alert-created')); } catch (e) { /* noop */ }
     } catch (e) {
       setAlerted((a) => ({ ...a, [level]: false }));
     }
